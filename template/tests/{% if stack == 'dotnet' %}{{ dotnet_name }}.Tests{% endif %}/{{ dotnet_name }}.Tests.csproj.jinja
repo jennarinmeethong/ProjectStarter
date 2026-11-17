@@ -5,6 +5,9 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FsCheck.Xunit.v3" />
+{%- if http_api %}
+    <PackageReference Include="Microsoft.Playwright" />
+{%- endif %}
     <PackageReference Include="NetArchTest.Rules" />
     <PackageReference Include="xunit.v3" />
 {%- if 'postgres' in datastores %}
@@ -14,6 +17,11 @@
     <PackageReference Include="Testcontainers.Redis" />
 {%- endif %}
   </ItemGroup>
+{%- if http_api %}
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+{%- endif %}
   <ItemGroup>
     <ProjectReference Include="..\..\src\{{ dotnet_name }}.Bootstrap\{{ dotnet_name }}.Bootstrap.csproj" />
   </ItemGroup>

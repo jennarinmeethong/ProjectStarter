@@ -66,6 +66,30 @@ jobs:
       - name: Adapter contract tests against real datastores (Testcontainers)
         run: {{ cmd.test_integration }}
 {%- endif %}
+{%- if http_api %}
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+{%- if stack == 'typescript' %}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+{%- elif stack == 'python' %}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+{%- else %}
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet build
+{%- endif %}
+      - name: API tests against the real server (Playwright)
+        run: {{ cmd.test_e2e }}
+{%- endif %}
 
   secrets:
     runs-on: ubuntu-latest
@@ -87,6 +111,20 @@ jobs:
         run: bash ci/check-dockerfile.sh Dockerfile
       - name: Build image
         run: docker build -t app:ci .
+{%- if http_api %}
+      - name: Smoke run (hardened container answers /healthz)
+        run: bash ci/dast.sh app:ci --smoke
+
+  dast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t app:ci .
+      - name: OWASP ZAP baseline scan of the running container
+        run: bash ci/dast.sh app:ci
+{%- else %}
       - name: Smoke run
         run: docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true app:ci
+{%- endif %}
 {%- endif %}

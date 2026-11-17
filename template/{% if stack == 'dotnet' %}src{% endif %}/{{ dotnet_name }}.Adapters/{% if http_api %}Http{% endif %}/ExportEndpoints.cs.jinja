@@ -1,0 +1,83 @@
+using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Routing;
+using {{ dotnet_name }}.Application;
+using {{ dotnet_name }}.Domain;
+
+namespace {{ dotnet_name }}.Adapters.Http;
+
+public sealed record CompleteExportRequest(string? Content);
+
+public sealed record CompleteExportResponse(string Id, string ArtifactKey);
+
+public sealed record HealthResponse(string Status);
+
+/// <summary>
+/// HTTP adapter (driving side): decodes and validates requests, calls the use case, maps results to HTTP.
+/// Domain and Application never see HTTP types (ADR 0001). Errors are RFC 9457 problem details.
+/// </summary>
+public static partial class ExportEndpoints
+{
+    private const int MaxContentLength = 1_000_000;
+
+    public static IEndpointRouteBuilder MapExportEndpoints(this IEndpointRouteBuilder endpoints)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        endpoints.MapGet("/healthz", () => TypedResults.Ok(new HealthResponse("ok")));
+        endpoints.MapPost("/exports/{id}/complete", CompleteAsync);
+        return endpoints;
+    }
+
+    private static async Task<Results<Created<CompleteExportResponse>, ProblemHttpResult>> CompleteAsync(
+        string id,
+        CompleteExportRequest? body,
+        CompleteExport useCase,
+        CancellationToken cancellationToken)
+    {
+        if (!JobId().IsMatch(id))
+        {
+            return TypedResults.Problem(title: "Invalid job id", statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        if (body?.Content is not { Length: > 0 and <= MaxContentLength } content)
+        {
+            return TypedResults.Problem(
+                title: "Body must be {\"content\": \"<non-empty string>\"}",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var job = ExportTransitions.Start(new ExportJob.Queued(id));
+        var ready = await useCase.ExecuteAsync(job, content, cancellationToken).ConfigureAwait(false);
+        return TypedResults.Created($"/exports/{ready.Id}", new CompleteExportResponse(ready.Id, ready.ArtifactKey));
+    }
+
+    [GeneratedRegex("^[A-Za-z0-9_-]{1,64}$")]
+    private static partial Regex JobId();
+}
+
+public static class SecurityHeaders
+{
+    /// <summary>Adds the security headers to every response, including error responses (docs/security/owasp.md).</summary>
+    public static IApplicationBuilder UseSecurityHeaders(this IApplicationBuilder app)
+    {
+        ArgumentNullException.ThrowIfNull(app);
+        return app.Use(async (context, next) =>
+        {
+            // OnStarting runs after the exception handler may have cleared the headers.
+            context.Response.OnStarting(() =>
+            {
+                var headers = context.Response.Headers;
+                headers.ContentSecurityPolicy = "default-src 'none'; frame-ancestors 'none'";
+                headers.XContentTypeOptions = "nosniff";
+                headers.XFrameOptions = "DENY";
+                headers["Referrer-Policy"] = "no-referrer";
+                headers["Cross-Origin-Resource-Policy"] = "same-origin";
+                headers.CacheControl = "no-store";
+                return Task.CompletedTask;
+            });
+            await next(context).ConfigureAwait(false);
+        });
+    }
+}

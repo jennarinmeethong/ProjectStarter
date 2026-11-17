@@ -1,16 +1,20 @@
+{%- set deps = [] -%}
+{%- if http_api %}{% set _ = deps.append('"fastapi>=0.120"') %}{% set _ = deps.append('"uvicorn>=0.38"') %}{% endif -%}
+{%- if 'postgres' in datastores %}{% set _ = deps.append('"psycopg[binary]>=3.2"') %}{% endif -%}
+{%- if 'redis' in datastores %}{% set _ = deps.append('"redis>=6.0"') %}{% endif -%}
+{%- set markers = [] -%}
+{%- if datastores %}{% set _ = markers.append('integration') %}{% endif -%}
+{%- if http_api %}{% set _ = markers.append('e2e') %}{% endif -%}
 [project]
 name = "{{ project_name | lower }}"
 version = "0.1.0"
 description = "{{ project_description }}"
 requires-python = ">=3.12"
-{%- if datastores %}
+{%- if deps %}
 dependencies = [
-{%- if 'postgres' in datastores %}
-    "psycopg[binary]>=3.2",
-{%- endif %}
-{%- if 'redis' in datastores %}
-    "redis>=6.0",
-{%- endif %}
+{%- for d in deps %}
+    {{ d }},
+{%- endfor %}
 ]
 {%- else %}
 dependencies = []
@@ -23,6 +27,9 @@ dependencies = []
 dev = [
     "hypothesis>=6.100",
     "import-linter>=2.1",
+{%- if http_api %}
+    "playwright>=1.64",
+{%- endif %}
     "pyright>=1.1.400",
     "pytest>=8.3",
     "ruff>=0.12",
@@ -41,10 +48,23 @@ packages = ["src/{{ package_name }}"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+{%- if markers %}
+# Deselected by default so the inner loop stays fast:
 {%- if datastores %}
-# Integration tests need Docker: deselected here, run with `uv run pytest -m integration`.
-addopts = ["--strict-markers", "--import-mode=importlib", "-m", "not integration"]
-markers = ["integration: needs Docker (Testcontainers)"]
+#   integration (needs Docker): uv run pytest -m integration
+{%- endif %}
+{%- if http_api %}
+#   e2e (real HTTP server + Playwright): uv run pytest -m e2e
+{%- endif %}
+addopts = ["--strict-markers", "--import-mode=importlib", "-m", "{% for m in markers %}not {{ m }}{% if not loop.last %} and {% endif %}{% endfor %}"]
+markers = [
+{%- if datastores %}
+    "integration: needs Docker (Testcontainers)",
+{%- endif %}
+{%- if http_api %}
+    "e2e: starts the HTTP server and calls it with Playwright",
+{%- endif %}
+]
 {%- else %}
 addopts = ["--strict-markers", "--import-mode=importlib"]
 {%- endif %}

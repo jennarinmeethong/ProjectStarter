@@ -11,6 +11,10 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     tmpfs: [/tmp]
+{%- if http_api %}
+    # Published on the host's loopback only.
+    ports: ["127.0.0.1:8080:8080"]
+{%- endif %}
 {%- if datastores %}
     environment:
 {%- if 'postgres' in datastores %}

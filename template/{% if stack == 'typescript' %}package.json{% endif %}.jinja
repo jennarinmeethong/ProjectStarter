@@ -1,3 +1,10 @@
+{%- set deps = [] -%}
+{%- if http_api %}{% set _ = deps.append('"@hono/node-server": "^2.1.0"') %}{% set _ = deps.append('"hono": "^4.13.0"') %}{% endif -%}
+{%- if 'postgres' in datastores %}{% set _ = deps.append('"pg": "^8.20.0"') %}{% endif -%}
+{%- if 'redis' in datastores %}{% set _ = deps.append('"redis": "^6.1.0"') %}{% endif -%}
+{%- set excludes = [] -%}
+{%- if datastores %}{% set _ = excludes.append(' --exclude \\"**/*.int.test.ts\\"') %}{% endif -%}
+{%- if http_api %}{% set _ = excludes.append(' --exclude \\"e2e/**\\"') %}{% endif -%}
 {
   "name": "{{ project_name | lower }}",
   "version": "0.1.0",
@@ -9,27 +16,26 @@
     "typecheck": "tsc",
     "lint": "eslint --max-warnings=0 .",
     "arch": "depcruise src --config .dependency-cruiser.cjs",
+    "test": "vitest run{{ excludes | join('') }}",
 {%- if datastores %}
-    "test": "vitest run --exclude \"**/*.int.test.ts\"",
     "test:integration": "vitest run --testTimeout=60000 .int.test.ts",
-{%- else %}
-    "test": "vitest run",
+{%- endif %}
+{%- if http_api %}
+    "test:e2e": "playwright test",
 {%- endif %}
     "verify:fast": "npm run typecheck && npm run lint && npm run arch",
     "verify": "npm run verify:fast && npm test"
   },
-{%- if datastores %}
+{%- if deps %}
   "dependencies": {
-{%- if 'postgres' in datastores %}
-    "pg": "^8.20.0"{% if 'redis' in datastores %},{% endif %}
-{%- endif %}
-{%- if 'redis' in datastores %}
-    "redis": "^6.1.0"
-{%- endif %}
+    {{ deps | join(',\n    ') }}
   },
 {%- endif %}
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+{%- if http_api %}
+    "@playwright/test": "^1.64.0",
+{%- endif %}
 {%- if 'postgres' in datastores %}
     "@testcontainers/postgresql": "^12.0.1",
 {%- endif %}

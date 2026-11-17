@@ -26,6 +26,7 @@
 | Property test | fast-check | hypothesis | FsCheck |
 | Container (`containerize`) | Dockerfile multi-stage บน `node:24-slim`, non-root, `compose.yaml` แบบ read-only | Dockerfile multi-stage + uv บน `python:3.13-slim`, non-root | publish ลง `dotnet/runtime:10.0`, `$APP_UID` |
 | Datastores (`datastores`) | `pg`, `redis` + `@testcontainers/*`, dependency-cruiser แยก driver ไว้ใน adapters, ESLint ห้ามประกอบ SQL จาก string | `psycopg`, `redis` + `testcontainers`, import-linter `forbidden`, ruff `S608` | `Npgsql`, `StackExchange.Redis` + `Testcontainers.*`, `CA2100` |
+| HTTP API (`http_api`) | Hono, Playwright API tests, ZAP baseline | FastAPI + uvicorn, Playwright (Python), ZAP baseline | ASP.NET Core minimal API, Microsoft.Playwright, ZAP baseline |
 | Security (OWASP) | dependency audit, gitleaks, hadolint + `ci/check-dockerfile.sh`, Dependabot, checklist tier 2–3 ใน `docs/security/owasp.md` | เหมือนกัน | เหมือนกัน |
 | Test runner | vitest | pytest | xUnit v3 (Microsoft.Testing.Platform) |
 

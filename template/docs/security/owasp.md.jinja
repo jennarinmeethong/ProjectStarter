@@ -19,9 +19,23 @@
 | A07 / A02 | `sonarjs/no-hardcoded-passwords`, `sonarjs/no-hardcoded-ip` | `eslint.config.mjs` |
 {%- endif %}
 
+{%- if http_api %}
+| A05 Security Misconfiguration (HTTP) | security header ทุก response, ไม่ส่ง `Server`/`X-Powered-By`, problem details ไม่มี stack trace — ตรวจด้วย Playwright{% if containerize %} และ OWASP ZAP baseline (`ci/dast.sh`, `.zap/rules.tsv`){% endif %} | [ADR 0004](../adr/0004-http-api.md) |
+| A03 Injection (HTTP) | validate path และ body ที่ adapter ก่อนเรียก use case | [ADR 0004](../adr/0004-http-api.md) |
+
+## ยังไม่ครอบคลุม
+- Authentication/authorization, rate limiting, CORS (ปิดอยู่), HTTPS termination
+{%- if containerize %}
+- ZAP baseline เป็น passive scan เท่านั้น active scan ต้องรันกับ environment ทดสอบที่แยกออกมา
+{%- else %}
+- DAST: เปิด `containerize` เพื่อให้ได้ OWASP ZAP baseline scan ใน CI
+{%- endif %}
+{%- else %}
+
 ## ยังไม่ครอบคลุม (ต้องเพิ่มเมื่อมี HTTP endpoint)
-- DAST: OWASP ZAP baseline scan กับแอปที่รันอยู่
+- DAST: OWASP ZAP baseline scan กับแอปที่รันอยู่ (ได้มาเมื่อสร้างด้วย `http_api=true`)
 - Security headers, rate limiting, CORS
+{%- endif %}
 
 ## Checklist สำหรับ PR tier 2–3
 ตอบใน PR description ทุกข้อ ("ไม่เกี่ยวข้อง" ต้องบอกเหตุผล)

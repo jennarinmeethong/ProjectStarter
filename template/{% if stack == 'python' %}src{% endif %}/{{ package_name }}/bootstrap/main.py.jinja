@@ -1,8 +1,17 @@
-{%- if datastores -%}
+{%- if datastores or http_api -%}
 import os
+{%- if datastores %}
 from collections.abc import Generator
 from contextlib import contextmanager
+{%- endif %}
+{%- if http_api %}
 
+import uvicorn
+{%- endif %}
+
+{% endif -%}
+{%- if http_api -%}
+from {{ package_name }}.adapters.http.app import create_app
 {% endif -%}
 from {{ package_name }}.adapters.in_memory_artifact_store import InMemoryArtifactStore
 {%- if 'postgres' in datastores %}
@@ -11,8 +20,14 @@ from {{ package_name }}.adapters.postgres_artifact_store import PostgresArtifact
 {%- if 'redis' in datastores %}
 from {{ package_name }}.adapters.redis_artifact_store import RedisArtifactStore
 {%- endif %}
+{%- if http_api %}
+{%- if datastores %}
+from {{ package_name }}.application.complete_export import ArtifactStore
+{%- endif %}
+{%- else %}
 from {{ package_name }}.application.complete_export import {% if datastores %}ArtifactStore, {% endif %}complete_export_use_case
 from {{ package_name }}.domain.export_job import QueuedExport, start_export
+{%- endif %}
 {%- if datastores %}
 
 
@@ -41,6 +56,22 @@ def open_store() -> Generator[ArtifactStore, None, None]:
 {%- endif %}
     yield InMemoryArtifactStore()
 {%- endif %}
+{%- if http_api %}
+
+
+def main() -> None:
+    # Loopback by default; the container image sets HOST=0.0.0.0 explicitly.
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8080"))
+{%- if datastores %}
+    with open_store() as store:
+        app = create_app(store)
+        uvicorn.run(app, host=host, port=port, server_header=False, proxy_headers=False)
+{%- else %}
+    app = create_app(InMemoryArtifactStore())
+    uvicorn.run(app, host=host, port=port, server_header=False, proxy_headers=False)
+{%- endif %}
+{%- else %}
 
 
 def main() -> None:
@@ -54,6 +85,7 @@ def main() -> None:
     ready = complete_export_use_case(store, job, "id,name\n1,demo\n")
 {%- endif %}
     print(f"{ready.id} -> {ready.artifact_key}")
+{%- endif %}
 
 
 if __name__ == "__main__":

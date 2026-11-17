@@ -1,7 +1,7 @@
 # Guardrail config (protected). See docs/adr/0001-layered-architecture.md.
 [importlinter]
 root_package = {{ package_name }}
-{%- if datastores %}
+{%- if datastores or http_api %}
 include_external_packages = True
 {%- endif %}
 
@@ -29,5 +29,19 @@ forbidden_modules =
 {%- if 'redis' in datastores %}
     redis
 {%- endif %}
+allow_indirect_imports = True
+{%- endif %}
+{%- if http_api %}
+
+[importlinter:contract:web]
+name = Web framework only in adapters: domain and application never see HTTP types (ADR 0001)
+type = forbidden
+source_modules =
+    {{ package_name }}.domain
+    {{ package_name }}.application
+forbidden_modules =
+    fastapi
+    starlette
+    uvicorn
 allow_indirect_imports = True
 {%- endif %}

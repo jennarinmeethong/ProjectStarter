@@ -31,6 +31,7 @@ Use an **absolute** path or a git URL so `copier update` works later.
 | `guardrail_owner` | optional: `@user` or `@org/team` for `.github/CODEOWNERS` | empty = no CODEOWNERS |
 | `risk_paths` | tier-3 paths that always need owner review | `[auth/, payments/, migrations/, infra/]` |
 | `datastores` | any of `postgres`, `redis`: adapters behind the existing port, migrations, Testcontainers integration tests | `[]`; add only what the user asked for, e.g. `-d 'datastores=["postgres"]'` |
+| `http_api` | serve the use case over HTTP (Hono / FastAPI / ASP.NET Core) with Playwright API tests and, with `containerize`, an OWASP ZAP baseline scan | `false`; `true` when the user builds a web service or API |
 | `containerize` | Dockerfile (multi-stage, non-root), `compose.yaml`, hadolint and a container CI job | `true`; pass `false` for libraries or when the user does not deploy containers |
 | destination | folder to create | `./<project_name>` |
 

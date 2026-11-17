@@ -1,0 +1,25 @@
+using {{ dotnet_name }}.Adapters.Http;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Bootstrap;
+
+/// <summary>Builds the HTTP host. Used by Program and by the end-to-end tests, so both run the same pipeline.</summary>
+public static class HttpHost
+{
+    public static WebApplication Build(IArtifactStore store, string url)
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseUrls(url);
+        builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
+        builder.Services.AddProblemDetails();
+        builder.Services.AddSingleton(store);
+        builder.Services.AddSingleton<CompleteExport>();
+
+        var app = builder.Build();
+        app.UseExceptionHandler();
+        app.UseStatusCodePages();
+        app.UseSecurityHeaders();
+        app.MapExportEndpoints();
+        return app;
+    }
+}
