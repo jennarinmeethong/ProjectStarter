@@ -3,6 +3,9 @@
 import eslintReact from "@eslint-react/eslint-plugin";
 {% endif -%}
 import js from "@eslint/js";
+{% if frontend == 'angular' -%}
+import angular from "angular-eslint";
+{% endif -%}
 {% if frontend == 'nextjs' -%}
 import nextPlugin from "@next/eslint-plugin-next";
 {% endif -%}
@@ -60,7 +63,7 @@ const noHiddenInputs = [
 ];
 
 export default tseslint.config(
-  { ignores: ["node_modules/", "dist/", "coverage/", "playwright-report*/", "test-results/", "*.config.*", ".dependency-cruiser.cjs", "ci/"{% if frontend == 'nextjs' %}, ".next/", "next-env.d.ts"{% endif %}] },
+  { ignores: ["node_modules/", "dist/", "coverage/", "playwright-report*/", "test-results/", "*.config.*", ".dependency-cruiser.cjs", "ci/"{% if frontend == 'nextjs' %}, ".next/", "next-env.d.ts"{% endif %}{% if frontend == 'angular' %}, ".angular/"{% endif %}] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
@@ -168,6 +171,19 @@ export default tseslint.config(
     rules: { ...nextPlugin.configs.recommended.rules, ...nextPlugin.configs["core-web-vitals"].rules },
   },
 {%- endif %}
+{%- endif %}
+{%- if frontend == 'angular' %}
+  {
+    // UI adapter (ADR 0005): Angular rules for components; inline templates are linted as HTML below.
+    files: ["src/ui/**/*.ts"],
+    extends: [...angular.configs.tsRecommended],
+    processor: angular.processInlineTemplates,
+  },
+  {
+    // Templates: Angular correctness and accessibility (template-accessibility), without type information.
+    files: ["src/ui/**/*.html"],
+    extends: [tseslint.configs.disableTypeChecked, ...angular.configs.templateRecommended, ...angular.configs.templateAccessibility],
+  },
 {%- endif %}
 {%- if frontend == 'vue' %}
   // UI adapter (ADR 0005): Vue correctness and accessibility. Templates are linted without type information;

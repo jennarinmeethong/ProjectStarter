@@ -85,6 +85,7 @@ frontend:
     React (Vite): react
     Vue (Vite): vue
     Next.js: nextjs
+    Angular: angular
   default: none
 
 # ---------- computed values (never asked) ----------

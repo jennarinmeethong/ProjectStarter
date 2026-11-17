@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "module": "es2022", "moduleResolution": "bundler", "types": [] },
+  "files": ["src/ui/main.ts"],
+  "angularCompilerOptions": { "strictTemplates": true, "strictInjectionParameters": true, "strictInputAccessModifiers": true }
+}
