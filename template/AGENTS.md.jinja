@@ -25,6 +25,7 @@
 - Feature map / domain vocabulary: `docs/feature-map.md`
 - Layers (dependencies point inward only): `{{ stk.layers.bootstrap }}` → `{{ stk.layers.adapters }}` → `{{ stk.layers.application }}` → `{{ stk.layers.domain }}`. See `docs/adr/0001-layered-architecture.md`.
 - Design rules (SOLID, ports, no hidden clock/random/env/I/O in inner layers): `docs/adr/0002-design-rules.md`
+- Security baseline and the checklist tier 2–3 PRs must answer: `docs/security/owasp.md`
 - Why rules exist: `docs/adr/` · Where a new rule belongs: `docs/engineering/where-rules-live.md`
 - Specs for risk tier 2–3 work: copy `SPEC.template.md` to `docs/specs/<feature-id>.md`
 

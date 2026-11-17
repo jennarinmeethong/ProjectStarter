@@ -1,0 +1,13 @@
+# Guardrail config (protected). Dockerfile lint; see docs/security/owasp.md.
+failure-threshold: warning
+trustedRegistries:
+  - docker.io
+  - ghcr.io
+  - mcr.microsoft.com
+override:
+  error:
+    - DL3002   # last USER must not be root
+    - DL3007   # never use the :latest tag
+    - DL3006   # always tag the base image
+    - DL3020   # COPY instead of ADD
+disable-ignore-pragma: true   # no inline "# hadolint ignore=..." escapes

@@ -1,0 +1,42 @@
+# Security baseline (OWASP)
+
+ใช้ [OWASP Top 10](https://owasp.org/Top10/) เป็นรายการความเสี่ยง และ [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/) ระดับ 1 เป็นเกณฑ์ขั้นต่ำ
+ข้อที่บังคับด้วยเครื่องมือได้อยู่ใน CI แล้ว ข้อที่เหลือเป็น checklist สำหรับ PR tier 2–3 ([risk-tiers](../risk-tiers.md))
+
+## บังคับด้วยเครื่องมือแล้ว
+
+| ความเสี่ยง (Top 10) | ป้องกันด้วย | ที่ไหน |
+|---|---|---|
+| A06 Vulnerable and Outdated Components | dependency audit ทุก PR + รายสัปดาห์ (`{{ cmd.audit }}`), Dependabot | `.github/workflows/ci.yml`, `.github/dependabot.yml` |
+| A02 Cryptographic Failures / secret รั่ว | gitleaks สแกน git history ทั้งหมด | job `secrets` ใน CI, `.gitleaks.toml` |
+{%- if containerize %}
+| A05 Security Misconfiguration (container) | hadolint, image แบบ multi-stage, รันด้วย user ที่ไม่ใช่ root, filesystem read-only, ไม่มี capability เพิ่ม | job `container` ใน CI, `.hadolint.yaml`, `ci/check-dockerfile.sh`, `compose.yaml` |
+{%- endif %}
+| A03 Injection (บางส่วน) | I/O และ driver อยู่ใน adapters เท่านั้น, validate ที่ขอบ | [ADR 0001](../adr/0001-layered-architecture.md), [ADR 0002](../adr/0002-design-rules.md) |
+{%- if stack == 'python' %}
+| หลายหมวด | bandit rules ใน ruff (`S`) | `ruff.toml` |
+{%- elif stack == 'typescript' %}
+| A07 / A02 | `sonarjs/no-hardcoded-passwords`, `sonarjs/no-hardcoded-ip` | `eslint.config.mjs` |
+{%- endif %}
+
+## ยังไม่ครอบคลุม (ต้องเพิ่มเมื่อมี HTTP endpoint)
+- DAST: OWASP ZAP baseline scan กับแอปที่รันอยู่
+- Security headers, rate limiting, CORS
+
+## Checklist สำหรับ PR tier 2–3
+ตอบใน PR description ทุกข้อ ("ไม่เกี่ยวข้อง" ต้องบอกเหตุผล)
+
+- [ ] **Access control (A01):** ทุก endpoint/use case ใหม่ตรวจสิทธิ์ฝั่ง server และ deny เป็นค่าเริ่มต้น
+- [ ] **Input (A03):** input จากภายนอกถูก decode/validate ที่ adapter ก่อนเข้า application; query ใช้ parameter ไม่ต่อ string
+- [ ] **Secrets (A02):** ไม่มี secret ในโค้ด, config หรือ log; อ่านจาก environment/secret store ใน bootstrap เท่านั้น
+- [ ] **Errors and logging (A09):** error ที่ส่งกลับไม่เผย stack trace หรือข้อมูลภายใน; เหตุการณ์ด้าน security ถูก log โดยไม่มีข้อมูลส่วนบุคคล
+- [ ] **Authentication (A07):** ไม่สร้าง auth เอง ใช้ library/provider ที่ผ่านการตรวจสอบ
+- [ ] **SSRF (A10):** URL ที่มาจากผู้ใช้ถูกจำกัดด้วย allowlist
+- [ ] **Dependencies (A06):** dependency ใหม่มีเหตุผล, ดูแลอยู่ และ license เข้ากันได้
+
+## เมื่อ check ด้าน security fail
+- dependency audit: อัปเกรดเป็นเวอร์ชันที่แก้แล้ว ถ้ายังไม่มี ให้บันทึกความเสี่ยงและวันหมดอายุใน PR ที่ owner อนุมัติ
+- gitleaks: ถือว่า secret รั่วแล้ว — rotate ก่อน แล้วค่อยลบออกจาก history ห้ามเพิ่ม allowlist เพื่อซ่อน
+{%- if containerize %}
+- hadolint / `check-dockerfile.sh`: แก้ Dockerfile ตาม message ห้ามเพิ่ม `# hadolint ignore`
+{%- endif %}

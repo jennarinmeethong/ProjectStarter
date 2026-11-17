@@ -24,12 +24,15 @@
 | Architecture | dependency-cruiser | import-linter (layers) | project references + NetArchTest |
 | Design rules (SOLID, ADR 0002) | cognitive complexity + SonarJS rules ที่คัดแล้ว (`eslint-plugin-sonarjs`), size limits, exhaustive `switch`, ห้าม clock/random/env/I/O ใน domain+application, domain ไม่มี dependency | ruff (C90, PL, FBT, ARG, SLF, TRY, S, banned APIs), pyright `reportImplicitOverride` | code-metrics analyzers, BannedApiAnalyzers, naming rules, NetArchTest (sealed, ไม่มี I/O) |
 | Property test | fast-check | hypothesis | FsCheck |
+| Container (`containerize`) | Dockerfile multi-stage บน `node:24-slim`, non-root, `compose.yaml` แบบ read-only | Dockerfile multi-stage + uv บน `python:3.13-slim`, non-root | publish ลง `dotnet/runtime:10.0`, `$APP_UID` |
+| Security (OWASP) | dependency audit, gitleaks, hadolint + `ci/check-dockerfile.sh`, Dependabot, checklist tier 2–3 ใน `docs/security/owasp.md` | เหมือนกัน | เหมือนกัน |
 | Test runner | vitest | pytest | xUnit v3 (Microsoft.Testing.Platform) |
 
 ## ความต้องการ
 
 - `git`, `bash` (Git Bash บน Windows), [uv](https://docs.astral.sh/uv/) ≥ 0.8 (Copier ≥ 9.4 รันผ่าน `uvx`)
 - TypeScript: Node.js ≥ 22.12 + npm · Python: uv (ดึง Python 3.13 ให้เอง) · .NET: .NET SDK 10
+- `tests/render-all.sh` ต้องมี Docker ที่รันอยู่ (hadolint, gitleaks และ build image ของแต่ละ stack) · โปรเจคที่สร้างด้วย `containerize=false` ไม่ต้องมี Docker ในเครื่อง (CI ใช้ Docker ของ GitHub runner สำหรับ gitleaks)
 
 ## ใช้งาน
 

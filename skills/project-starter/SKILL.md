@@ -30,6 +30,7 @@ Use an **absolute** path or a git URL so `copier update` works later.
 | `agent_tools` | any of `claude`, `codex` | both |
 | `guardrail_owner` | optional: `@user` or `@org/team` for `.github/CODEOWNERS` | empty = no CODEOWNERS |
 | `risk_paths` | tier-3 paths that always need owner review | `[auth/, payments/, migrations/, infra/]` |
+| `containerize` | Dockerfile (multi-stage, non-root), `compose.yaml`, hadolint and a container CI job | `true`; pass `false` for libraries or when the user does not deploy containers |
 | destination | folder to create | `./<project_name>` |
 
 Do not guess the stack or the owner; if the user does not name an owner, leave it empty (no CODEOWNERS is generated). If the destination exists and is not empty, ask before writing into it.

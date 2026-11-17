@@ -1,0 +1,10 @@
+# Local run: docker compose up --build
+# Hardened defaults: read-only filesystem, no extra Linux capabilities, no privilege escalation.
+services:
+  app:
+    build: .
+    image: {{ project_name | lower }}:local
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: [/tmp]

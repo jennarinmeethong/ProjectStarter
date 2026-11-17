@@ -1,0 +1,26 @@
+# Keep the build context small and free of secrets.
+.git
+.github
+.claude
+.env
+.env.*
+*.pem
+*.key
+docs
+tests
+{%- if stack == 'typescript' %}
+node_modules
+dist
+coverage
+**/*.test.ts
+{%- elif stack == 'python' %}
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+{%- else %}
+**/bin
+**/obj
+TestResults
+.vs
+{%- endif %}

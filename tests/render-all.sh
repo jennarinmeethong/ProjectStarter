@@ -3,7 +3,7 @@
 #   1. the generated project passes its own verify command, and
 #   2. the guardrails reject a seeded violation (escape hatch, layer leak, skipped test).
 # Usage: tests/render-all.sh [stack...]      (default: typescript python dotnet)
-# Needs: uv, git, bash; node/npm for typescript; .NET 10 SDK for dotnet.
+# Needs: uv, git, bash, Docker (running); node/npm for typescript; .NET 10 SDK for dotnet.
 set -uo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -36,6 +36,42 @@ seeded() { # seeded <label> <file> <text-to-append> <command...>: append, expect
   git checkout -q -- "$file"
 }
 
+docker_vol() { # host path of the current directory for `docker run -v` (Git Bash on Windows needs C:/...)
+  pwd -W 2>/dev/null || pwd
+}
+
+container_checks() { # container_checks <stack>: run inside the rendered project (containerize=true)
+  local vol image="project-starter-$1" hadolint="hadolint/hadolint:v2.15.1"
+  vol=$(docker_vol)
+  export MSYS_NO_PATHCONV=1
+  verify "hadolint" "docker run --rm -v '$vol:/w' -w /w $hadolint hadolint Dockerfile"
+  verify "check-dockerfile" "bash ci/check-dockerfile.sh"
+  verify "docker build + hardened smoke run (non-root, read-only)" \
+    "docker build -q -t $image . && docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true $image | grep -q 'demo -> exports/demo.csv' && [ \"\$(docker run --rm --entrypoint id $image -u)\" != 0 ]"
+  sed -i '0,/^FROM \([^ :]*\):[^ ]*/s//FROM \1:latest/' Dockerfile
+  expect_fail "hadolint: :latest base image" docker run --rm -v "$vol:/w" -w /w $hadolint hadolint Dockerfile
+  git checkout -q -- Dockerfile
+  seeded "hadolint: final stage runs as root" Dockerfile 'USER root\n' docker run --rm -v "$vol:/w" -w /w $hadolint hadolint Dockerfile
+  sed -i '/^USER /d' Dockerfile
+  expect_fail "check-dockerfile: no USER in final stage" bash ci/check-dockerfile.sh
+  git checkout -q -- Dockerfile
+  seeded "hadolint: inline ignore pragma" Dockerfile '# hadolint ignore=DL3007\nFROM busybox:latest AS extra\nUSER 1000:1000\n' docker run --rm -v "$vol:/w" -w /w $hadolint hadolint Dockerfile
+  unset MSYS_NO_PATHCONV
+}
+
+secret_checks() { # secret_checks: gitleaks is clean on the render and rejects a committed token
+  local vol gitleaks="zricethezav/gitleaks:v8.30.1"
+  vol=$(docker_vol)
+  export MSYS_NO_PATHCONV=1
+  verify "gitleaks: clean history" "docker run --rm -v '$vol:/repo' -w /repo $gitleaks git --config .gitleaks.toml --redact --exit-code 1 /repo"
+  git switch -q -c leak
+  printf 'GITHUB_TOKEN=ghp_%s\n' "$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)" > leaked.env
+  git add -f leaked.env && git -c user.name=t -c user.email=t@t commit -qm leak
+  expect_fail "gitleaks: committed token" docker run --rm -v "$vol:/repo" -w /repo $gitleaks git --config .gitleaks.toml --redact --exit-code 1 /repo
+  git switch -q main && git branch -q -D leak
+  unset MSYS_NO_PATHCONV
+}
+
 for stack in "${stacks[@]}"; do
   echo "== $stack"
 
@@ -44,7 +80,21 @@ for stack in "${stacks[@]}"; do
   for tools in '["claude"]' '["codex"]' '["claude","codex"]'; do
     d="$work/$stack-$(echo "$tools" | tr -dc 'a-z,')"
     if [ "$tools" = '["claude","codex"]' ]; then owner_args=(-d guardrail_owner=@demo-org/platform); else owner_args=(); fi
-    render "$stack" "$tools" "$d" "${owner_args[@]}" || { fail "render $tools"; continue; }
+    # The codex-only render opts out of containers; the others keep the default (containerize=true).
+    if [ "$tools" = '["codex"]' ]; then container_args=(-d containerize=false); else container_args=(); fi
+    render "$stack" "$tools" "$d" "${owner_args[@]}" "${container_args[@]}" || { fail "render $tools"; continue; }
+    if [ ${#container_args[@]} -gt 0 ]; then
+      if [ ! -e "$d/Dockerfile" ] && [ ! -e "$d/compose.yaml" ] && [ ! -e "$d/.hadolint.yaml" ] && [ ! -e "$d/ci/check-dockerfile.sh" ] \
+        && ! grep -q 'container:' "$d/.github/workflows/ci.yml" && ! grep -q 'docker' "$d/.github/dependabot.yml"; then
+        pass "no container files without containerize ($tools)"
+      else
+        fail "container files generated with containerize=false ($tools)"
+      fi
+    else
+      [ -f "$d/Dockerfile" ] && [ -f "$d/.hadolint.yaml" ] && grep -q '\.hadolint\.yaml' "$d/AGENTS.md" \
+        && pass "container files ($tools)" || fail "container files missing or unprotected ($tools)"
+    fi
+    [ -f "$d/.gitleaks.toml" ] && grep -q 'gitleaks' "$d/.github/workflows/ci.yml" && pass "secret scan configured ($tools)" || fail "secret scan missing ($tools)"
     if [ ${#owner_args[@]} -gt 0 ]; then
       grep -q '@demo-org/platform' "$d/.github/CODEOWNERS" 2>/dev/null && pass "CODEOWNERS with owner ($tools)" || fail "CODEOWNERS missing ($tools)"
     else
@@ -80,6 +130,9 @@ for stack in "${stacks[@]}"; do
       npm install --no-audit --no-fund lodash@4.17.20 >/dev/null 2>&1
       expect_fail "npm audit: vulnerable dependency" npm audit --audit-level=high
       cp "$work/package.json" "$work/package-lock.json" . && npm install --no-audit --no-fund >/dev/null 2>&1
+      # Container and secret scanning (docs/security/owasp.md).
+      container_checks typescript
+      secret_checks
       # Design rules (ADR 0002), one violation at a time.
       seeded "eslint: ambient clock in domain" src/domain/export-job.ts '\nexport const now = (): number => Date.now();\n' npm run lint
       seeded "eslint: too many parameters" src/application/complete-export.ts '\nexport function sum(a: number, b: number, c: number, d: number, e: number): number {\n  return a + b + c + d + e;\n}\n' npm run lint
@@ -101,6 +154,9 @@ for stack in "${stacks[@]}"; do
       uv add --no-sync requests==2.19.0 >/dev/null 2>&1
       expect_fail "uv audit: vulnerable dependency" uv audit --locked --preview-features audit-command
       cp "$work/pyproject.toml" "$work/uv.lock" .
+      # Container and secret scanning (docs/security/owasp.md).
+      container_checks python
+      secret_checks
       # Design rules (ADR 0002), one violation at a time.
       seeded "ruff: ambient randomness in domain" src/demo_app/domain/export_job.py '\n\nimport random\n\n\ndef roll() -> float:\n    return random.random()\n' uv run ruff check .
       seeded "ruff: ambient clock in application" src/demo_app/application/complete_export.py '\n\ndef now() -> object:\n    import datetime\n\n    return datetime.datetime.now(tz=datetime.UTC)\n' uv run ruff check .
@@ -120,6 +176,9 @@ for stack in "${stacks[@]}"; do
       sed -i 's#</Project>#  <ItemGroup><PackageReference Include="Newtonsoft.Json" /></ItemGroup>\n</Project>#' src/DemoApp.Adapters/DemoApp.Adapters.csproj
       expect_fail "nuget audit: vulnerable dependency" dotnet restore --force-evaluate
       git checkout -q -- Directory.Packages.props src/DemoApp.Adapters/DemoApp.Adapters.csproj && dotnet restore --force-evaluate >/dev/null 2>&1
+      # Container and secret scanning (docs/security/owasp.md).
+      container_checks dotnet
+      secret_checks
       # Design rules (ADR 0002), one violation at a time.
       seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build
       seeded "BannedApi: Guid.NewGuid in Application" src/DemoApp.Application/CompleteExport.cs '\npublic static class Ids\n{\n    public static Guid Next() => Guid.NewGuid();\n}\n' dotnet build

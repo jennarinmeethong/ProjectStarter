@@ -1,0 +1,4 @@
+# Guardrail config (protected). Secret scanning; see docs/security/owasp.md.
+# Never add an allowlist entry to hide a real secret: rotate the secret, then remove it from history.
+[extend]
+useDefault = true
