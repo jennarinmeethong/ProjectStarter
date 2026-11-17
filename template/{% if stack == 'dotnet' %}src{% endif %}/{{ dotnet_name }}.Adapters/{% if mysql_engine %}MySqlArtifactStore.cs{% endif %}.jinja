@@ -1,0 +1,80 @@
+using System.Data.Common;
+using MySqlConnector;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+/// <summary>
+/// IArtifactStore on MySQL or MariaDB. Schema: migrations/mysql/.
+/// Queries are always parameterised, never built from strings (ADR 0003).
+/// </summary>
+public sealed class MySqlArtifactStore : IArtifactStore, IAsyncDisposable
+{
+    private const string UpsertSql =
+        "INSERT INTO export_artifacts (artifact_key, job_id, body) VALUES (@key, @job, @body) " +
+        "ON DUPLICATE KEY UPDATE body = VALUES(body)";
+
+    private const string ReadSql = "SELECT body FROM export_artifacts WHERE artifact_key = @key";
+
+    private readonly MySqlDataSource dataSource;
+
+    private MySqlArtifactStore(MySqlDataSource dataSource) => this.dataSource = dataSource;
+
+    /// <summary>Accepts a URL (mysql://user:pass@host:port/db) or a MySqlConnector connection string.</summary>
+    public static MySqlArtifactStore Create(string connection) =>
+        new(new MySqlDataSource(ToConnectionString(connection)));
+
+    public async Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        var command = dataSource.CreateCommand(UpsertSql);
+        await using (command.ConfigureAwait(false))
+        {
+            AddParameter(command, "@key", key);
+            AddParameter(command, "@job", jobId);
+            AddParameter(command, "@body", content);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return key;
+    }
+
+    public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        var command = dataSource.CreateCommand(ReadSql);
+        await using (command.ConfigureAwait(false))
+        {
+            AddParameter(command, "@key", key);
+            return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        }
+    }
+
+    public ValueTask DisposeAsync() => dataSource.DisposeAsync();
+
+    private static void AddParameter(DbCommand command, string name, string value)
+    {
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = name;
+        parameter.Value = value;
+        command.Parameters.Add(parameter);
+    }
+
+    private static string ToConnectionString(string connection)
+    {
+        if (!Uri.TryCreate(connection, UriKind.Absolute, out var uri) || !uri.Scheme.Equals("mysql", StringComparison.Ordinal))
+        {
+            return connection;
+        }
+
+        var credentials = uri.UserInfo.Split(':', 2);
+        var builder = new MySqlConnectionStringBuilder
+        {
+            Server = uri.Host,
+            Port = uri.Port > 0 ? (uint)uri.Port : 3306,
+            Database = uri.AbsolutePath.TrimStart('/'),
+            UserID = Uri.UnescapeDataString(credentials[0]),
+            Password = credentials.Length > 1 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
+        };
+        return builder.ConnectionString;
+    }
+}

@@ -60,4 +60,4 @@ max-statements = 40
 [lint.per-file-ignores]
 "src/{{ package_name }}/adapters/**" = ["TID251"]
 "src/{{ package_name }}/bootstrap/**" = ["TID251", "T201"]
-"tests/**" = ["S101", "PLR2004", "SLF001"]
+"tests/**" = ["S101", "S105", "S106", "PLR2004", "SLF001"]  # S105/S106: throwaway credentials for test containers

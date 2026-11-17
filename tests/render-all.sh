@@ -92,11 +92,23 @@ datastore_checks() { # datastore_checks <stack>: rendered with datastores=[postg
   local compose="docker compose -p ps-$1"
   $compose down -v >/dev/null 2>&1
   verify "compose: HTTP request is stored in PostgreSQL" \
-    "$compose build app && $compose up -d --wait postgres redis && $compose up -d app \
+    "$compose build app && $compose up -d --wait postgres mysql redis && $compose up -d app \
      && for _ in \$(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break; sleep 1; done \
      && curl -fsS -X POST -H 'Content-Type: application/json' -d '{\"content\":\"id\\n1\\n\"}' http://127.0.0.1:8080/exports/compose-1/complete | grep -q 'exports/compose-1.csv' \
      && [ \"\$($compose exec -T postgres psql -U app -d app -tAc \"SELECT count(*) FROM export_artifacts WHERE job_id = 'compose-1'\")\" = 1 ]"
+  # The MySQL service applied migrations/mysql through its init hook.
+  verify "compose: MySQL migrations applied" \
+    "[ \"\$($compose exec -T mysql mysql -uapp -plocal-dev-only app -N -e 'SELECT COUNT(*) FROM export_artifacts' 2>/dev/null)\" = 0 ]"
   $compose down -v >/dev/null 2>&1
+}
+
+mariadb_checks() { # mariadb_checks <stack> <install> <integration-command>: MariaDB reuses the MySQL adapter
+  local dir="$work/$1-mariadb"
+  render "$1" '["codex"]' "$dir" -d 'datastores=["mariadb"]' -d containerize=false || { fail "render mariadb"; return; }
+  pushd "$dir" >/dev/null || return
+  bash -c "$2" >/dev/null 2>&1
+  verify "mariadb: adapter contract on a real MariaDB" "$3"
+  popd >/dev/null || return
 }
 
 http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: rendered with http_api=true
@@ -227,7 +239,7 @@ for stack in "${stacks[@]}"; do
     d="$work/$stack-$(echo "$tools" | tr -dc 'a-z,')"
     # The both-tools render also wires in every datastore and the HTTP API; it gets the full verification below.
     if [ "$tools" = '["claude","codex"]' ]; then
-      owner_args=(-d guardrail_owner=@demo-org/platform -d 'datastores=["postgres","redis"]' -d http_api=true)
+      owner_args=(-d guardrail_owner=@demo-org/platform -d 'datastores=["postgres","mysql","redis"]' -d http_api=true)
     else
       owner_args=()
     fi
@@ -302,6 +314,7 @@ for stack in "${stacks[@]}"; do
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks typescript
+      mariadb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       verify "integration: adapter contracts on real PostgreSQL + Redis" "npm run test:integration"
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks typescript "npm run test:e2e" src/adapters/http/app.ts 's/      xFrameOptions: "DENY",/&\n      xContentTypeOptions: false,/'
@@ -342,6 +355,7 @@ for stack in "${stacks[@]}"; do
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks python
+      mariadb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
       verify "integration: adapter contracts on real PostgreSQL + Redis" "uv run pytest -q -p no:warnings -m integration"
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks python "uv run pytest -q -p no:warnings -m e2e" src/demo_app/adapters/http/app.py '/"X-Content-Type-Options": "nosniff",/d'
@@ -373,6 +387,7 @@ for stack in "${stacks[@]}"; do
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks dotnet
+      mariadb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks dotnet 'dotnet test --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
@@ -400,6 +415,7 @@ for stack in "${stacks[@]}"; do
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks go
+      mariadb_checks go "go mod tidy" "go test -tags integration ./..."
       verify "integration: adapter contracts on real PostgreSQL + Redis" "go test -tags integration ./..."
       seeded_new "ruleguard: SQL built by concatenation" internal/adapters/postgres/unsafe.go 'package postgres\n\nimport "context"\n\n// Unsafe builds SQL from a value.\nfunc (s *Store) Unsafe(ctx context.Context, jobID string) error {\n\t_, err := s.pool.Exec(ctx, "SELECT body FROM export_artifacts WHERE job_id = \x27"+jobID+"\x27")\n\treturn err //nolint:wrapcheck // seeded\n}\n' go tool golangci-lint run ./internal/adapters/postgres/
       seeded_new "depguard: driver imported in application" internal/application/driver.go 'package application\n\nimport "github.com/jackc/pgx/v5/pgxpool"\n\n// Pool leaks the driver into the application layer.\ntype Pool = pgxpool.Pool\n' go tool golangci-lint run --enable-only depguard ./internal/application/
@@ -428,6 +444,7 @@ for stack in "${stacks[@]}"; do
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks rust
+      mariadb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
       verify "integration: adapter contracts on real PostgreSQL + Redis" "cargo test -p adapters --features integration"
       seeded "sqlx: SQL built from a string does not compile" crates/adapters/src/postgres.rs '\n/// Builds SQL from a value.\npub async fn unsafe_read(pool: &PgPool, job_id: &str) -> Result<(), PortError> {\n    let sql = format!("SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27");\n    sqlx::query(&sql).execute(pool).await?;\n    Ok(())\n}\n' cargo check -p adapters
       seeded "check-layers: driver in bootstrap" crates/bootstrap/Cargo.toml 'redis = "1.8"\n' bash ci/check-layers.sh

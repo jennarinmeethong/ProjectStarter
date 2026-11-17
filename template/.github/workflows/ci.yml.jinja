@@ -44,7 +44,7 @@ jobs:
         run: {{ cmd.verify }}
       - name: Dependency audit (known vulnerabilities)
         run: {{ cmd.audit }}
-{%- if 'postgres' in datastores %}
+{%- if sql_store %}
 {%- if stack != 'python' %}
       - uses: astral-sh/setup-uv@v6
 {%- endif %}

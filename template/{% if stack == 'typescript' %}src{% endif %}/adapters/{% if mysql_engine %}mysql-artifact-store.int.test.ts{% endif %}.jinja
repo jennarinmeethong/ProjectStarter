@@ -1,0 +1,23 @@
+// Integration test: needs Docker. Run with `npm run test:integration` (excluded from `npm test`).
+import { MySqlContainer, type StartedMySqlContainer } from "@testcontainers/mysql";
+import { afterAll, beforeAll } from "vitest";
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { MySqlArtifactStore } from "./mysql-artifact-store.ts";
+
+let container: StartedMySqlContainer;
+let store: MySqlArtifactStore;
+
+beforeAll(async () => {
+  // The image's init hook applies migrations/mysql in order, exactly as compose.yaml does locally.
+  container = await new MySqlContainer("{{ 'mysql:8.4' if mysql_engine == 'mysql' else 'mariadb:11.8' }}")
+    .withCopyDirectoriesToContainer([{ source: "migrations/mysql", target: "/docker-entrypoint-initdb.d" }])
+    .start();
+  store = MySqlArtifactStore.fromUrl(container.getConnectionUri());
+}, 240_000);
+
+afterAll(async () => {
+  await store.close();
+  await container.stop();
+});
+
+describeArtifactStoreContract("MySqlArtifactStore", () => ({ store, read: (key) => store.read(key) }));

@@ -1,0 +1,43 @@
+{%- set builder = 'MySqlBuilder' if mysql_engine == 'mysql' else 'MariaDbBuilder' -%}
+{%- set container = 'MySqlContainer' if mysql_engine == 'mysql' else 'MariaDbContainer' -%}
+using Testcontainers.{{ 'MySql' if mysql_engine == 'mysql' else 'MariaDb' }};
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Starts {{ 'MySQL' if mysql_engine == 'mysql' else 'MariaDB' }} once per test class and applies migrations/mysql through the image's init hook.</summary>
+public sealed class MySqlFixture : IAsyncLifetime
+{
+    private readonly {{ container }} container = new {{ builder }}("{{ 'mysql:8.4' if mysql_engine == 'mysql' else 'mariadb:11.8' }}")
+        .WithResourceMapping(new DirectoryInfo(Path.Combine(RepoPaths.Migrations, "mysql")), "/docker-entrypoint-initdb.d/")
+        .Build();
+
+    private MySqlArtifactStore? store;
+
+    public MySqlArtifactStore Store => store ?? throw new InvalidOperationException("Fixture not initialised.");
+
+    public async ValueTask InitializeAsync()
+    {
+        await container.StartAsync(TestContext.Current.CancellationToken);
+        store = MySqlArtifactStore.Create(container.GetConnectionString());
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (store is not null)
+        {
+            await store.DisposeAsync();
+        }
+
+        await container.DisposeAsync();
+    }
+}
+
+/// <summary>Integration test: needs Docker. Run with the Category=Integration filter (excluded from verify).</summary>
+[Trait("Category", "Integration")]
+public sealed class MySqlArtifactStoreTests(MySqlFixture fixture) : ArtifactStoreContract, IClassFixture<MySqlFixture>
+{
+    protected override StoreUnderTest Subject =>
+        new(fixture.Store, key => fixture.Store.ReadAsync(key, TestContext.Current.CancellationToken));
+}
