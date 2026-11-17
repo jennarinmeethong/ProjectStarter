@@ -108,6 +108,36 @@ http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: ren
   git checkout -q -- "$3"
 }
 
+frontend_checks() { # frontend_checks <framework>: a separate TypeScript render with that UI (ADR 0005)
+  local fw=$1 dir="$work/typescript-$1" image="project-starter-web-$1" vol
+  render typescript '["claude"]' "$dir" -d frontend="$fw" || { fail "render frontend=$fw"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base
+  npm install --no-audit --no-fund >/dev/null 2>&1
+  verify "$fw: npm run verify" "npm run verify"
+  npx playwright install chromium >/dev/null 2>&1
+  verify "$fw: browser flows + axe (Playwright)" "npm run test:ui"
+  vol=$(docker_vol)
+  export MSYS_NO_PATHCONV=1
+  verify "$fw: hadolint Dockerfile.web" "docker run --rm -v '$vol:/w' -w /w hadolint/hadolint:v2.15.1 hadolint Dockerfile.web"
+  verify "$fw: check-dockerfile Dockerfile.web" "bash ci/check-dockerfile.sh Dockerfile.web"
+  verify "$fw: web image smoke (non-root, read-only, /healthz)" \
+    "docker build -q -f Dockerfile.web -t $image . && bash ci/dast.sh $image --smoke && $(declare -f image_runs_as_non_root); image_runs_as_non_root $image"
+  verify "$fw: zap baseline of the web UI (from /)" "DAST_PATH=/ bash ci/dast.sh $image"
+  sed -i '/Content-Security-Policy/d' nginx.conf
+  expect_fail "$fw: zap: missing Content-Security-Policy" bash -c "docker build -q -f Dockerfile.web -t $image-seed . >/dev/null && DAST_PATH=/ bash ci/dast.sh $image-seed"
+  git checkout -q -- nginx.conf
+  unset MSYS_NO_PATHCONV
+  "frontend_seeds_$fw"
+  popd >/dev/null || return
+}
+
+frontend_seeds_react() {
+  seeded "react: framework imported in application" src/application/complete-export.ts '\nimport { useState } from "react";\nexport const hook = useState;\n' npm run arch
+  seeded "react: image without alt text (jsx-a11y)" src/ui/App.tsx '\nexport function Logo(): JSX.Element {\n  return <img src="/logo.png" />;\n}\n' npm run lint
+  seeded "react: hook called conditionally (rules-of-hooks)" src/ui/App.tsx '\nexport function Broken({ on }: { readonly on: boolean }): JSX.Element {\n  if (on) {\n    useState(0);\n  }\n  return <p />;\n}\n' npm run lint
+}
+
 secret_checks() { # secret_checks: gitleaks is clean on the render and rejects a committed token
   local vol gitleaks="zricethezav/gitleaks:v8.30.1"
   vol=$(docker_vol)
@@ -217,6 +247,8 @@ for stack in "${stacks[@]}"; do
       seeded "sonarjs: duplicated branches" src/domain/export-job.ts '\nexport function pick(job: ReadyExport, flag: boolean): string {\n  if (flag) {\n    return job.id.trim();\n  } else {\n    return job.id.trim();\n  }\n}\n' npm run lint
       seeded "depcruise: npm package in domain" src/domain/export-job.ts '\nimport fc from "fast-check";\nexport const gen = fc;\n' npm run arch
       seeded "depcruise: node built-in in application" src/application/complete-export.ts '\nimport { readFileSync } from "node:fs";\nexport const read = readFileSync;\n' npm run arch
+      # Frontends (ADR 0005), each in its own render.
+      frontend_checks react
       printf '\nimport { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";\nexport const leak = new InMemoryArtifactStore() as any;\n' >> src/domain/export-job.ts
       expect_fail "eslint: as any" npm run lint
       expect_fail "depcruise: domain -> adapters" npm run arch

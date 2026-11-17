@@ -76,6 +76,15 @@ http_api:
     Playwright API tests and an OWASP ZAP baseline scan
   default: false
 
+frontend:
+  type: str
+  help: Web UI for the TypeScript stack, as a driving adapter over the same use cases
+  when: "{{ stack == 'typescript' }}"
+  choices:
+    None: none
+    React (Vite): react
+  default: none
+
 # ---------- computed values (never asked) ----------
 package_name:
   type: str
@@ -122,6 +131,10 @@ cmd:
     {%- endif %}
     {%- if http_api %}
     test_e2e: npm run test:e2e
+    {%- endif %}
+    {%- if frontend != 'none' %}
+    build_ui: npm run build
+    test_ui: npm run test:ui
     {%- endif %}
     {%- elif stack == 'python' %}
     install: uv sync
@@ -203,7 +216,7 @@ stk:
   default: |
     {%- if stack == 'typescript' %}
     language: TypeScript
-    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api or frontend != 'none' %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
     escapes_display: "`eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `as any`, `as unknown as`, `.skip`/`.only`"
     ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as', 'NOSONAR']
     src_globs: ['*.ts', '*.tsx']

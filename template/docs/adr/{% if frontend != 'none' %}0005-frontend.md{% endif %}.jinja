@@ -1,0 +1,37 @@
+# 0005: Frontend — UI เป็น driving adapter, ทดสอบในเบราว์เซอร์จริง
+
+- **สถานะ:** accepted
+- **วันที่:** <วันที่สร้างโปรเจค>
+- **เจ้าของ:** {{ guardrail_owner or '<เจ้าของ>' }}
+
+## บริบท
+UI เป็นจุดที่ logic ทางธุรกิจรั่วเข้ามาง่ายที่สุด (validation ซ้ำ, การคำนวณใน component, เรียก storage ตรง ๆ) และเป็นที่ที่ agent มักแก้ให้ "ดูผ่าน" โดยไม่มีใครเห็นปัญหาการเข้าถึง (accessibility) หรือ header ด้านความปลอดภัย
+
+## การตัดสินใจ
+1. **UI เป็น driving adapter:** component รับ input แล้วเรียก use case เดียวกับที่ CLI/HTTP ใช้ domain และ application ห้าม import framework ของ UI
+2. **Composition root ของเบราว์เซอร์มีที่เดียว:** {% if frontend == 'react' %}`src/ui/main.tsx`{% endif %} เป็นไฟล์เดียวที่เลือก adapter (เช่น `LocalStorageArtifactStore`) แล้ว inject เข้า component
+3. **Adapter ฝั่งเบราว์เซอร์ผ่าน contract test เดียวกัน** กับ adapter อื่นของ port (`tests/contracts/artifact-store.ts`)
+4. **Accessibility เป็นเกณฑ์ ไม่ใช่ข้อแนะนำ:** lint (`jsx-a11y` strict) ตอนเขียน และ axe (WCAG 2.1 AA) ในเบราว์เซอร์จริงทุก PR
+5. **ไม่มี inline script/style:** build ไม่ใส่ inline script ทำให้ CSP เข้มได้โดยไม่ต้องมี `'unsafe-inline'`
+
+## การบังคับใช้
+| กฎ | เครื่องมือ |
+|---|---|
+| framework อยู่นอก domain/application | dependency-cruiser `web-frameworks-only-in-adapters` |
+| UI ไม่เรียก datastore ตรง | dependency-cruiser `ui-not-to-datastore-drivers` |
+{%- if frontend == 'react' %}
+| React ถูกต้อง, hooks, accessibility | ESLint `@eslint-react` (recommended-type-checked), `react-hooks` (rules-of-hooks, exhaustive-deps), `jsx-a11y-x` strict |
+| พฤติกรรมของ component | Vitest + Testing Library (`src/ui/*.test.tsx`, jsdom) |
+{%- endif %}
+| flow ของผู้ใช้และ accessibility ในเบราว์เซอร์ | Playwright (Chromium) + axe ใน `e2e-ui/` — `{{ cmd.test_ui }}`, job `ui` |
+{%- if containerize %}
+| header ของหน้าเว็บที่ deploy จริง (CSP, X-Frame-Options, COOP/COEP, Permissions-Policy) | `nginx.conf` + OWASP ZAP baseline ที่เริ่มสแกนจาก `/` (`DAST_PATH=/ bash ci/dast.sh <image>`), job `dast` |
+| image ของเว็บไม่รันเป็น root | `Dockerfile.web` (nginx-unprivileged, UID 101) + hadolint + `ci/check-dockerfile.sh` |
+{%- endif %}
+
+## สิ่งที่ยังไม่ครอบคลุม
+- Visual regression (screenshot diff) และการทดสอบบนหลายเบราว์เซอร์ (เพิ่ม project ใน `playwright.ui.config.ts`)
+- Authentication ของผู้ใช้และการเก็บ token (ห้ามเก็บ secret ใน Web Storage)
+
+## ผลที่ตามมา
+หน้าจอใหม่ต้องมี component test และ Playwright flow ที่ผ่าน axe ก่อน merge

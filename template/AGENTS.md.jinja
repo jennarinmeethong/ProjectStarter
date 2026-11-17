@@ -34,6 +34,10 @@
 - HTTP API: validate at the adapter, problem details, security headers (`docs/adr/0004-http-api.md`).
   API tests: `{{ cmd.test_e2e }}`{% if containerize %} · ZAP scan: `bash ci/dast.sh <image>`{% endif %}
 {%- endif %}
+{%- if frontend != 'none' %}
+- UI: a driving adapter over the same use cases; accessibility is a gate (`docs/adr/0005-frontend.md`).
+  Browser tests (Playwright + axe): `{{ cmd.test_ui }}`
+{%- endif %}
 - Why rules exist: `docs/adr/` · Where a new rule belongs: `docs/engineering/where-rules-live.md`
 - Specs for risk tier 2–3 work: copy `SPEC.template.md` to `docs/specs/<feature-id>.md`
 

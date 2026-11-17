@@ -155,17 +155,52 @@ jobs:
 {%- if http_api %}
       - name: Smoke run (hardened container answers /healthz)
         run: bash ci/dast.sh app:ci --smoke
+{%- else %}
+      - name: Smoke run
+        run: docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true app:ci
+{%- endif %}
+{%- if frontend != 'none' %}
+      - name: Dockerfile.web lint (hadolint)
+        run: docker run --rm -v "$PWD:/w" -w /w hadolint/hadolint:v2.15.1 hadolint Dockerfile.web
+      - name: Dockerfile.web rules (non-root, multi-stage)
+        run: bash ci/check-dockerfile.sh Dockerfile.web
+      - name: Build web image
+        run: docker build -f Dockerfile.web -t web:ci .
+      - name: Smoke run web (hardened container answers /healthz)
+        run: bash ci/dast.sh web:ci --smoke
+{%- endif %}
+{%- if http_api or frontend != 'none' %}
 
   dast:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+{%- if http_api %}
       - name: Build image
         run: docker build -t app:ci .
-      - name: OWASP ZAP baseline scan of the running container
+      - name: OWASP ZAP baseline scan of the API container
         run: bash ci/dast.sh app:ci
-{%- else %}
-      - name: Smoke run
-        run: docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true app:ci
 {%- endif %}
+{%- if frontend != 'none' %}
+      - name: Build web image
+        run: docker build -f Dockerfile.web -t web:ci .
+      - name: OWASP ZAP baseline scan of the web UI container (starts at /)
+        run: DAST_PATH=/ bash ci/dast.sh web:ci
+{%- endif %}
+{%- endif %}
+{%- endif %}
+{%- if frontend != 'none' %}
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: UI flows and accessibility in a real browser (Playwright + axe)
+        run: {{ cmd.test_ui }}
 {%- endif %}

@@ -2,6 +2,7 @@
 # ci/dast.sh — run the image hardened (read-only, no capabilities), wait for /healthz, then scan the running
 # service with the OWASP ZAP baseline (passive) scan. Rules and their FAIL/IGNORE levels: .zap/rules.tsv.
 # Usage: ci/dast.sh <image> [--smoke]      --smoke: only check that the container starts and answers /healthz
+#        DAST_PATH=/ ci/dast.sh <image>     start the scan at / instead of /healthz (web UI images)
 # See docs/security/owasp.md.
 set -euo pipefail
 
@@ -46,7 +47,8 @@ echo "dast: container healthy (read-only, no capabilities)"
 cp .zap/rules.tsv "$work/rules.tsv"
 chmod -R a+rwX "$work"
 host_work=$(cd "$work" && (pwd -W 2>/dev/null || pwd))
-# Start at /healthz: several header rules skip 4xx/5xx responses, so the scan needs a 200 to judge.
+# Start at /healthz by default: several header rules skip 4xx/5xx responses, so the scan needs a 200 to
+# judge. A web UI sets DAST_PATH=/ so the HTML page and its assets are scanned too.
 # Warnings fail the scan too (no -I): every rule is either fixed or explicitly IGNOREd with a reason.
 docker run --rm --network "$net" -v "$host_work:/zap/wrk:rw" "$zap" \
-  zap-baseline.py -t "http://$app:8080/healthz" -c rules.tsv -m 1 -s
+  zap-baseline.py -t "http://$app:8080${DAST_PATH:-/healthz}" -c rules.tsv -m 1 -s

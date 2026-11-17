@@ -1,0 +1,10 @@
+// @vitest-environment jsdom
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { LocalStorageArtifactStore } from "./local-storage-artifact-store.ts";
+
+const store = new LocalStorageArtifactStore(window.localStorage);
+
+describeArtifactStoreContract("LocalStorageArtifactStore", () => ({
+  store,
+  read: (key) => Promise.resolve(store.read(key)),
+}));
