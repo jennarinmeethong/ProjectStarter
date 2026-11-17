@@ -1,0 +1,6 @@
+import { defineConfig } from "vitest/config";
+
+// Component tests render React Native through react-native-web, so they run in jsdom without a device.
+export default defineConfig({
+  resolve: { alias: { "react-native": "react-native-web" } },
+});

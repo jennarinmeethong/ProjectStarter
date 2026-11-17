@@ -1,0 +1,5 @@
+// Expo entry point (package.json "main"). All wiring happens in src/ui/Root.tsx.
+import { registerRootComponent } from "expo";
+import { Root } from "./src/ui/Root.tsx";
+
+registerRootComponent(Root);

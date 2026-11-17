@@ -1,5 +1,5 @@
 // Guardrail config (protected). Rule messages say what to do instead and link an ADR.
-{% if frontend in ['react', 'nextjs'] -%}
+{% if frontend in ['react', 'nextjs', 'react-native'] -%}
 import eslintReact from "@eslint-react/eslint-plugin";
 {% endif -%}
 import js from "@eslint/js";
@@ -11,6 +11,8 @@ import nextPlugin from "@next/eslint-plugin-next";
 {% endif -%}
 {% if frontend in ['react', 'nextjs'] -%}
 import jsxA11y from "eslint-plugin-jsx-a11y-x";
+{% endif -%}
+{% if frontend in ['react', 'nextjs', 'react-native'] -%}
 import reactHooks from "eslint-plugin-react-hooks";
 {% endif -%}
 import sonarjs from "eslint-plugin-sonarjs";
@@ -63,7 +65,7 @@ const noHiddenInputs = [
 ];
 
 export default tseslint.config(
-  { ignores: ["node_modules/", "dist/", "coverage/", "playwright-report*/", "test-results/", "*.config.*", ".dependency-cruiser.cjs", "ci/"{% if frontend == 'nextjs' %}, ".next/", "next-env.d.ts"{% endif %}{% if frontend == 'angular' %}, ".angular/"{% endif %}] },
+  { ignores: ["node_modules/", "dist/", "coverage/", "playwright-report*/", "test-results/", "*.config.*", ".dependency-cruiser.cjs", "ci/"{% if frontend == 'nextjs' %}, ".next/", "next-env.d.ts"{% endif %}{% if frontend == 'angular' %}, ".angular/"{% endif %}{% if frontend == 'react-native' %}, ".expo/", "index.ts"{% endif %}] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
@@ -148,9 +150,9 @@ export default tseslint.config(
     files: ["**/*.test.ts", "**/*.test.tsx", "tests/**", "e2e/**", "e2e-ui/**"],
     rules: { "max-lines-per-function": "off", "max-lines": "off", "sonarjs/no-duplicate-string": "off" },
   },
-{%- if frontend in ['react', 'nextjs'] %}
+{%- if frontend in ['react', 'nextjs', 'react-native'] %}
   {
-    // UI adapter (ADR 0005): React correctness, hooks rules and accessibility (jsx-a11y strict).
+    // UI adapter (ADR 0005): React correctness, hooks rules and accessibility.
     files: ["src/ui/**/*.tsx"{% if frontend == 'nextjs' %}, "src/app/**/*.tsx"{% endif %}],
     ...eslintReact.configs["recommended-type-checked"],
   },
@@ -162,7 +164,34 @@ export default tseslint.config(
       "react-hooks/exhaustive-deps": "error",
     },
   },
+{%- if frontend == 'react-native' %}
+  {
+    // React Native has no maintained a11y lint plugin for ESLint 10: require an accessible role and name on every
+    // touchable and alt text on images. axe checks the web build in a real browser (e2e-ui/).
+    files: ["src/ui/**/*.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        noCastThroughUnknown,
+        ...noSqlFromStrings,
+        {
+          selector: "JSXOpeningElement[name.name=/^(Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback)$/]:not(:has(JSXAttribute[name.name='role']))",
+          message: "Touchables need a role (for example role=\"button\") so screen readers announce them (ADR 0005).",
+        },
+        {
+          selector: "JSXOpeningElement[name.name=/^(Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback)$/]:not(:has(JSXAttribute[name.name='aria-label']))",
+          message: "Touchables need an aria-label: their accessible name (ADR 0005).",
+        },
+        {
+          selector: "JSXOpeningElement[name.name='Image']:not(:has(JSXAttribute[name.name=/^(alt|aria-label|aria-hidden)$/]))",
+          message: "Images need alt text, or aria-hidden when decorative (ADR 0005).",
+        },
+      ],
+    },
+  },
+{%- else %}
   { files: ["src/ui/**/*.tsx"{% if frontend == 'nextjs' %}, "src/app/**/*.tsx"{% endif %}], ...jsxA11y.configs.strict },
+{%- endif %}
 {%- if frontend == 'nextjs' %}
   {
     // Next.js rules: core web vitals, no sync scripts, no raw <img> or <a> where Next has a safer primitive.

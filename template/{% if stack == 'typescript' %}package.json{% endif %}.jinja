@@ -2,7 +2,9 @@
 {%- if http_api %}{% set _ = deps.append('"@hono/node-server": "^2.1.0"') %}{% set _ = deps.append('"hono": "^4.13.0"') %}{% endif -%}
 {%- if 'postgres' in datastores %}{% set _ = deps.append('"pg": "^8.20.0"') %}{% endif -%}
 {%- if frontend == 'nextjs' %}{% set _ = deps.append('"next": "^16.2.0"') %}{% endif -%}
-{%- if frontend in ['react', 'nextjs'] %}{% set _ = deps.append('"react": "^19.2.0"') %}{% set _ = deps.append('"react-dom": "^19.2.0"') %}{% endif -%}
+{%- if frontend == 'react-native' %}{% set _ = deps.append('"@expo/metro-runtime": "^58.0.0"') %}{% set _ = deps.append('"expo": "^58.0.0"') %}{% endif -%}
+{%- if frontend in ['react', 'nextjs', 'react-native'] %}{% set _ = deps.append('"react": "^19.3.0"') %}{% set _ = deps.append('"react-dom": "^19.3.0"') %}{% endif -%}
+{%- if frontend == 'react-native' %}{% set _ = deps.append('"react-native": "^0.88.0"') %}{% set _ = deps.append('"react-native-web": "^0.21.0"') %}{% endif -%}
 {%- if frontend == 'vue' %}{% set _ = deps.append('"vue": "^3.5.0"') %}{% endif -%}
 {%- if frontend == 'angular' %}{% for p in ['common', 'compiler', 'core', 'platform-browser'] %}{% set _ = deps.append('"@angular/' ~ p ~ '": "^22.0.0"') %}{% endfor %}{% set _ = deps.append('"rxjs": "^7.8.0"') %}{% set _ = deps.append('"tslib": "^2.8.0"') %}{% endif -%}
 {%- if 'redis' in datastores %}{% set _ = deps.append('"redis": "^6.1.0"') %}{% endif -%}
@@ -16,6 +18,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+{%- if frontend == 'react-native' %}
+  "main": "index.ts",
+{%- endif %}
   "engines": { "node": ">=22.12" },
   "scripts": {
     "start": "tsx src/bootstrap/main.ts",
@@ -28,6 +33,9 @@
 {%- elif frontend == 'angular' %}
     "dev": "ng serve --configuration development",
     "build": "ng build",
+{%- elif frontend == 'react-native' %}
+    "dev": "expo start",
+    "build": "expo export --platform web --output-dir dist",
 {%- endif %}
 {%- if frontend != 'none' %}
     "test:ui": "playwright test --config playwright.ui.config.ts",
@@ -59,7 +67,7 @@
     "@angular/cli": "^22.0.0",
     "@angular/compiler-cli": "^22.0.0",
 {%- endif %}
-{%- if frontend in ['react', 'nextjs'] %}
+{%- if frontend in ['react', 'nextjs', 'react-native'] %}
     "@eslint-react/eslint-plugin": "^5.0.0",
 {%- endif %}
 {%- if frontend == 'nextjs' %}
@@ -75,7 +83,7 @@
 {%- if 'redis' in datastores %}
     "@testcontainers/redis": "^12.0.1",
 {%- endif %}
-{%- if frontend in ['react', 'nextjs'] %}
+{%- if frontend in ['react', 'nextjs', 'react-native'] %}
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.0",
 {%- endif %}
@@ -83,7 +91,7 @@
 {%- if 'postgres' in datastores %}
     "@types/pg": "^8.20.0",
 {%- endif %}
-{%- if frontend in ['react', 'nextjs'] %}
+{%- if frontend in ['react', 'nextjs', 'react-native'] %}
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
 {%- endif %}
@@ -101,6 +109,8 @@
     "eslint": "^10.15.0",
 {%- if frontend in ['react', 'nextjs'] %}
     "eslint-plugin-jsx-a11y-x": "^0.2.0",
+{%- endif %}
+{%- if frontend in ['react', 'nextjs', 'react-native'] %}
     "eslint-plugin-react-hooks": "^7.0.0",
 {%- endif %}
     "eslint-plugin-sonarjs": "~4.2.2",
