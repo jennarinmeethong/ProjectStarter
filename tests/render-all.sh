@@ -164,6 +164,35 @@ export default function Legacy(): JSX.Element {
 ' npm run lint
 }
 
+frontend_seeds_angular() {
+  seeded "angular: framework imported in application" src/application/complete-export.ts '
+import { signal } from "@angular/core";
+export const state = signal;
+' npm run arch
+  seeded_new "angular: image without alt text (template accessibility)" src/ui/logo.component.ts 'import { ChangeDetectionStrategy, Component } from "@angular/core";
+
+@Component({
+  selector: "app-logo",
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `<img src="/logo.png" />`,
+})
+export class LogoComponent {}
+' npm run lint
+  seeded_new "angular: click without keyboard support (template accessibility)" src/ui/tile.component.ts 'import { ChangeDetectionStrategy, Component } from "@angular/core";
+
+@Component({
+  selector: "app-tile",
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `<div (click)="open()">Open</div>`,
+})
+export class TileComponent {
+  protected open(): void {
+    return;
+  }
+}
+' npm run lint
+}
+
 frontend_seeds_react() {
   seeded "react: framework imported in application" src/application/complete-export.ts '\nimport { useState } from "react";\nexport const hook = useState;\n' npm run arch
   seeded "react: image without alt text (jsx-a11y)" src/ui/App.tsx '\nexport function Logo(): JSX.Element {\n  return <img src="/logo.png" />;\n}\n' npm run lint
@@ -286,6 +315,7 @@ for stack in "${stacks[@]}"; do
       frontend_checks react
       frontend_checks vue
       frontend_checks nextjs
+      frontend_checks angular
       printf '\nimport { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";\nexport const leak = new InMemoryArtifactStore() as any;\n' >> src/domain/export-job.ts
       expect_fail "eslint: as any" npm run lint
       expect_fail "depcruise: domain -> adapters" npm run arch

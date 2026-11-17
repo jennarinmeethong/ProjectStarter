@@ -4,11 +4,13 @@
 {%- if frontend == 'nextjs' %}{% set _ = deps.append('"next": "^16.2.0"') %}{% endif -%}
 {%- if frontend in ['react', 'nextjs'] %}{% set _ = deps.append('"react": "^19.2.0"') %}{% set _ = deps.append('"react-dom": "^19.2.0"') %}{% endif -%}
 {%- if frontend == 'vue' %}{% set _ = deps.append('"vue": "^3.5.0"') %}{% endif -%}
+{%- if frontend == 'angular' %}{% for p in ['common', 'compiler', 'core', 'platform-browser'] %}{% set _ = deps.append('"@angular/' ~ p ~ '": "^22.0.0"') %}{% endfor %}{% set _ = deps.append('"rxjs": "^7.8.0"') %}{% set _ = deps.append('"tslib": "^2.8.0"') %}{% endif -%}
 {%- if 'redis' in datastores %}{% set _ = deps.append('"redis": "^6.1.0"') %}{% endif -%}
 {%- set excludes = [] -%}
 {%- if datastores %}{% set _ = excludes.append(' --exclude \\"**/*.int.test.ts\\"') %}{% endif -%}
 {%- if http_api %}{% set _ = excludes.append(' --exclude \\"e2e/**\\"') %}{% endif -%}
 {%- if frontend != 'none' %}{% set _ = excludes.append(' --exclude \\"e2e-ui/**\\"') %}{% endif -%}
+{%- if frontend == 'angular' %}{% set _ = excludes.append(' --exclude \\"src/ui/**\\"') %}{% endif -%}
 {
   "name": "{{ project_name | lower }}",
   "version": "0.1.0",
@@ -23,6 +25,9 @@
 {%- elif frontend == 'nextjs' %}
     "dev": "next dev",
     "build": "next build",
+{%- elif frontend == 'angular' %}
+    "dev": "ng serve --configuration development",
+    "build": "ng build",
 {%- endif %}
 {%- if frontend != 'none' %}
     "test:ui": "playwright test --config playwright.ui.config.ts",
@@ -30,7 +35,7 @@
     "typecheck": "{{ 'vue-tsc' if frontend == 'vue' else 'tsc' }}",
     "lint": "eslint --max-warnings=0 .",
     "arch": "depcruise src --config .dependency-cruiser.cjs",
-    "test": "vitest run{{ excludes | join('') }}",
+    "test": "vitest run{{ excludes | join('') }}{% if frontend == 'angular' %} && ng test --watch=false{% endif %}",
 {%- if datastores %}
     "test:integration": "vitest run --testTimeout=60000 .int.test.ts",
 {%- endif %}
@@ -48,6 +53,11 @@
   "devDependencies": {
 {%- if frontend != 'none' %}
     "@axe-core/playwright": "^4.11.0",
+{%- endif %}
+{%- if frontend == 'angular' %}
+    "@angular/build": "^22.0.0",
+    "@angular/cli": "^22.0.0",
+    "@angular/compiler-cli": "^22.0.0",
 {%- endif %}
 {%- if frontend in ['react', 'nextjs'] %}
     "@eslint-react/eslint-plugin": "^5.0.0",
@@ -83,6 +93,9 @@
 {%- if frontend == 'vue' %}
     "@vitejs/plugin-vue": "^6.0.0",
     "@vue/test-utils": "^2.4.0",
+{%- endif %}
+{%- if frontend == 'angular' %}
+    "angular-eslint": "^22.0.0",
 {%- endif %}
     "dependency-cruiser": "^18.8.0",
     "eslint": "^10.15.0",
