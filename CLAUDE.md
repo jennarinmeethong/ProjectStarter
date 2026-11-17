@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A Copier template that scaffolds agent-ready projects (TypeScript, Python, C#/.NET, Go; Claude Code and/or Codex), plus a portable skill and a Claude Code plugin wrapper. The source material is `docs/combined.md` (Thai). Layout and usage: `README.md`.
+A Copier template that scaffolds agent-ready projects (TypeScript, Python, C#/.NET, Go, Rust; Claude Code and/or Codex), plus a portable skill and a Claude Code plugin wrapper. The source material is `docs/combined.md` (Thai). Layout and usage: `README.md`.
 
 - `copier.yml` — questions plus computed values. `cmd` (verify/lint/test commands) and `stk` (guardrail files, ratchet patterns, layer paths) are the single source of truth per stack; templates read them instead of hard-coding commands.
 - `template/` — rendered output (`_subdirectory`). Stack- or tool-specific files use conditional names such as `{% if stack == 'python' %}ruff.toml{% endif %}.jinja`. Only files ending in `.jinja` are rendered; path names are always rendered.
@@ -13,9 +13,9 @@ A Copier template that scaffolds agent-ready projects (TypeScript, Python, C#/.N
 
 ## Commands
 
-Requires `git`, `bash`, `uv`; Node.js ≥ 22.12 for TypeScript renders; .NET SDK 10 for .NET renders; Go ≥ 1.26 for Go renders; a running Docker engine for the container and secret-scan checks in `tests/render-all.sh`.
+Requires `git`, `bash`, `uv`; Node.js ≥ 22.12 for TypeScript renders; .NET SDK 10 for .NET renders; Go ≥ 1.26 for Go renders; rustup and cargo-deny for Rust renders; a running Docker engine for the container and secret-scan checks in `tests/render-all.sh`.
 
-- Render one project: `uvx copier copy --trust --defaults -d project_name=demo -d stack=<typescript|python|dotnet|go> . <dest>` (renders the working tree, including uncommitted changes)
+- Render one project: `uvx copier copy --trust --defaults -d project_name=demo -d stack=<typescript|python|dotnet|go|rust> . <dest>` (renders the working tree, including uncommitted changes)
 - Full test (renders every stack × agent combination, runs each project's verify, then seeds violations that must be rejected): `bash tests/render-all.sh`
 - One stack: `bash tests/render-all.sh python`
 - Validate the plugin manifests: `claude plugin validate .`

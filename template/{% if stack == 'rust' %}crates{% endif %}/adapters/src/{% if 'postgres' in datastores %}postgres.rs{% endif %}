@@ -1,0 +1,41 @@
+//! `ArtifactStore` on PostgreSQL. Schema: `migrations/0001_create_export_artifacts.sql`.
+//!
+//! Queries are constants with placeholders. sqlx 0.9 only accepts SQL that implements `SqlSafeStr`
+//! (string literals), so SQL built from values does not compile; `AssertSqlSafe` is the escape hatch and
+//! is counted by ci/guardrail-ratchet.sh (ADR 0003).
+
+use application::{ArtifactStore, PortError};
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+
+const UPSERT_SQL: &str = "INSERT INTO export_artifacts (artifact_key, job_id, body) VALUES ($1, $2, $3) \
+     ON CONFLICT (artifact_key) DO UPDATE SET body = EXCLUDED.body";
+const READ_SQL: &str = "SELECT body FROM export_artifacts WHERE artifact_key = $1";
+
+/// Keeps artifacts in the `export_artifacts` table.
+#[derive(Debug, Clone)]
+pub struct PostgresArtifactStore {
+    pool: PgPool,
+}
+
+impl PostgresArtifactStore {
+    /// Connects to `url` (postgresql://user:pass@host:port/db).
+    pub async fn connect(url: &str) -> Result<Self, PortError> {
+        let pool = PgPoolOptions::new().max_connections(5).connect(url).await?;
+        Ok(Self { pool })
+    }
+
+    /// Returns the content stored under `key`, if any.
+    pub async fn read(&self, key: &str) -> Result<Option<String>, PortError> {
+        let row: Option<(String,)> = sqlx::query_as(READ_SQL).bind(key).fetch_optional(&self.pool).await?;
+        Ok(row.map(|(body,)| body))
+    }
+}
+
+impl ArtifactStore for PostgresArtifactStore {
+    async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
+        let key = format!("exports/{job_id}.csv");
+        sqlx::query(UPSERT_SQL).bind(&key).bind(job_id).bind(content).execute(&self.pool).await?;
+        Ok(key)
+    }
+}

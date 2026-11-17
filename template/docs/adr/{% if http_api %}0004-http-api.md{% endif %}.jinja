@@ -8,7 +8,7 @@
 HTTP เป็นขอบที่ input ที่ไม่น่าไว้ใจเข้ามา (OWASP A01, A03, A05) ถ้า framework หลุดเข้า domain/application หรือ validation กระจายอยู่หลายที่ agent จะเลียนแบบ และ security header ที่ขาดหายจะไม่มีใครเห็นจนกว่าจะถูกสแกนจากภายนอก
 
 ## การตัดสินใจ
-1. **HTTP เป็น driving adapter** อยู่ใน {% if stack == 'typescript' %}`src/adapters/http`{% elif stack == 'python' %}`{{ src_root }}/adapters/http`{% elif stack == 'go' %}`internal/adapters/httpapi`{% else %}`src/{{ dotnet_name }}.Adapters/Http`{% endif %}: decode และ validate request แล้วเรียก use case ส่วน hosting อยู่ใน bootstrap
+1. **HTTP เป็น driving adapter** อยู่ใน {% if stack == 'typescript' %}`src/adapters/http`{% elif stack == 'python' %}`{{ src_root }}/adapters/http`{% elif stack == 'go' %}`internal/adapters/httpapi`{% elif stack == 'rust' %}`crates/adapters/src/http.rs`{% else %}`src/{{ dotnet_name }}.Adapters/Http`{% endif %}: decode และ validate request แล้วเรียก use case ส่วน hosting อยู่ใน bootstrap
 2. **Validate ที่ขอบครั้งเดียว** job id ต้องตรง `^[A-Za-z0-9_-]{1,64}$` body ต้องเป็น `{"content": "<string ไม่ว่าง>"}` ขนาดไม่เกิน 1 MB ส่วนข้างในได้ค่าที่ถูกต้องแล้วเสมอ
 3. **Error เป็น RFC 9457 problem details** (`application/problem+json`) ไม่มี stack trace หรือข้อความภายใน
 4. **Security header ทุก response รวม error:** `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` และไม่ส่ง `Server`/`X-Powered-By`
@@ -24,6 +24,8 @@ HTTP เป็นขอบที่ input ที่ไม่น่าไว้�
 | framework อยู่ใน adapters | import-linter contract `web` (domain, application → fastapi/starlette/uvicorn) |
 {%- elif stack == 'go' %}
 | framework อยู่ใน adapters | depguard rule `web` (domain, application → `net/http` และ web framework) |
+{%- elif stack == 'rust' %}
+| framework อยู่ใน adapters | axum อยู่ใน crate `adapters` (router) และ `bootstrap` (serve); domain/application ไม่มี dependency นี้ (`ci/check-layers.sh`). Playwright test อยู่ใน `e2e/` (Node) เพราะไม่มี Playwright binding ของ Rust ที่ยังดูแลอยู่ |
 {%- else %}
 | framework อยู่ใน adapters | project references: มีแค่ `Adapters` (FrameworkReference) และ `Bootstrap` (Web SDK) ที่อ้าง ASP.NET Core; NetArchTest ตรวจว่า Domain/Application ไม่ขึ้นกับ `Microsoft.AspNetCore` |
 {%- endif %}

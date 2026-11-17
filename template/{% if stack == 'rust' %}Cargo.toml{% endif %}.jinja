@@ -1,0 +1,48 @@
+# Guardrail config (protected): workspace layout and lint levels. Dependencies are declared in each crate's
+# own Cargo.toml, so adding one never needs an edit here. Layer rules: docs/adr/0001-layered-architecture.md.
+[workspace]
+resolver = "3"
+members = ["crates/domain", "crates/application", "crates/adapters", "crates/bootstrap"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+# Strict baseline; CI runs clippy with -D warnings, so every warning fails the build.
+pedantic = { level = "warn", priority = -1 }
+# Errors and panics are values, not crashes (tests may unwrap: clippy.toml).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+# Escape hatches: use #[expect(lint, reason = "...")], never a bare #[allow] (counted by ci/guardrail-ratchet.sh).
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+# OCP: a new enum variant must break every match that does not handle it (ADR 0002).
+wildcard_enum_match_arm = "deny"
+# SRP: thresholds in clippy.toml (ADR 0002).
+cognitive_complexity = "warn"
+too_many_arguments = "warn"
+too_many_lines = "warn"
+# Banned ambient APIs per layer: crates/domain/clippy.toml, crates/application/clippy.toml (ADR 0002 #DIP).
+disallowed_methods = "deny"
+disallowed_types = "deny"
+# Pedantic lints that only add noise for application code.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+
+[profile.release]
+strip = true
+lto = "thin"

@@ -3,13 +3,13 @@
 #   1. the generated project passes its own verify command, and
 #   2. the guardrails reject a seeded violation (escape hatch, layer leak, skipped test).
 # Usage: tests/render-all.sh [stack...]      (default: typescript python dotnet)
-# Needs: uv, git, bash, Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go.
+# Needs: uv, git, bash, Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go; rustup + cargo-deny for rust.
 set -uo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/project-starter-XXXXXX")
 stacks=("$@")
-[ ${#stacks[@]} -gt 0 ] || stacks=(typescript python dotnet go)
+[ ${#stacks[@]} -gt 0 ] || stacks=(typescript python dotnet go rust)
 failures=0
 
 pass() { echo "  PASS $*"; }
@@ -308,6 +308,34 @@ for stack in "${stacks[@]}"; do
       seeded_new "nolintlint: suppression without a reason" internal/domain/quiet.go 'package domain\n\nimport "time"\n\n// Now reads the wall clock.\nfunc Now() time.Time { return time.Now() } //nolint:forbidigo\n' go tool golangci-lint run ./internal/domain/
       printf '\n// Seeded escape hatch for the ratchet.\nvar _ = 1 //nolint:gochecknoglobals // seeded\n' >> internal/domain/exportjob.go
       ;;
+    rust)
+      cargo fetch -q >/dev/null 2>&1
+      verify "rust verify" "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && bash ci/check-layers.sh && cargo test --workspace"
+      # Dependency audit: clean, then rejects a crate with a known advisory.
+      verify "cargo deny advisories" "cargo deny check advisories"
+      cp crates/adapters/Cargo.toml Cargo.lock "$work/"
+      sed -i 's/^\[dependencies\]$/&\ntime = "=0.1.45"/' crates/adapters/Cargo.toml && cargo fetch -q >/dev/null 2>&1
+      expect_fail "cargo deny: crate with a known advisory" cargo deny check advisories
+      cp "$work/Cargo.toml" crates/adapters/Cargo.toml && cp "$work/Cargo.lock" .
+      # Container and secret scanning (docs/security/owasp.md).
+      container_checks rust
+      secret_checks
+      # Datastores (docs/adr/0003-datastores.md).
+      datastore_checks rust
+      verify "integration: adapter contracts on real PostgreSQL + Redis" "cargo test -p adapters --features integration"
+      seeded "sqlx: SQL built from a string does not compile" crates/adapters/src/postgres.rs '\n/// Builds SQL from a value.\npub async fn unsafe_read(pool: &PgPool, job_id: &str) -> Result<(), PortError> {\n    let sql = format!("SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27");\n    sqlx::query(&sql).execute(pool).await?;\n    Ok(())\n}\n' cargo check -p adapters
+      seeded "check-layers: driver in bootstrap" crates/bootstrap/Cargo.toml 'redis = "1.8"\n' bash ci/check-layers.sh
+      # HTTP API (docs/adr/0004-http-api.md).
+      http_checks rust "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test" crates/adapters/src/http.rs '/X_CONTENT_TYPE_OPTIONS/d'
+      seeded "check-layers: web framework in application" crates/application/Cargo.toml 'axum = "0.8"\n' bash ci/check-layers.sh
+      # Design rules (ADR 0002), one violation at a time.
+      seeded "clippy: ambient clock in domain" crates/domain/src/lib.rs '\n/// Reads the wall clock.\npub fn now() -> std::time::SystemTime {\n    std::time::SystemTime::now()\n}\n' cargo clippy -p domain -- -D warnings
+      seeded "clippy: too many arguments" crates/application/src/lib.rs '\n/// Too many parameters.\npub fn sum(a: u8, b: u8, c: u8, d: u8, e: u8) -> u32 {\n    u32::from(a) + u32::from(b) + u32::from(c) + u32::from(d) + u32::from(e)\n}\n' cargo clippy -p application -- -D warnings
+      seeded "clippy: wildcard match arm" crates/domain/src/lib.rs '\n/// Hides new variants.\npub fn label(job: &ExportJob) -> &str {\n    match job {\n        ExportJob::Queued(_) => "q",\n        _ => "other",\n    }\n}\n' cargo clippy -p domain -- -D warnings
+      seeded "clippy: unwrap outside tests" crates/application/src/lib.rs '\n/// Panics on bad input.\npub fn parse(s: &str) -> u32 {\n    s.parse().unwrap()\n}\n' cargo clippy -p application -- -D warnings
+      seeded "clippy: allow without a reason" crates/domain/src/lib.rs '\n#[allow(dead_code)]\nfn unused() {}\n' cargo clippy -p domain -- -D warnings
+      printf '\n#[expect(dead_code, reason = "seeded escape for the ratchet")]\nfn seeded_escape() {}\n' >> crates/domain/src/lib.rs
+      ;;
   esac
   # Ratchet: commit the violation plus a skipped test and compare with base.
   case "$stack" in
@@ -315,6 +343,7 @@ for stack in "${stacks[@]}"; do
     python) sed -i 's/^def test_rejects/@pytest.mark.skip\ndef test_rejects/' tests/test_export_job.py ;;
     dotnet) sed -i 's/\[Fact\]/[Fact(Skip = "x")]/' tests/DemoApp.Tests/ExportJobTests.cs ;;
     go) sed -i 's/^func TestRejectsBlankArtifactKey(t \*testing.T) {$/&\n\tt.Skip("x")/' internal/domain/exportjob_test.go ;;
+    rust) sed -i 's/^#\[tokio::test\]$/&\n#[ignore]/' crates/adapters/tests/in_memory.rs ;;
   esac
   git -c user.name=t -c user.email=t@t commit -qam violation
   expect_fail "guardrail-ratchet" bash ci/guardrail-ratchet.sh base

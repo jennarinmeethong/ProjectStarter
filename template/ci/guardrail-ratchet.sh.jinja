@@ -60,6 +60,13 @@ grep -Eq '^[[:space:]]*default:[[:space:]]*standard' .golangci.yml   || { echo "
 for linter in depguard forbidigo gosec gochecksumtype wrapcheck nolintlint; do
   grep -Eq "^[[:space:]]*-[[:space:]]+$linter([[:space:]]|$)" .golangci.yml     || { echo ".golangci.yml no longer enables $linter" >&2; status=1; }
 done
+{%- elif stack == 'rust' %}
+for rule in 'unsafe_code = "forbid"' 'pedantic = ' 'unwrap_used = "deny"' 'allow_attributes = "deny"' 'wildcard_enum_match_arm = "deny"' 'disallowed_methods = "deny"'; do
+  grep -qF "$rule" Cargo.toml || { echo "Cargo.toml [workspace.lints] no longer contains: $rule" >&2; status=1; }
+done
+for crate in domain application adapters bootstrap; do
+  grep -Eq '^workspace[[:space:]]*=[[:space:]]*true' "crates/$crate/Cargo.toml"     || { echo "crates/$crate/Cargo.toml no longer inherits [lints] from the workspace" >&2; status=1; }
+done
 {%- else %}
 for prop in '<Nullable>enable</Nullable>' '<TreatWarningsAsErrors>true</TreatWarningsAsErrors>'; do
   grep -q "$prop" Directory.Build.props \

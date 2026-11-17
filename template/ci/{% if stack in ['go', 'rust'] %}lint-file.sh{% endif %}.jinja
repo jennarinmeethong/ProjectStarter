@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+{%- if stack == 'go' %}
+# ci/lint-file.sh <file.go> — lint the package that contains one Go file (golangci-lint works per package).
+# Used by the Claude Code PostToolUse hook; CI lints everything with `go tool golangci-lint run`.
+set -euo pipefail
+dir=$(dirname "${1:?usage: ci/lint-file.sh <file.go>}")
+go tool golangci-lint run "./$dir/"
+{%- else %}
+# ci/lint-file.sh <file.rs> — format-check one file and lint the crate that contains it (clippy works per crate).
+# Used by the Claude Code PostToolUse hook; CI lints the workspace with `cargo clippy --workspace`.
+set -euo pipefail
+file="${1:?usage: ci/lint-file.sh <file.rs>}"
+rustfmt --check --edition 2024 "$file"
+case "$file" in
+  crates/*/*) crate=$(printf '%s' "$file" | cut -d/ -f2); cargo clippy -p "$crate" --all-targets -- -D warnings ;;
+  *) cargo clippy --workspace --all-targets -- -D warnings ;;
+esac
+{%- endif %}

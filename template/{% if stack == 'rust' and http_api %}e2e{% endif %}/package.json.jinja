@@ -1,0 +1,12 @@
+{
+  "name": "{{ project_name | lower }}-e2e",
+  "private": true,
+  "description": "Black-box API tests for the Rust service. Playwright has no maintained Rust binding, so these run on Node.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0"
+  }
+}

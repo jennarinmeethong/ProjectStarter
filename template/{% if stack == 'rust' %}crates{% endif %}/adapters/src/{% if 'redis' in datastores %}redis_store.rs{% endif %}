@@ -1,0 +1,35 @@
+//! `ArtifactStore` on Redis. Suits short-lived artifacts; set a TTL or use PostgreSQL for durable storage.
+
+use application::{ArtifactStore, PortError};
+use redis::AsyncCommands;
+use redis::aio::MultiplexedConnection;
+
+/// Keeps artifacts as Redis strings. Cheap to clone; clones share one multiplexed connection.
+#[derive(Clone)]
+pub struct RedisArtifactStore {
+    connection: MultiplexedConnection,
+}
+
+impl RedisArtifactStore {
+    /// Connects to `url` (redis://user:pass@host:port/db, rediss:// for TLS).
+    pub async fn connect(url: &str) -> Result<Self, PortError> {
+        let client = redis::Client::open(url)?;
+        let connection = client.get_multiplexed_async_connection().await?;
+        Ok(Self { connection })
+    }
+
+    /// Returns the content stored under `key`, if any.
+    pub async fn read(&self, key: &str) -> Result<Option<String>, PortError> {
+        let mut connection = self.connection.clone();
+        Ok(connection.get(key).await?)
+    }
+}
+
+impl ArtifactStore for RedisArtifactStore {
+    async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
+        let key = format!("exports/{job_id}.csv");
+        let mut connection = self.connection.clone();
+        let () = connection.set(&key, content).await?;
+        Ok(key)
+    }
+}

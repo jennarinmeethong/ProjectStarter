@@ -1,0 +1,39 @@
+# Adapters: implement application ports. The only crate that may depend on datastore drivers and web
+# frameworks (ADR 0001, ADR 0003{% if http_api %}, ADR 0004{% endif %}); ci/check-layers.sh checks the other crates.
+[package]
+name = "adapters"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+{%- if datastores %}
+
+[features]
+# Contract tests against real datastores (Testcontainers, needs Docker): cargo test -p adapters --features integration
+integration = []
+{%- endif %}
+
+[dependencies]
+application = { path = "../application" }
+domain = { path = "../domain" }
+{%- if 'postgres' in datastores %}
+# sqlx 0.9 only accepts SQL it can prove is not built from strings (SqlSafeStr); see ADR 0003.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres"] }
+{%- endif %}
+{%- if 'redis' in datastores %}
+redis = { version = "1.8", default-features = false, features = ["tokio-comp"] }
+{%- endif %}
+{%- if http_api %}
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+{%- endif %}
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+{%- if datastores %}
+testcontainers-modules = { version = "0.15", features = [{% if 'postgres' in datastores %}"postgres"{% endif %}{% if datastores | length > 1 %}, {% endif %}{% if 'redis' in datastores %}"redis"{% endif %}] }
+{%- endif %}

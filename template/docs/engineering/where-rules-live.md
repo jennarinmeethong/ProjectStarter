@@ -10,7 +10,7 @@
 | ขอบเขตระหว่าง layer หรือ process | domain ห้าม import adapters | **Architecture check** | lint | code review |
 | Driver ของ database/cache | `pg`, `psycopg`, `Npgsql` นอก adapters | **Architecture check** (ADR 0003) | project references | code review |
 | Migration ที่ merge แล้ว | แก้ไฟล์ใน `migrations/` | **CI** ratchet (append-only) | CODEOWNERS tier 3 | AGENTS.md อย่างเดียว |
-| SQL injection | ต่อ string เข้า query | **Lint** (ESLint `no-restricted-syntax` / ruff `S608` / `CA2100` / ruleguard `sqlFromStrings`) | contract test กับ DB จริง | code review |
+| SQL injection | ต่อ string เข้า query | **Lint** (ESLint `no-restricted-syntax` / ruff `S608` / `CA2100` / ruleguard `sqlFromStrings`; Rust: type system ของ sqlx) | contract test กับ DB จริง | code review |
 | ความเข้มของ type | strict mode | **Config** | **CI** (ratchet ตรวจว่าไม่ถูกลด) | AGENTS.md |
 | ทางหนีจากกฎ | cast, ignore, disable | **Lint** | **CI** ratchet | AGENTS.md อย่างเดียว |
 | Style และ formatting | การจัดรูปแบบ, import order | **Config** (formatter/linter) | CI | AGENTS.md |

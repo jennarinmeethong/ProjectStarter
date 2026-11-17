@@ -1,0 +1,13 @@
+# Domain: no dependencies at all (ADR 0001). ci/check-layers.sh fails if one is added.
+[package]
+name = "domain"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest = "1.7"

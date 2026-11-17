@@ -1,0 +1,42 @@
+//! Integration test: needs Docker. Run with `cargo test -p adapters --features integration`.
+#![cfg(feature = "integration")]
+
+mod common;
+
+use std::future::Future;
+use std::path::Path;
+
+use adapters::postgres::PostgresArtifactStore;
+use application::PortError;
+use testcontainers_modules::postgres::Postgres;
+use testcontainers_modules::testcontainers::ImageExt;
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+
+impl common::ReadBack for PostgresArtifactStore {
+    fn read_back(&self, key: &str) -> impl Future<Output = Result<Option<String>, PortError>> + Send {
+        self.read(key)
+    }
+}
+
+/// migrations/*.sql in file-name order, as the image's init hook (and compose.yaml) applies them.
+fn migrations() -> Result<String, PortError> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+    let mut files =
+        std::fs::read_dir(dir)?.map(|entry| entry.map(|e| e.path())).collect::<Result<Vec<_>, _>>()?;
+    files.sort();
+    let scripts = files.iter().map(std::fs::read_to_string).collect::<Result<Vec<_>, _>>()?;
+    Ok(scripts.join("\n"))
+}
+
+#[tokio::test]
+async fn postgres_store_satisfies_the_contract() -> Result<(), PortError> {
+    let container =
+        Postgres::default().with_init_sql(migrations()?.into_bytes()).with_tag("17-alpine").start().await?;
+    let host = container.get_host().await?;
+    let port = container.get_host_port_ipv4(5432).await?;
+    let store =
+        PostgresArtifactStore::connect(&format!("postgres://postgres:postgres@{host}:{port}/postgres"))
+            .await?;
+
+    common::check_contract(&store).await
+}

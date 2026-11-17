@@ -1,0 +1,9 @@
+# Guardrail config (protected). SRP thresholds (docs/adr/0002-design-rules.md).
+# crates/domain and crates/application have their own clippy.toml with the same thresholds plus banned APIs.
+too-many-arguments-threshold = 4
+cognitive-complexity-threshold = 15
+too-many-lines-threshold = 60
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true

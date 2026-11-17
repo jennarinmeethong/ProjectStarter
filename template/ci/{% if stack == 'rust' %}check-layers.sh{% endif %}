@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# ci/check-layers.sh — layer rules on Cargo dependencies (docs/adr/0001-layered-architecture.md).
+# The compiler enforces whatever the manifests allow, so the manifests themselves are checked here.
+set -euo pipefail
+
+# deps <crate>: the crate's direct normal (non-dev) dependencies, one name per line.
+deps() {
+  cargo tree -p "$1" -e normal --depth 1 --prefix none --format '{p}' | tail -n +2 | awk '{print $1}' | sort -u
+}
+
+status=0
+reject() { # reject <crate> <regex of forbidden deps> <message>
+  local bad
+  bad=$(deps "$1" | grep -E "$2" || true)
+  if [ -n "$bad" ]; then
+    echo "$1 must not depend on: $(echo $bad) — $3" >&2
+    status=1
+  fi
+}
+
+reject domain '.' "domain has no dependencies; keep it pure (ADR 0001)"
+application_bad=$(deps application | grep -vxE 'domain' || true)
+if [ -n "$application_bad" ]; then
+  echo "application must not depend on: $(echo $application_bad) — it depends on domain only; reach the outside through ports (ADR 0001)" >&2
+  status=1
+fi
+reject adapters '^bootstrap$' "only bootstrap wires dependencies (ADR 0001)"
+reject bootstrap '^(sqlx|sqlx-[a-z-]+|tokio-postgres|postgres|redis|mongodb|mysql_async|tiberius|aws-sdk-dynamodb|azure_data_cosmos|oracle)$' \
+  "datastore drivers live in adapters; bootstrap passes connection settings (docs/adr/0003-datastores.md)"
+
+[ "$status" -eq 0 ] && echo "check-layers: OK"
+exit "$status"
