@@ -1,0 +1,104 @@
+// Package httpapi is the HTTP adapter (driving side): it decodes and validates requests, calls the use case
+// and maps results to HTTP. Domain and application never see HTTP types (ADR 0001, ADR 0004).
+package httpapi
+
+import (
+	"encoding/json"
+	"net/http"
+	"regexp"
+
+	"{{ go_module }}/internal/application"
+	"{{ go_module }}/internal/domain"
+)
+
+const maxContentLength = 1_000_000
+
+var jobID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+type completeRequest struct {
+	Content *string `json:"content"`
+}
+
+type completeResponse struct {
+	ID          string `json:"id"`
+	ArtifactKey string `json:"artifactKey"`
+}
+
+type problem struct {
+	Type   string `json:"type"`
+	Title  string `json:"title"`
+	Status int    `json:"status"`
+}
+
+// NewHandler returns the API with security headers on every response, including errors.
+func NewHandler(store application.ArtifactStore) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, "application/json", map[string]string{"status": "ok"})
+	})
+	mux.HandleFunc("POST /exports/{id}/complete", complete(store))
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		writeProblem(w, http.StatusNotFound, "Not found")
+	})
+	return securityHeaders(mux)
+}
+
+func complete(store application.ArtifactStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !jobID.MatchString(id) {
+			writeProblem(w, http.StatusBadRequest, "Invalid job id")
+			return
+		}
+		content, ok := decodeContent(w, r)
+		if !ok {
+			writeProblem(w, http.StatusBadRequest, `Body must be {"content": "<non-empty string>"}`)
+			return
+		}
+		job := domain.Start(domain.NewQueued(id))
+		ready, err := application.CompleteExport(r.Context(), store, job, content)
+		if err != nil {
+			writeProblem(w, http.StatusInternalServerError, "Internal error")
+			return
+		}
+		response := completeResponse{ID: ready.ID(), ArtifactKey: ready.ArtifactKey()}
+		writeJSON(w, http.StatusCreated, "application/json", response)
+	}
+}
+
+// decodeContent accepts exactly {"content": "<non-empty string up to 1 MB>"}.
+func decodeContent(w http.ResponseWriter, r *http.Request) (string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxContentLength+1024)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body completeRequest
+	if err := decoder.Decode(&body); err != nil || body.Content == nil {
+		return "", false
+	}
+	content := *body.Content
+	return content, content != "" && len(content) <= maxContentLength
+}
+
+// writeProblem sends RFC 9457 problem details. Never includes internal error messages.
+func writeProblem(w http.ResponseWriter, status int, title string) {
+	writeJSON(w, status, "application/problem+json", problem{Type: "about:blank", Title: title, Status: status})
+}
+
+func writeJSON(w http.ResponseWriter, status int, contentType string, body any) {
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers := w.Header()
+		headers.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		headers.Set("X-Content-Type-Options", "nosniff")
+		headers.Set("X-Frame-Options", "DENY")
+		headers.Set("Referrer-Policy", "no-referrer")
+		headers.Set("Cross-Origin-Resource-Policy", "same-origin")
+		headers.Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}

@@ -9,7 +9,7 @@
 | ชั้น | ที่อยู่ | เนื้อหา |
 |---|---|---|
 | Core (ไม่ผูกภาษา) | `template/docs/`, `template/AGENTS.md.jinja`, `template/SPEC.template.md` | หลักการ, ตาราง "กฎควรอยู่ที่ไหน", risk tiers, roadmap, ADR, correction record, feature map |
-| Stack packs | ไฟล์ใน `template/` ที่ชื่อขึ้นต้นด้วย `{% if stack == '...' %}` + ค่า `cmd`/`stk` ใน `copier.yml` | TypeScript, Python, C#/.NET |
+| Stack packs | ไฟล์ใน `template/` ที่ชื่อขึ้นต้นด้วย `{% if stack == '...' %}` + ค่า `cmd`/`stk` ใน `copier.yml` | TypeScript, Python, C#/.NET, Go |
 | Agent adapters | `template/{% if 'claude' in agent_tools %}.claude{% endif %}/`, `CLAUDE.md` | Claude Code: deny rules + hooks; Codex ใช้ `AGENTS.md` ร่วมกัน + CI |
 | Generator | `copier.yml` | คำถามและค่าคำนวณ (Copier) |
 | Skill / plugin | `skills/project-starter/SKILL.md`, `.claude-plugin/` | skill เดียวใช้ได้ทั้ง Claude Code และ Codex |
@@ -17,23 +17,23 @@
 
 ### เครื่องมือต่อ stack
 
-| แนวคิด | TypeScript | Python | C#/.NET |
-|---|---|---|---|
-| Type เข้มงวด | `tsconfig` strict + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` | pyright strict, ปิด `# type: ignore` | Nullable + TreatWarningsAsErrors + `latest-recommended` analyzers |
-| Lint + ห้ามทางหนี | typescript-eslint `strictTypeChecked`, `ban-ts-comment` | ruff (PGH, ANN, TID banned APIs) | .NET analyzers, `.editorconfig` |
-| Architecture | dependency-cruiser | import-linter (layers) | project references + NetArchTest |
-| Design rules (SOLID, ADR 0002) | cognitive complexity + SonarJS rules ที่คัดแล้ว (`eslint-plugin-sonarjs`), size limits, exhaustive `switch`, ห้าม clock/random/env/I/O ใน domain+application, domain ไม่มี dependency | ruff (C90, PL, FBT, ARG, SLF, TRY, S, banned APIs), pyright `reportImplicitOverride` | code-metrics analyzers, BannedApiAnalyzers, naming rules, NetArchTest (sealed, ไม่มี I/O) |
-| Property test | fast-check | hypothesis | FsCheck |
-| Container (`containerize`) | Dockerfile multi-stage บน `node:24-slim`, non-root, `compose.yaml` แบบ read-only | Dockerfile multi-stage + uv บน `python:3.13-slim`, non-root | publish ลง `dotnet/runtime:10.0`, `$APP_UID` |
-| Datastores (`datastores`) | `pg`, `redis` + `@testcontainers/*`, dependency-cruiser แยก driver ไว้ใน adapters, ESLint ห้ามประกอบ SQL จาก string | `psycopg`, `redis` + `testcontainers`, import-linter `forbidden`, ruff `S608` | `Npgsql`, `StackExchange.Redis` + `Testcontainers.*`, `CA2100` |
-| HTTP API (`http_api`) | Hono, Playwright API tests, ZAP baseline | FastAPI + uvicorn, Playwright (Python), ZAP baseline | ASP.NET Core minimal API, Microsoft.Playwright, ZAP baseline |
-| Security (OWASP) | dependency audit, gitleaks, hadolint + `ci/check-dockerfile.sh`, Dependabot, checklist tier 2–3 ใน `docs/security/owasp.md` | เหมือนกัน | เหมือนกัน |
-| Test runner | vitest | pytest | xUnit v3 (Microsoft.Testing.Platform) |
+| แนวคิด | TypeScript | Python | C#/.NET | Go |
+|---|---|---|---|---|
+| Type เข้มงวด | `tsconfig` strict + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` | pyright strict, ปิด `# type: ignore` | Nullable + TreatWarningsAsErrors + `latest-recommended` analyzers | Go compiler + `go vet` |
+| Lint + ห้ามทางหนี | typescript-eslint `strictTypeChecked`, `ban-ts-comment` | ruff (PGH, ANN, TID banned APIs) | .NET analyzers, `.editorconfig` | golangci-lint v2 (`go tool`), `nolintlint` ต้องระบุ linter และเหตุผล |
+| Architecture | dependency-cruiser | import-linter (layers) | project references + NetArchTest | depguard (layers, drivers, web) + `internal/` |
+| Design rules (SOLID, ADR 0002) | cognitive complexity + SonarJS rules ที่คัดแล้ว (`eslint-plugin-sonarjs`), size limits, exhaustive `switch`, ห้าม clock/random/env/I/O ใน domain+application, domain ไม่มี dependency | ruff (C90, PL, FBT, ARG, SLF, TRY, S, banned APIs), pyright `reportImplicitOverride` | code-metrics analyzers, BannedApiAnalyzers, naming rules, NetArchTest (sealed, ไม่มี I/O) | gocognit, funlen, nestif, revive (argument-limit, flag-parameter), interfacebloat, ireturn, gochecksumtype, forbidigo |
+| Property test | fast-check | hypothesis | FsCheck | native fuzzing (`testing.F`) |
+| Container (`containerize`) | Dockerfile multi-stage บน `node:24-slim`, non-root, `compose.yaml` แบบ read-only | Dockerfile multi-stage + uv บน `python:3.13-slim`, non-root | publish ลง `dotnet/runtime:10.0`, `$APP_UID` | static binary บน `distroless/static:nonroot`, UID 65532 |
+| Datastores (`datastores`) | `pg`, `redis` + `@testcontainers/*`, dependency-cruiser แยก driver ไว้ใน adapters, ESLint ห้ามประกอบ SQL จาก string | `psycopg`, `redis` + `testcontainers`, import-linter `forbidden`, ruff `S608` | `Npgsql`, `StackExchange.Redis` + `Testcontainers.*`, `CA2100` | `pgx`, `go-redis` + `testcontainers-go`, depguard, `gosec` G201/G202 |
+| HTTP API (`http_api`) | Hono, Playwright API tests, ZAP baseline | FastAPI + uvicorn, Playwright (Python), ZAP baseline | ASP.NET Core minimal API, Microsoft.Playwright, ZAP baseline | `net/http` (ServeMux), playwright-go, ZAP baseline |
+| Security (OWASP) | dependency audit, gitleaks, hadolint + `ci/check-dockerfile.sh`, Dependabot, checklist tier 2–3 ใน `docs/security/owasp.md` | เหมือนกัน | เหมือนกัน | เหมือนกัน + `govulncheck` (เฉพาะโค้ดที่ถูกเรียก), `gosec` |
+| Test runner | vitest | pytest | xUnit v3 (Microsoft.Testing.Platform) | `go test` |
 
 ## ความต้องการ
 
 - `git`, `bash` (Git Bash บน Windows), [uv](https://docs.astral.sh/uv/) ≥ 0.8 (Copier ≥ 9.4 รันผ่าน `uvx`)
-- TypeScript: Node.js ≥ 22.12 + npm · Python: uv (ดึง Python 3.13 ให้เอง) · .NET: .NET SDK 10
+- TypeScript: Node.js ≥ 22.12 + npm · Python: uv (ดึง Python 3.13 ให้เอง) · .NET: .NET SDK 10 · Go: Go ≥ 1.26 (golangci-lint และ govulncheck ถูก pin ใน `go.mod` และรันด้วย `go tool`)
 - `tests/render-all.sh` ต้องมี Docker ที่รันอยู่ (hadolint, gitleaks และ build image ของแต่ละ stack) · โปรเจคที่สร้างด้วย `containerize=false` ไม่ต้องมี Docker ในเครื่อง (CI ใช้ Docker ของ GitHub runner สำหรับ gitleaks)
 
 ## ใช้งาน

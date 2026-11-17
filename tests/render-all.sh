@@ -3,13 +3,13 @@
 #   1. the generated project passes its own verify command, and
 #   2. the guardrails reject a seeded violation (escape hatch, layer leak, skipped test).
 # Usage: tests/render-all.sh [stack...]      (default: typescript python dotnet)
-# Needs: uv, git, bash, Docker (running); node/npm for typescript; .NET 10 SDK for dotnet.
+# Needs: uv, git, bash, Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go.
 set -uo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/project-starter-XXXXXX")
 stacks=("$@")
-[ ${#stacks[@]} -gt 0 ] || stacks=(typescript python dotnet)
+[ ${#stacks[@]} -gt 0 ] || stacks=(typescript python dotnet go)
 failures=0
 
 pass() { echo "  PASS $*"; }
@@ -36,8 +36,21 @@ seeded() { # seeded <label> <file> <text-to-append> <command...>: append, expect
   git checkout -q -- "$file"
 }
 
+seeded_new() { # seeded_new <label> <new-file> <content> <command...>: create the file, expect the command to fail, delete it
+  local file=$2
+  printf '%b' "$3" > "$file"
+  expect_fail "$1" "${@:4}"
+  rm -f "$file"
+}
+
 docker_vol() { # host path of the current directory for `docker run -v` (Git Bash on Windows needs C:/...)
   pwd -W 2>/dev/null || pwd
+}
+
+image_runs_as_non_root() { # image_runs_as_non_root <image>: the image's configured user is set and not root
+  local user
+  user=$(docker image inspect -f '{{.Config.User}}' "$1") || return 1
+  case "$user" in "" | root | root:* | 0 | 0:*) return 1 ;; esac
 }
 
 container_checks() { # container_checks <stack>: run inside the rendered project (containerize=true)
@@ -48,7 +61,7 @@ container_checks() { # container_checks <stack>: run inside the rendered project
   verify "check-dockerfile" "bash ci/check-dockerfile.sh"
   # This render serves HTTP, so the smoke run starts the hardened container and waits for /healthz.
   verify "docker build + hardened smoke run (non-root, read-only, /healthz)" \
-    "docker build -q -t $image . && bash ci/dast.sh $image --smoke && [ \"\$(docker run --rm --entrypoint id $image -u)\" != 0 ]"
+    "docker build -q -t $image . && bash ci/dast.sh $image --smoke && $(declare -f image_runs_as_non_root); image_runs_as_non_root $image"
   sed -i '0,/^FROM \([^ :]*\):[^ ]*/s//FROM \1:latest/' Dockerfile
   expect_fail "hadolint: :latest base image" docker run --rm -v "$vol:/w" -w /w $hadolint hadolint Dockerfile
   git checkout -q -- Dockerfile
@@ -266,12 +279,42 @@ for stack in "${stacks[@]}"; do
       printf '\npublic static class Leak\n{\n#pragma warning disable CA1823\n    public static string Value = null!;\n}\n' >> src/DemoApp.Domain/ExportJob.cs
       expect_fail "build: TreatWarningsAsErrors" dotnet build
       ;;
+    go)
+      go mod tidy >/dev/null 2>&1
+      verify "go verify" "go vet ./... && go tool golangci-lint run && go test ./..."
+      # Dependency audit: clean, then rejects a vulnerable function that our code actually calls.
+      verify "govulncheck" "go tool govulncheck ./..."
+      cp go.mod go.sum "$work/"
+      go get gopkg.in/yaml.v2@v2.2.7 >/dev/null 2>&1
+      printf 'package inmemory\n\nimport "gopkg.in/yaml.v2"\n\n// Decode calls a vulnerable yaml version.\nfunc Decode(b []byte) (map[string]any, error) {\n\tvar v map[string]any\n\terr := yaml.Unmarshal(b, &v)\n\treturn v, err\n}\n' > internal/adapters/inmemory/vuln.go
+      expect_fail "govulncheck: vulnerable function called" go tool govulncheck ./...
+      rm -f internal/adapters/inmemory/vuln.go && cp "$work/go.mod" "$work/go.sum" .
+      # Container and secret scanning (docs/security/owasp.md).
+      container_checks go
+      secret_checks
+      # Datastores (docs/adr/0003-datastores.md).
+      datastore_checks go
+      verify "integration: adapter contracts on real PostgreSQL + Redis" "go test -tags integration ./..."
+      seeded_new "ruleguard: SQL built by concatenation" internal/adapters/postgres/unsafe.go 'package postgres\n\nimport "context"\n\n// Unsafe builds SQL from a value.\nfunc (s *Store) Unsafe(ctx context.Context, jobID string) error {\n\t_, err := s.pool.Exec(ctx, "SELECT body FROM export_artifacts WHERE job_id = \x27"+jobID+"\x27")\n\treturn err //nolint:wrapcheck // seeded\n}\n' go tool golangci-lint run ./internal/adapters/postgres/
+      seeded_new "depguard: driver imported in application" internal/application/driver.go 'package application\n\nimport "github.com/jackc/pgx/v5/pgxpool"\n\n// Pool leaks the driver into the application layer.\ntype Pool = pgxpool.Pool\n' go tool golangci-lint run --enable-only depguard ./internal/application/
+      # HTTP API (docs/adr/0004-http-api.md).
+      http_checks go "go test -tags e2e ./..." internal/adapters/httpapi/handler.go '/headers.Set("X-Content-Type-Options", "nosniff")/d'
+      seeded_new "depguard: net/http imported in application" internal/application/web.go 'package application\n\nimport "net/http"\n\n// Handler leaks HTTP into the application layer.\ntype Handler = http.Handler\n' go tool golangci-lint run --enable-only depguard ./internal/application/
+      # Design rules (ADR 0002), one violation at a time.
+      seeded_new "forbidigo: ambient clock in domain" internal/domain/clock.go 'package domain\n\nimport "time"\n\n// Now reads the wall clock.\nfunc Now() time.Time { return time.Now() }\n' go tool golangci-lint run ./internal/domain/
+      seeded_new "depguard: os imported in domain" internal/domain/leak.go 'package domain\n\nimport "os"\n\n// Args leaks process state into the domain.\nfunc Args() []string { return os.Args }\n' go tool golangci-lint run --enable-only depguard ./internal/domain/
+      seeded_new "revive: too many parameters" internal/application/sum.go 'package application\n\n// Sum has too many parameters.\nfunc Sum(a, b, c, d, e int) int { return a + b + c + d + e }\n' go tool golangci-lint run ./internal/application/
+      seeded_new "gochecksumtype: non-exhaustive type switch" internal/domain/label.go 'package domain\n\n// Label misses states.\nfunc Label(job ExportJob) string {\n\tswitch job.(type) {\n\tcase Queued:\n\t\treturn "q"\n\t}\n\treturn ""\n}\n' go tool golangci-lint run ./internal/domain/
+      seeded_new "nolintlint: suppression without a reason" internal/domain/quiet.go 'package domain\n\nimport "time"\n\n// Now reads the wall clock.\nfunc Now() time.Time { return time.Now() } //nolint:forbidigo\n' go tool golangci-lint run ./internal/domain/
+      printf '\n// Seeded escape hatch for the ratchet.\nvar _ = 1 //nolint:gochecknoglobals // seeded\n' >> internal/domain/exportjob.go
+      ;;
   esac
   # Ratchet: commit the violation plus a skipped test and compare with base.
   case "$stack" in
     typescript) sed -i 's/  it("rejects/  it.skip("rejects/' src/domain/export-job.test.ts ;;
     python) sed -i 's/^def test_rejects/@pytest.mark.skip\ndef test_rejects/' tests/test_export_job.py ;;
     dotnet) sed -i 's/\[Fact\]/[Fact(Skip = "x")]/' tests/DemoApp.Tests/ExportJobTests.cs ;;
+    go) sed -i 's/^func TestRejectsBlankArtifactKey(t \*testing.T) {$/&\n\tt.Skip("x")/' internal/domain/exportjob_test.go ;;
   esac
   git -c user.name=t -c user.email=t@t commit -qam violation
   expect_fail "guardrail-ratchet" bash ci/guardrail-ratchet.sh base

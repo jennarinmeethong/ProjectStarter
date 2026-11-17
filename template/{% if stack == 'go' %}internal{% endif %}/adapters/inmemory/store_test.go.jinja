@@ -1,0 +1,16 @@
+package inmemory_test
+
+import (
+	"testing"
+
+	"{{ go_module }}/internal/adapters/inmemory"
+	"{{ go_module }}/internal/adapters/storetest"
+)
+
+func TestInMemoryStoreSatisfiesTheContract(t *testing.T) {
+	t.Parallel()
+	storetest.Run(t, func(*testing.T) storetest.Subject {
+		store := inmemory.New()
+		return storetest.Subject{Store: store, Read: store.Read}
+	})
+}

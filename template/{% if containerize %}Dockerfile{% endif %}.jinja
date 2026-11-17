@@ -48,7 +48,28 @@ EXPOSE 8080
 {%- endif %}
 USER 10001:10001
 CMD ["{{ project_name | lower }}"]
-{%- else %}
+{%- elif stack == 'go' %}
+
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY cmd ./cmd
+COPY internal ./internal
+# Static binary (no cgo), so the runtime image needs no libc, shell or package manager.
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/{{ go_module }}
+
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+COPY --from=build /out/app /app
+{%- if http_api %}
+# The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
+ENV HOST=0.0.0.0 PORT=8080
+EXPOSE 8080
+{%- endif %}
+# Numeric UID of distroless `nonroot`, so Kubernetes runAsNonRoot can verify it.
+USER 65532:65532
+ENTRYPOINT ["/app"]
+{%- elif stack == 'dotnet' %}
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src

@@ -1,0 +1,135 @@
+//go:build e2e
+
+// Black-box API tests with Playwright against a real HTTP server: behaviour, validation and security
+// headers. Run with `go test -tags e2e ./...` (the first run downloads the Playwright driver).
+package httpapi_test
+
+import (
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/mxschmitt/playwright-go"
+
+	"{{ go_module }}/internal/adapters/httpapi"
+	"{{ go_module }}/internal/adapters/inmemory"
+)
+
+func newAPI(t *testing.T) playwright.APIRequestContext {
+	t.Helper()
+	server := httptest.NewServer(httpapi.NewHandler(inmemory.New()))
+	t.Cleanup(server.Close)
+
+	// API tests need the Playwright driver only, not browsers.
+	options := &playwright.RunOptions{SkipInstallBrowsers: true}
+	if err := playwright.Install(options); err != nil {
+		t.Fatalf("install playwright driver: %v", err)
+	}
+	pw, err := playwright.Run(options)
+	if err != nil {
+		t.Fatalf("start playwright: %v", err)
+	}
+	t.Cleanup(func() { _ = pw.Stop() })
+	api, err := pw.Request.NewContext(playwright.APIRequestNewContextOptions{BaseURL: playwright.String(server.URL)})
+	if err != nil {
+		t.Fatalf("new request context: %v", err)
+	}
+	t.Cleanup(func() { _ = api.Dispose() })
+	return api
+}
+
+func TestAPI(t *testing.T) {
+	api := newAPI(t)
+
+	t.Run("health check answers ok", func(t *testing.T) {
+		response := get(t, api, "/healthz")
+		expectStatus(t, response, 200)
+		var body map[string]string
+		if err := response.JSON(&body); err != nil || body["status"] != "ok" {
+			t.Fatalf("body %v, err %v", body, err)
+		}
+	})
+
+	t.Run("completes an export and returns its artifact key", func(t *testing.T) {
+		response := post(t, api, "/exports/e2e-1/complete", map[string]any{"content": "id\n1\n"})
+		expectStatus(t, response, 201)
+		var body map[string]string
+		if err := response.JSON(&body); err != nil || body["id"] != "e2e-1" || body["artifactKey"] != "exports/e2e-1.csv" {
+			t.Fatalf("body %v, err %v", body, err)
+		}
+	})
+
+	t.Run("rejects an invalid job id with problem details", func(t *testing.T) {
+		response := post(t, api, "/exports/not%20valid/complete", map[string]any{"content": "x"})
+		expectStatus(t, response, 400)
+		expectProblem(t, response)
+	})
+
+	t.Run("rejects a body without content", func(t *testing.T) {
+		expectStatus(t, post(t, api, "/exports/e2e-2/complete", map[string]any{"other": "x"}), 400)
+	})
+
+	t.Run("answers unknown routes with 404 problem details", func(t *testing.T) {
+		response := get(t, api, "/does-not-exist")
+		expectStatus(t, response, 404)
+		expectProblem(t, response)
+	})
+
+	for _, path := range []string{"/healthz", "/does-not-exist"} {
+		t.Run("sends the security headers on "+path, func(t *testing.T) {
+			expectSecurityHeaders(t, get(t, api, path).Headers())
+		})
+	}
+}
+
+func expectSecurityHeaders(t *testing.T, headers map[string]string) {
+	t.Helper()
+	want := map[string]string{
+		"x-content-type-options": "nosniff",
+		"x-frame-options":        "DENY",
+		"cache-control":          "no-store",
+	}
+	for name, value := range want {
+		if headers[name] != value {
+			t.Errorf("%s = %q, want %q", name, headers[name], value)
+		}
+	}
+	if !strings.Contains(headers["content-security-policy"], "default-src 'none'") {
+		t.Errorf("content-security-policy = %q", headers["content-security-policy"])
+	}
+	if server, ok := headers["server"]; ok {
+		t.Errorf("server header leaked: %q", server)
+	}
+}
+
+func get(t *testing.T, api playwright.APIRequestContext, path string) playwright.APIResponse {
+	t.Helper()
+	response, err := api.Get(path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	return response
+}
+
+func post(t *testing.T, api playwright.APIRequestContext, path string, data map[string]any) playwright.APIResponse {
+	t.Helper()
+	response, err := api.Post(path, playwright.APIRequestContextPostOptions{Data: data})
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	return response
+}
+
+func expectStatus(t *testing.T, response playwright.APIResponse, want int) {
+	t.Helper()
+	if response.Status() != want {
+		t.Fatalf("status %d, want %d", response.Status(), want)
+	}
+}
+
+func expectProblem(t *testing.T, response playwright.APIResponse) {
+	t.Helper()
+	if !strings.Contains(response.Headers()["content-type"], "application/problem+json") {
+		t.Fatalf("content-type %q", response.Headers()["content-type"])
+	}
+}

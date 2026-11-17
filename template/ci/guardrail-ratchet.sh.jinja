@@ -55,6 +55,11 @@ if (bad.length) { console.error("tsconfig strictness loosened: " + bad.join(", "
 {%- elif stack == 'python' %}
 grep -Eq '"typeCheckingMode"[[:space:]]*:[[:space:]]*"strict"' pyrightconfig.json \
   || { echo "pyright strict mode was turned off in pyrightconfig.json" >&2; status=1; }
+{%- elif stack == 'go' %}
+grep -Eq '^[[:space:]]*default:[[:space:]]*standard' .golangci.yml   || { echo ".golangci.yml no longer enables the standard linter set" >&2; status=1; }
+for linter in depguard forbidigo gosec gochecksumtype wrapcheck nolintlint; do
+  grep -Eq "^[[:space:]]*-[[:space:]]+$linter([[:space:]]|$)" .golangci.yml     || { echo ".golangci.yml no longer enables $linter" >&2; status=1; }
+done
 {%- else %}
 for prop in '<Nullable>enable</Nullable>' '<TreatWarningsAsErrors>true</TreatWarningsAsErrors>'; do
   grep -q "$prop" Directory.Build.props \

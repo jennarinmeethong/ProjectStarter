@@ -1,7 +1,7 @@
 # Weekly dependency updates. Security fixes still arrive between runs via the CI dependency audit.
 version: 2
 updates:
-  - package-ecosystem: {% if stack == 'typescript' %}npm{% elif stack == 'python' %}uv{% else %}nuget{% endif %}
+  - package-ecosystem: {% if stack == 'typescript' %}npm{% elif stack == 'python' %}uv{% elif stack == 'go' %}gomod{% else %}nuget{% endif %}
     directory: /
     schedule:
       interval: weekly

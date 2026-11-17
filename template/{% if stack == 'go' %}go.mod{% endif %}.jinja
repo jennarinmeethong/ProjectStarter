@@ -1,0 +1,33 @@
+module {{ go_module }}
+
+go 1.26.0
+
+// Patched toolchain: the Go command downloads it automatically, and govulncheck checks its standard library.
+toolchain go1.26.11
+
+// Lint and vulnerability scanners are pinned here and run with `go tool`, so every machine and CI
+// use the same versions.
+tool (
+	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+	golang.org/x/vuln/cmd/govulncheck
+)
+
+require (
+	github.com/golangci/golangci-lint/v2 v2.15.0
+	golang.org/x/vuln v1.9.0
+	github.com/quasilyte/go-ruleguard/dsl v0.3.23 // used by ci/gorules (build tag ruleguard)
+{%- if 'postgres' in datastores %}
+	github.com/jackc/pgx/v5 v5.12.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
+{%- endif %}
+{%- if 'redis' in datastores %}
+	github.com/redis/go-redis/v9 v9.23.0
+	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0
+{%- endif %}
+{%- if datastores %}
+	github.com/testcontainers/testcontainers-go v0.44.0
+{%- endif %}
+{%- if http_api %}
+	github.com/mxschmitt/playwright-go v0.6201.1
+{%- endif %}
+)
