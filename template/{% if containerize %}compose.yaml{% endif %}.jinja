@@ -1,5 +1,8 @@
 # Local run: docker compose up --build
 # Hardened defaults: read-only filesystem, no extra Linux capabilities, no privilege escalation.
+{%- if datastores %}
+# Credentials here are for local development only; real ones come from the deployment's secret store.
+{%- endif %}
 services:
   app:
     build: .
@@ -8,3 +11,52 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     tmpfs: [/tmp]
+{%- if datastores %}
+    environment:
+{%- if 'postgres' in datastores %}
+      DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD:-local-dev-only}@postgres:5432/app
+{%- endif %}
+{%- if 'redis' in datastores %}
+      REDIS_URL: redis://redis:6379/0
+{%- endif %}
+    depends_on:
+{%- if 'postgres' in datastores %}
+      postgres:
+        condition: service_healthy
+{%- endif %}
+{%- if 'redis' in datastores %}
+      redis:
+        condition: service_healthy
+{%- endif %}
+{%- endif %}
+{%- if 'postgres' in datastores %}
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-only}
+    volumes:
+      # Applied once, in file-name order, when the volume is first created (ADR 0003).
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      retries: 30
+{%- endif %}
+{%- if 'redis' in datastores %}
+
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+{%- endif %}
+{%- if 'postgres' in datastores %}
+
+volumes:
+  postgres-data:
+{%- endif %}

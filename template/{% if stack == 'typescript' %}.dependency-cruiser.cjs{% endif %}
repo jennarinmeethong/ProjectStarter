@@ -37,6 +37,13 @@ module.exports = {
       from: { path: "^src/application/", pathNot: "\\.test\\.ts$" },
       to: { dependencyTypes: ["core"] },
     },
+    {
+      name: "datastore-drivers-only-in-adapters",
+      comment: "Database/cache drivers live in adapters only. Application defines a port, bootstrap passes connection settings to the adapter (ADR 0003).",
+      severity: "error",
+      from: { path: "^src/(domain|application|bootstrap)/" },
+      to: { path: "node_modules/(pg|pg-[^/]+|redis|@redis/[^/]+|ioredis|mysql2|mssql|tedious|oracledb|mongodb|@aws-sdk/client-dynamodb|@azure/cosmos|minio)/" },
+    },
     { name: "no-circular", severity: "error", from: {}, to: { circular: true } },
     {
       name: "no-dev-deps-in-src",

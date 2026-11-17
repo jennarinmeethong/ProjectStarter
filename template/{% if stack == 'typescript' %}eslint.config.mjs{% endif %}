@@ -11,6 +11,20 @@ const noCastThroughUnknown = {
   message: `Do not cast through \`unknown\`. Decode/validate the value at the boundary instead (${ADR_LAYERS}).`,
 };
 
+// SQL injection (OWASP A03): sonarjs/sql-queries only follows clients created in the same file, so also reject
+// any `.query()` / `.execute()` whose SQL is assembled from values. Pass values as parameters instead.
+const ADR_DATA = "docs/adr/0003-datastores.md";
+const noSqlFromStrings = [
+  {
+    selector: "CallExpression[callee.property.name=/^(query|execute)$/] > BinaryExpression[operator='+']",
+    message: `Do not build SQL by concatenation. Use placeholders ($1, $2 ...) and pass values as parameters (${ADR_DATA}).`,
+  },
+  {
+    selector: "CallExpression[callee.property.name=/^(query|execute)$/] > TemplateLiteral[expressions.length>0]",
+    message: `Do not interpolate values into SQL. Use placeholders ($1, $2 ...) and pass values as parameters (${ADR_DATA}).`,
+  },
+];
+
 // Hidden inputs make domain/application code non-deterministic and untestable (DIP: inject them as ports).
 const noHiddenInputs = [
   {
@@ -44,7 +58,7 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/ban-ts-comment": ["error", { "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true }],
       "@typescript-eslint/no-explicit-any": "error",
-      "no-restricted-syntax": ["error", noCastThroughUnknown],
+      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings],
 
       // Single responsibility: when a unit outgrows these limits, split it by reason to change (ADR 0002 #SRP).
       // Cognitive complexity (how hard a function is to read) replaces cyclomatic `complexity`.
@@ -92,6 +106,8 @@ export default tseslint.config(
       "sonarjs/no-useless-catch": "error",
       "sonarjs/no-hardcoded-passwords": "error",
       "sonarjs/no-hardcoded-ip": "error",
+      // SQL is built with parameters ($1, $2 ...), never by concatenating or interpolating values (ADR 0003).
+      "sonarjs/sql-queries": "error",
     },
   },
   {
@@ -106,13 +122,13 @@ export default tseslint.config(
         { name: "process", message: `No environment/process access in domain/application. Read config in bootstrap and pass it in (${ADR_DESIGN} #DIP).` },
         { name: "fetch", message: `No I/O in domain/application. Define a port in application and implement it in adapters (${ADR_LAYERS}).` },
       ],
-      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noHiddenInputs],
+      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings, ...noHiddenInputs],
       "no-console": ["error"],
     },
   },
   {
     // Tests read best as one flat list of cases.
-    files: ["**/*.test.ts"],
+    files: ["**/*.test.ts", "tests/**"],
     rules: { "max-lines-per-function": "off", "max-lines": "off", "sonarjs/no-duplicate-string": "off" },
   },
 );

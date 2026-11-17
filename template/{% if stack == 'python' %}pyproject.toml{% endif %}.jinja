@@ -3,7 +3,18 @@ name = "{{ project_name | lower }}"
 version = "0.1.0"
 description = "{{ project_description }}"
 requires-python = ">=3.12"
+{%- if datastores %}
+dependencies = [
+{%- if 'postgres' in datastores %}
+    "psycopg[binary]>=3.2",
+{%- endif %}
+{%- if 'redis' in datastores %}
+    "redis>=6.0",
+{%- endif %}
+]
+{%- else %}
 dependencies = []
+{%- endif %}
 
 [project.scripts]
 {{ project_name | lower }} = "{{ package_name }}.bootstrap.main:main"
@@ -15,6 +26,9 @@ dev = [
     "pyright>=1.1.400",
     "pytest>=8.3",
     "ruff>=0.12",
+{%- if datastores %}
+    "testcontainers>=4.10",
+{%- endif %}
 ]
 
 [build-system]
@@ -26,4 +40,11 @@ packages = ["src/{{ package_name }}"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
+{%- if datastores %}
+# Integration tests need Docker: deselected here, run with `uv run pytest -m integration`.
+addopts = ["--strict-markers", "--import-mode=importlib", "-m", "not integration"]
+markers = ["integration: needs Docker (Testcontainers)"]
+{%- else %}
 addopts = ["--strict-markers", "--import-mode=importlib"]
+{%- endif %}

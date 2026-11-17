@@ -1,0 +1,71 @@
+using Npgsql;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+/// <summary>
+/// IArtifactStore on PostgreSQL. Schema: migrations/0001_create_export_artifacts.sql.
+/// Queries are always parameterised ($1, $2 ...), never built from strings (ADR 0003).
+/// </summary>
+public sealed class PostgresArtifactStore : IArtifactStore, IAsyncDisposable
+{
+    private const string UpsertSql =
+        "INSERT INTO export_artifacts (artifact_key, job_id, body) VALUES ($1, $2, $3) " +
+        "ON CONFLICT (artifact_key) DO UPDATE SET body = EXCLUDED.body";
+
+    private const string ReadSql = "SELECT body FROM export_artifacts WHERE artifact_key = $1";
+
+    private readonly NpgsqlDataSource dataSource;
+
+    private PostgresArtifactStore(NpgsqlDataSource dataSource) => this.dataSource = dataSource;
+
+    /// <summary>Accepts a URL (postgresql://user:pass@host:port/db) or an Npgsql connection string.</summary>
+    public static PostgresArtifactStore Create(string connection) =>
+        new(NpgsqlDataSource.Create(ToConnectionString(connection)));
+
+    public async Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        var command = dataSource.CreateCommand(UpsertSql);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue(key);
+            command.Parameters.AddWithValue(jobId);
+            command.Parameters.AddWithValue(content);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return key;
+    }
+
+    public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        var command = dataSource.CreateCommand(ReadSql);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue(key);
+            return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        }
+    }
+
+    public ValueTask DisposeAsync() => dataSource.DisposeAsync();
+
+    private static string ToConnectionString(string connection)
+    {
+        if (!Uri.TryCreate(connection, UriKind.Absolute, out var uri) || !uri.Scheme.StartsWith("postgres", StringComparison.Ordinal))
+        {
+            return connection;
+        }
+
+        var credentials = uri.UserInfo.Split(':', 2);
+        var builder = new NpgsqlConnectionStringBuilder
+        {
+            Host = uri.Host,
+            Port = uri.IsDefaultPort || uri.Port < 0 ? 5432 : uri.Port,
+            Database = uri.AbsolutePath.TrimStart('/'),
+            Username = Uri.UnescapeDataString(credentials[0]),
+            Password = credentials.Length > 1 ? Uri.UnescapeDataString(credentials[1]) : null,
+        };
+        return builder.ConnectionString;
+    }
+}

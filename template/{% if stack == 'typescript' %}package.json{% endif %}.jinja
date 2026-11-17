@@ -9,13 +9,37 @@
     "typecheck": "tsc",
     "lint": "eslint --max-warnings=0 .",
     "arch": "depcruise src --config .dependency-cruiser.cjs",
+{%- if datastores %}
+    "test": "vitest run --exclude \"**/*.int.test.ts\"",
+    "test:integration": "vitest run --testTimeout=60000 .int.test.ts",
+{%- else %}
     "test": "vitest run",
+{%- endif %}
     "verify:fast": "npm run typecheck && npm run lint && npm run arch",
     "verify": "npm run verify:fast && npm test"
   },
+{%- if datastores %}
+  "dependencies": {
+{%- if 'postgres' in datastores %}
+    "pg": "^8.20.0"{% if 'redis' in datastores %},{% endif %}
+{%- endif %}
+{%- if 'redis' in datastores %}
+    "redis": "^6.1.0"
+{%- endif %}
+  },
+{%- endif %}
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+{%- if 'postgres' in datastores %}
+    "@testcontainers/postgresql": "^12.0.1",
+{%- endif %}
+{%- if 'redis' in datastores %}
+    "@testcontainers/redis": "^12.0.1",
+{%- endif %}
     "@types/node": "^24.0.0",
+{%- if 'postgres' in datastores %}
+    "@types/pg": "^8.20.0",
+{%- endif %}
     "dependency-cruiser": "^18.8.0",
     "eslint": "^10.15.0",
     "eslint-plugin-sonarjs": "~4.2.2",

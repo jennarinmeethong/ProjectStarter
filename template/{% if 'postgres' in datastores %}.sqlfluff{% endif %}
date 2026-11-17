@@ -1,0 +1,18 @@
+# Guardrail config (protected). SQL lint for migrations/; see docs/adr/0003-datastores.md.
+[sqlfluff]
+dialect = postgres
+templater = raw
+max_line_length = 100
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = upper
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = upper
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:references.keywords]
+# Do not use reserved words as table or column names.
+unquoted_identifiers_policy = all

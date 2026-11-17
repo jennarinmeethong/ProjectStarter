@@ -1,0 +1,10 @@
+using {{ dotnet_name }}.Adapters;
+
+namespace {{ dotnet_name }}.Tests;
+
+public sealed class InMemoryArtifactStoreTests : ArtifactStoreContract
+{
+    private readonly InMemoryArtifactStore store = new();
+
+    protected override StoreUnderTest Subject => new(store, key => Task.FromResult(store.Read(key)));
+}

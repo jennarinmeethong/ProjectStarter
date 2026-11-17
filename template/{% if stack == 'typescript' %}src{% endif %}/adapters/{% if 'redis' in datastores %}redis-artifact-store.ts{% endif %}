@@ -1,0 +1,39 @@
+import { createClient } from "redis";
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+// Non-generic factory, so the client type matches what createClient actually returns.
+function newClient(url: string) {
+  return createClient({ url });
+}
+
+type RedisClient = ReturnType<typeof newClient>;
+
+/** ArtifactStore on Redis. Suits short-lived artifacts; set a TTL or use PostgreSQL for durable storage. */
+export class RedisArtifactStore implements ArtifactStore {
+  readonly #client: RedisClient;
+
+  private constructor(client: RedisClient) {
+    this.#client = client;
+  }
+
+  static async connect(url: string): Promise<RedisArtifactStore> {
+    const client = newClient(url);
+    await client.connect();
+    return new RedisArtifactStore(client);
+  }
+
+  async save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    await this.#client.set(key, content);
+    return key;
+  }
+
+  async read(key: string): Promise<string | undefined> {
+    const value = await this.#client.get(key);
+    return value ?? undefined;
+  }
+
+  async close(): Promise<void> {
+    await this.#client.close();
+  }
+}

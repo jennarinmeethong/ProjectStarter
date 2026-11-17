@@ -1,12 +1,58 @@
+{%- if datastores -%}
+import os
+from collections.abc import Generator
+from contextlib import contextmanager
+
+{% endif -%}
 from {{ package_name }}.adapters.in_memory_artifact_store import InMemoryArtifactStore
-from {{ package_name }}.application.complete_export import complete_export_use_case
+{%- if 'postgres' in datastores %}
+from {{ package_name }}.adapters.postgres_artifact_store import PostgresArtifactStore
+{%- endif %}
+{%- if 'redis' in datastores %}
+from {{ package_name }}.adapters.redis_artifact_store import RedisArtifactStore
+{%- endif %}
+from {{ package_name }}.application.complete_export import {% if datastores %}ArtifactStore, {% endif %}complete_export_use_case
 from {{ package_name }}.domain.export_job import QueuedExport, start_export
+{%- if datastores %}
+
+
+@contextmanager
+def open_store() -> Generator[ArtifactStore, None, None]:
+    """Bootstrap is the only place that reads configuration; adapters receive plain values."""
+{%- if 'postgres' in datastores %}
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        postgres = PostgresArtifactStore.from_url(database_url)
+        try:
+            yield postgres
+        finally:
+            postgres.close()
+        return
+{%- endif %}
+{%- if 'redis' in datastores %}
+    redis_url = os.environ.get("REDIS_URL")
+    if redis_url:
+        redis = RedisArtifactStore.from_url(redis_url)
+        try:
+            yield redis
+        finally:
+            redis.close()
+        return
+{%- endif %}
+    yield InMemoryArtifactStore()
+{%- endif %}
 
 
 def main() -> None:
+{%- if datastores %}
+    with open_store() as store:
+        job = start_export(QueuedExport(id="demo"))
+        ready = complete_export_use_case(store, job, "id,name\n1,demo\n")
+{%- else %}
     store = InMemoryArtifactStore()
     job = start_export(QueuedExport(id="demo"))
     ready = complete_export_use_case(store, job, "id,name\n1,demo\n")
+{%- endif %}
     print(f"{ready.id} -> {ready.artifact_key}")
 
 

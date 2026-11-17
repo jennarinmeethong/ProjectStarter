@@ -59,6 +59,28 @@ container_checks() { # container_checks <stack>: run inside the rendered project
   unset MSYS_NO_PATHCONV
 }
 
+datastore_checks() { # datastore_checks <stack>: rendered with datastores=[postgres, redis] and containerize=true
+  local sqlfluff="uvx -q sqlfluff==4.5.0" migration=migrations/0001_create_export_artifacts.sql
+  verify "sqlfluff: migrations" "$sqlfluff lint migrations"
+  seeded "sqlfluff: lower-case keywords" "$migration" '\nselect body from export_artifacts;\n' $sqlfluff lint migrations
+  # Append-only migrations: adding a file passes the ratchet, editing a merged one fails it.
+  printf 'CREATE INDEX export_artifacts_created_at_idx ON export_artifacts (created_at);\n' > migrations/0002_index_created_at.sql
+  git add migrations && git -c user.name=t -c user.email=t@t commit -qm "add migration"
+  verify "ratchet: new migration allowed" "bash ci/guardrail-ratchet.sh base"
+  git -c user.name=t -c user.email=t@t revert -q --no-edit HEAD
+  printf '\n-- edited after merge\n' >> "$migration"
+  git -c user.name=t -c user.email=t@t commit -qam "edit migration"
+  expect_fail "ratchet: edited migration" bash ci/guardrail-ratchet.sh base
+  git -c user.name=t -c user.email=t@t revert -q --no-edit HEAD
+  # End to end: compose starts PostgreSQL + Redis, applies migrations, and the app writes through the adapter.
+  local compose="docker compose -p ps-$1"
+  $compose down -v >/dev/null 2>&1
+  verify "compose: app stores the export in PostgreSQL" \
+    "$compose up -d --wait postgres redis && $compose run --rm --build app | grep -q 'demo -> exports/demo.csv' \
+     && [ \"\$($compose exec -T postgres psql -U app -d app -tAc 'SELECT count(*) FROM export_artifacts')\" = 1 ]"
+  $compose down -v >/dev/null 2>&1
+}
+
 secret_checks() { # secret_checks: gitleaks is clean on the render and rejects a committed token
   local vol gitleaks="zricethezav/gitleaks:v8.30.1"
   vol=$(docker_vol)
@@ -79,7 +101,12 @@ for stack in "${stacks[@]}"; do
   # The both-tools render also sets a guardrail owner; the others leave it empty (no CODEOWNERS).
   for tools in '["claude"]' '["codex"]' '["claude","codex"]'; do
     d="$work/$stack-$(echo "$tools" | tr -dc 'a-z,')"
-    if [ "$tools" = '["claude","codex"]' ]; then owner_args=(-d guardrail_owner=@demo-org/platform); else owner_args=(); fi
+    # The both-tools render also wires in every datastore; it gets the full verification below.
+    if [ "$tools" = '["claude","codex"]' ]; then
+      owner_args=(-d guardrail_owner=@demo-org/platform -d 'datastores=["postgres","redis"]')
+    else
+      owner_args=()
+    fi
     # The codex-only render opts out of containers; the others keep the default (containerize=true).
     if [ "$tools" = '["codex"]' ]; then container_args=(-d containerize=false); else container_args=(); fi
     render "$stack" "$tools" "$d" "${owner_args[@]}" "${container_args[@]}" || { fail "render $tools"; continue; }
@@ -95,6 +122,11 @@ for stack in "${stacks[@]}"; do
         && pass "container files ($tools)" || fail "container files missing or unprotected ($tools)"
     fi
     [ -f "$d/.gitleaks.toml" ] && grep -q 'gitleaks' "$d/.github/workflows/ci.yml" && pass "secret scan configured ($tools)" || fail "secret scan missing ($tools)"
+    if [ ${#owner_args[@]} -gt 0 ]; then
+      [ -f "$d/migrations/0001_create_export_artifacts.sql" ] && grep -q '\.sqlfluff' "$d/AGENTS.md" && grep -q 'integration:' "$d/.github/workflows/ci.yml"         && pass "datastore files ($tools)" || fail "datastore files missing or unprotected ($tools)"
+    else
+      [ ! -e "$d/migrations" ] && [ ! -e "$d/.sqlfluff" ] && ! grep -q 'integration:' "$d/.github/workflows/ci.yml" && [ -f "$d/docs/adr/0003-datastores.md" ] && pass "no datastore files without datastores ($tools)" || fail "datastore files generated without datastores ($tools)"
+    fi
     if [ ${#owner_args[@]} -gt 0 ]; then
       grep -q '@demo-org/platform' "$d/.github/CODEOWNERS" 2>/dev/null && pass "CODEOWNERS with owner ($tools)" || fail "CODEOWNERS missing ($tools)"
     else
@@ -133,6 +165,12 @@ for stack in "${stacks[@]}"; do
       # Container and secret scanning (docs/security/owasp.md).
       container_checks typescript
       secret_checks
+      # Datastores (docs/adr/0003-datastores.md).
+      datastore_checks typescript
+      verify "integration: adapter contracts on real PostgreSQL + Redis" "npm run test:integration"
+      seeded "depcruise: driver imported in application" src/application/complete-export.ts '\nimport pg from "pg";\nexport const driver = pg;\n' npm run arch
+      seeded "depcruise: driver imported in bootstrap" src/bootstrap/main.ts '\nimport { createClient } from "redis";\nexport const driver = createClient;\n' npm run arch
+      seeded "eslint: SQL built by concatenation" src/adapters/postgres-artifact-store.ts '\nexport function unsafe(pool: pg.Pool, jobId: string): Promise<pg.QueryResult> {\n  return pool.query("SELECT body FROM export_artifacts WHERE job_id = \x27" + jobId + "\x27");\n}\n' npm run lint
       # Design rules (ADR 0002), one violation at a time.
       seeded "eslint: ambient clock in domain" src/domain/export-job.ts '\nexport const now = (): number => Date.now();\n' npm run lint
       seeded "eslint: too many parameters" src/application/complete-export.ts '\nexport function sum(a: number, b: number, c: number, d: number, e: number): number {\n  return a + b + c + d + e;\n}\n' npm run lint
@@ -157,6 +195,12 @@ for stack in "${stacks[@]}"; do
       # Container and secret scanning (docs/security/owasp.md).
       container_checks python
       secret_checks
+      # Datastores (docs/adr/0003-datastores.md).
+      datastore_checks python
+      verify "integration: adapter contracts on real PostgreSQL + Redis" "uv run pytest -q -p no:warnings -m integration"
+      seeded "import-linter: driver imported in application" src/demo_app/application/complete_export.py '\nimport psycopg\n\nDRIVER = psycopg\n' uv run lint-imports
+      seeded "import-linter: driver imported in bootstrap" src/demo_app/bootstrap/main.py '\nimport redis\n\nDRIVER = redis\n' uv run lint-imports
+      seeded "ruff: SQL built with an f-string" src/demo_app/adapters/postgres_artifact_store.py '\n\ndef unsafe(connection: psycopg.Connection[TupleRow], job_id: str) -> None:\n    connection.execute(f"SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27")\n' uv run ruff check .
       # Design rules (ADR 0002), one violation at a time.
       seeded "ruff: ambient randomness in domain" src/demo_app/domain/export_job.py '\n\nimport random\n\n\ndef roll() -> float:\n    return random.random()\n' uv run ruff check .
       seeded "ruff: ambient clock in application" src/demo_app/application/complete_export.py '\n\ndef now() -> object:\n    import datetime\n\n    return datetime.datetime.now(tz=datetime.UTC)\n' uv run ruff check .
@@ -169,7 +213,7 @@ for stack in "${stacks[@]}"; do
       expect_fail "import-linter: domain -> adapters" uv run lint-imports
       ;;
     dotnet)
-      verify "dotnet verify" "dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build"
+      verify "dotnet verify" 'dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build --filter-not-trait "Category=Integration"'
       # Dependency audit (NuGetAudit + TreatWarningsAsErrors): clean, then rejects a known-vulnerable package.
       verify "nuget audit" "dotnet restore --force-evaluate"
       sed -i 's#<PackageVersion Include="xunit.v3"#<PackageVersion Include="Newtonsoft.Json" Version="12.0.1" />\n    &#' Directory.Packages.props
@@ -179,6 +223,10 @@ for stack in "${stacks[@]}"; do
       # Container and secret scanning (docs/security/owasp.md).
       container_checks dotnet
       secret_checks
+      # Datastores (docs/adr/0003-datastores.md).
+      datastore_checks dotnet
+      verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --filter-trait "Category=Integration"'
+      seeded "CA2100: SQL built by concatenation" src/DemoApp.Adapters/PostgresArtifactStore.cs '\npublic static class Unsafe\n{\n    public static NpgsqlCommand Query(NpgsqlConnection connection, string jobId) =>\n        new() { Connection = connection, CommandText = "SELECT body FROM export_artifacts WHERE job_id = \x27" + jobId + "\x27" };\n}\n' dotnet build
       # Design rules (ADR 0002), one violation at a time.
       seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build
       seeded "BannedApi: Guid.NewGuid in Application" src/DemoApp.Application/CompleteExport.cs '\npublic static class Ids\n{\n    public static Guid Next() => Guid.NewGuid();\n}\n' dotnet build

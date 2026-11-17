@@ -1,0 +1,58 @@
+using StackExchange.Redis;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+/// <summary>IArtifactStore on Redis. Suits short-lived artifacts; set a TTL or use PostgreSQL for durable storage.</summary>
+public sealed class RedisArtifactStore : IArtifactStore, IAsyncDisposable
+{
+    private readonly ConnectionMultiplexer connection;
+
+    private RedisArtifactStore(ConnectionMultiplexer connection) => this.connection = connection;
+
+    /// <summary>Accepts a URL (redis://user:pass@host:port/db, rediss:// for TLS) or a StackExchange.Redis configuration string.</summary>
+    public static async Task<RedisArtifactStore> ConnectAsync(string connection)
+    {
+        var multiplexer = await ConnectionMultiplexer.ConnectAsync(ToOptions(connection)).ConfigureAwait(false);
+        return new RedisArtifactStore(multiplexer);
+    }
+
+    public async Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        await connection.GetDatabase().StringSetAsync(key, content).WaitAsync(cancellationToken).ConfigureAwait(false);
+        return key;
+    }
+
+    public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        var value = await connection.GetDatabase().StringGetAsync(key).WaitAsync(cancellationToken).ConfigureAwait(false);
+        return value.HasValue ? value.ToString() : null;
+    }
+
+    public ValueTask DisposeAsync() => connection.DisposeAsync();
+
+    private static ConfigurationOptions ToOptions(string connection)
+    {
+        if (!Uri.TryCreate(connection, UriKind.Absolute, out var uri) || !uri.Scheme.StartsWith("redis", StringComparison.Ordinal))
+        {
+            return ConfigurationOptions.Parse(connection);
+        }
+
+        var options = new ConfigurationOptions { Ssl = uri.Scheme == "rediss" };
+        options.EndPoints.Add(uri.Host, uri.Port > 0 ? uri.Port : 6379);
+        var credentials = uri.UserInfo.Split(':', 2);
+        if (credentials.Length == 2)
+        {
+            options.User = credentials[0].Length > 0 ? Uri.UnescapeDataString(credentials[0]) : null;
+            options.Password = Uri.UnescapeDataString(credentials[1]);
+        }
+
+        if (int.TryParse(uri.AbsolutePath.TrimStart('/'), System.Globalization.CultureInfo.InvariantCulture, out var database))
+        {
+            options.DefaultDatabase = database;
+        }
+
+        return options;
+    }
+}

@@ -34,6 +34,15 @@ if git diff "$base" HEAD -- "${test_specs[@]}" | grep -qE '^\+.*({{ stk.skip_reg
   echo "Skipped/focused tests added. Fix or delete the test with owner approval instead." >&2
   status=1
 fi
+{%- if 'postgres' in datastores %}
+
+# Migrations are append-only: a merged migration has already run somewhere (docs/adr/0003-datastores.md).
+if git diff --diff-filter=MDR --name-only "$base" HEAD -- migrations/ | grep -q .; then
+  echo "Existing migrations were edited, renamed or deleted. Add a new numbered migration instead:" >&2
+  git diff --diff-filter=MDR --name-only "$base" HEAD -- migrations/ >&2
+  status=1
+fi
+{%- endif %}
 
 # Strictness must not be loosened.
 {%- if stack == 'typescript' %}

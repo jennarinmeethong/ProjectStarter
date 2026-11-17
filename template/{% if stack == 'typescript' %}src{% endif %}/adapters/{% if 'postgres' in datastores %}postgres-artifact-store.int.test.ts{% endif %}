@@ -1,0 +1,23 @@
+// Integration test: needs Docker. Run with `npm run test:integration` (excluded from `npm test`).
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { afterAll, beforeAll } from "vitest";
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { PostgresArtifactStore } from "./postgres-artifact-store.ts";
+
+let container: StartedPostgreSqlContainer;
+let store: PostgresArtifactStore;
+
+beforeAll(async () => {
+  // The image's init hook applies migrations/ in order, exactly as compose.yaml does locally.
+  container = await new PostgreSqlContainer("postgres:17-alpine")
+    .withCopyDirectoriesToContainer([{ source: "migrations", target: "/docker-entrypoint-initdb.d" }])
+    .start();
+  store = PostgresArtifactStore.fromUrl(container.getConnectionUri());
+}, 180_000);
+
+afterAll(async () => {
+  await store.close();
+  await container.stop();
+});
+
+describeArtifactStoreContract("PostgresArtifactStore", () => ({ store, read: (key) => store.read(key) }));

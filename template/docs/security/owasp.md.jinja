@@ -12,7 +12,7 @@
 {%- if containerize %}
 | A05 Security Misconfiguration (container) | hadolint, image แบบ multi-stage, รันด้วย user ที่ไม่ใช่ root, filesystem read-only, ไม่มี capability เพิ่ม | job `container` ใน CI, `.hadolint.yaml`, `ci/check-dockerfile.sh`, `compose.yaml` |
 {%- endif %}
-| A03 Injection (บางส่วน) | I/O และ driver อยู่ใน adapters เท่านั้น, validate ที่ขอบ | [ADR 0001](../adr/0001-layered-architecture.md), [ADR 0002](../adr/0002-design-rules.md) |
+| A03 Injection (บางส่วน) | I/O และ driver อยู่ใน adapters เท่านั้น, validate ที่ขอบ{% if 'postgres' in datastores %}, SQL ใช้ parameter ({% if stack == 'typescript' %}ESLint `no-restricted-syntax`{% elif stack == 'python' %}ruff `S608`{% else %}`CA2100`{% endif %}){% endif %} | [ADR 0001](../adr/0001-layered-architecture.md), [ADR 0002](../adr/0002-design-rules.md), [ADR 0003](../adr/0003-datastores.md) |
 {%- if stack == 'python' %}
 | หลายหมวด | bandit rules ใน ruff (`S`) | `ruff.toml` |
 {%- elif stack == 'typescript' %}

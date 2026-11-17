@@ -1,0 +1,45 @@
+using Xunit;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Tests;
+
+public sealed record StoreUnderTest(IArtifactStore Store, Func<string, Task<string?>> Read);
+
+/// <summary>
+/// Contract every IArtifactStore adapter must satisfy (Liskov: adapters are interchangeable behind the port).
+/// Derive a sealed test class and provide <see cref="Subject"/>. The in-memory adapter runs it in the unit
+/// suite; datastore adapters run it against real containers (Category=Integration).
+/// </summary>
+public abstract class ArtifactStoreContract
+{
+    protected abstract StoreUnderTest Subject { get; }
+
+    [Fact]
+    public async Task ReturnsAKeyThatReadsBackTheContent()
+    {
+        var key = await Subject.Store.SaveAsync("contract-1", "id\n1\n", TestContext.Current.CancellationToken);
+
+        Assert.Equal("id\n1\n", await Subject.Read(key));
+    }
+
+    [Fact]
+    public async Task IsIdempotentPerJob()
+    {
+        var first = await Subject.Store.SaveAsync("contract-2", "old", TestContext.Current.CancellationToken);
+        var second = await Subject.Store.SaveAsync("contract-2", "new", TestContext.Current.CancellationToken);
+
+        Assert.Equal(first, second);
+        Assert.Equal("new", await Subject.Read(second));
+    }
+
+    [Fact]
+    public async Task KeepsDifferentJobsApart()
+    {
+        var a = await Subject.Store.SaveAsync("contract-3a", "a", TestContext.Current.CancellationToken);
+        var b = await Subject.Store.SaveAsync("contract-3b", "b", TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(a, b);
+        Assert.Equal("a", await Subject.Read(a));
+        Assert.Equal("b", await Subject.Read(b));
+    }
+}

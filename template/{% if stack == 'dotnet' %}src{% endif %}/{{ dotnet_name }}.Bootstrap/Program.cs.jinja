@@ -1,8 +1,49 @@
 using {{ dotnet_name }}.Adapters;
 using {{ dotnet_name }}.Application;
 using {{ dotnet_name }}.Domain;
+{%- if datastores %}
+
+// Bootstrap is the only place that reads configuration; adapters receive plain values (ADR 0003).
+IArtifactStore store = new InMemoryArtifactStore();
+IAsyncDisposable? owned = null;
+{%- if 'postgres' in datastores %}
+var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
+{%- endif %}
+{%- if 'redis' in datastores %}
+var redisUrl = Environment.GetEnvironmentVariable("REDIS_URL");
+{%- endif %}
+{%- if 'postgres' in datastores %}
+if (!string.IsNullOrEmpty(databaseUrl))
+{
+    var postgres = PostgresArtifactStore.Create(databaseUrl);
+    (store, owned) = (postgres, postgres);
+}
+{%- endif %}
+{%- if 'redis' in datastores %}
+{% if 'postgres' in datastores %}else {% endif %}if (!string.IsNullOrEmpty(redisUrl))
+{
+    var redis = await RedisArtifactStore.ConnectAsync(redisUrl);
+    (store, owned) = (redis, redis);
+}
+{%- endif %}
+
+try
+{
+    var job = ExportTransitions.Start(new ExportJob.Queued("demo"));
+    var ready = await new CompleteExport(store).ExecuteAsync(job, "id,name\n1,demo\n", CancellationToken.None);
+    Console.WriteLine($"{ready.Id} -> {ready.ArtifactKey}");
+}
+finally
+{
+    if (owned is not null)
+    {
+        await owned.DisposeAsync();
+    }
+}
+{%- else %}
 
 var store = new InMemoryArtifactStore();
 var job = ExportTransitions.Start(new ExportJob.Queued("demo"));
 var ready = await new CompleteExport(store).ExecuteAsync(job, "id,name\n1,demo\n", CancellationToken.None);
 Console.WriteLine($"{ready.Id} -> {ready.ArtifactKey}");
+{%- endif %}

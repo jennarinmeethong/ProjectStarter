@@ -1,0 +1,28 @@
+"""Integration test: needs Docker.
+
+Run with `uv run pytest -m integration` (deselected by default).
+"""
+
+from collections.abc import Iterator
+
+import pytest
+from testcontainers.community.redis import RedisContainer
+from tests.artifact_store_contract import ArtifactStoreContract, StoreUnderTest
+
+from {{ package_name }}.adapters.redis_artifact_store import RedisArtifactStore
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(scope="module")
+def redis_url() -> Iterator[str]:
+    with RedisContainer("redis:8-alpine") as redis:
+        yield f"redis://{redis.get_container_host_ip()}:{redis.get_exposed_port(6379)}/0"
+
+
+class TestRedisArtifactStore(ArtifactStoreContract):
+    @pytest.fixture
+    def subject(self, redis_url: str) -> Iterator[StoreUnderTest]:
+        store = RedisArtifactStore.from_url(redis_url)
+        yield StoreUnderTest(store=store, read=store.read)
+        store.close()

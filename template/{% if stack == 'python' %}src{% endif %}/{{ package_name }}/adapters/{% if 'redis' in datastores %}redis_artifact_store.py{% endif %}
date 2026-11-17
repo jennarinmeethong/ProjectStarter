@@ -1,0 +1,42 @@
+"""ArtifactStore on Redis.
+
+Suits short-lived artifacts; set a TTL or use PostgreSQL for durable storage.
+"""
+
+from typing import Self
+from urllib.parse import urlparse
+
+from redis import Redis
+
+
+class RedisArtifactStore:
+    def __init__(self, client: Redis) -> None:
+        self._client = client
+
+    @classmethod
+    def from_url(cls, url: str) -> Self:
+        # Parsed explicitly: Redis.from_url accepts untyped **kwargs, which strict pyright rejects.
+        parts = urlparse(url)
+        return cls(
+            Redis(
+                host=parts.hostname or "localhost",
+                port=parts.port or 6379,
+                db=int(parts.path.lstrip("/") or "0"),
+                username=parts.username,
+                password=parts.password,
+                ssl=parts.scheme == "rediss",
+                decode_responses=True,
+            )
+        )
+
+    def save(self, job_id: str, content: str) -> str:
+        key = f"exports/{job_id}.csv"
+        self._client.set(key, content)
+        return key
+
+    def read(self, key: str) -> str | None:
+        value = self._client.get(key)
+        return value if isinstance(value, str) else None
+
+    def close(self) -> None:
+        self._client.close()

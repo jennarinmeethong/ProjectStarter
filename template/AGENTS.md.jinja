@@ -26,6 +26,10 @@
 - Layers (dependencies point inward only): `{{ stk.layers.bootstrap }}` → `{{ stk.layers.adapters }}` → `{{ stk.layers.application }}` → `{{ stk.layers.domain }}`. See `docs/adr/0001-layered-architecture.md`.
 - Design rules (SOLID, ports, no hidden clock/random/env/I/O in inner layers): `docs/adr/0002-design-rules.md`
 - Security baseline and the checklist tier 2–3 PRs must answer: `docs/security/owasp.md`
+{%- if datastores %}
+- Datastores: drivers only in adapters, append-only `migrations/`, parameterised SQL (`docs/adr/0003-datastores.md`).
+  Integration tests need Docker: `{{ cmd.test_integration }}`
+{%- endif %}
 - Why rules exist: `docs/adr/` · Where a new rule belongs: `docs/engineering/where-rules-live.md`
 - Specs for risk tier 2–3 work: copy `SPEC.template.md` to `docs/specs/<feature-id>.md`
 

@@ -1,0 +1,53 @@
+# 0003: Datastores — adapters, migrations และ contract tests
+
+- **สถานะ:** accepted
+- **วันที่:** <วันที่สร้างโปรเจค>
+- **เจ้าของ:** {{ guardrail_owner or '<เจ้าของ>' }}
+
+## บริบท
+Driver ของ database/cache ที่หลุดเข้า domain หรือ application จะทำให้ logic test ไม่ได้โดยไม่มี I/O และ agent จะเลียนแบบต่อ
+Migration ที่ถูกแก้หลัง merge ทำให้ schema ของแต่ละ environment ไม่ตรงกัน และ SQL ที่ต่อ string คือช่องทาง injection (OWASP A03)
+
+## การตัดสินใจ
+1. **Driver อยู่ใน adapters เท่านั้น** application นิยาม port (`ArtifactStore`) adapter implement และ bootstrap ส่ง connection setting ให้ adapter
+   bootstrap เองก็ไม่ import driver
+2. **ทุก adapter ผ่าน contract test ชุดเดียวกัน** (Liskov) in-memory รันใน unit suite ส่วน adapter จริงรันกับ container จริงผ่าน Testcontainers
+3. **Migration เป็น append-only** ไฟล์ที่ merge แล้วห้ามแก้ ย้าย หรือลบ ให้เพิ่มไฟล์ใหม่ที่เลขถัดไป (`NNNN_<คำอธิบาย>.sql`)
+4. **SQL ใช้ parameter เสมอ** ห้ามต่อ string หรือ interpolate ค่าเข้า query
+5. **Config อ่านใน bootstrap** จาก `DATABASE_URL` / `REDIS_URL` ไม่มีค่า default ที่เป็น credential จริงในโค้ด
+
+## การบังคับใช้
+| กฎ | เครื่องมือ |
+|---|---|
+{%- if stack == 'typescript' %}
+| driver อยู่ใน adapters | dependency-cruiser `datastore-drivers-only-in-adapters` (`npm run arch`) |
+| SQL ใช้ parameter | ESLint `no-restricted-syntax` (ห้ามต่อ string หรือ interpolate ค่าเข้า `.query()`/`.execute()`) และ `sonarjs/sql-queries` |
+| contract test | `tests/contracts/artifact-store.ts`; integration: `npm run test:integration` |
+{%- elif stack == 'python' %}
+| driver อยู่ใน adapters | import-linter contract `drivers` (forbidden: domain, application, bootstrap → driver) |
+| SQL ใช้ parameter | Ruff `S608` (bandit: SQL ที่สร้างจาก string) |
+| contract test | `tests/artifact_store_contract.py`; integration: `uv run pytest -m integration` |
+{%- else %}
+| driver อยู่ใน adapters | project references: มีแค่ `Adapters` ที่อ้าง `Npgsql`/`StackExchange.Redis` (compiler บังคับ) |
+| SQL ใช้ parameter | `CA2100` เป็น error |
+| contract test | `tests/{{ dotnet_name }}.Tests/ArtifactStoreContract.cs`; integration: `dotnet test --filter-trait "Category=Integration"` |
+{%- endif %}
+| migration append-only | `ci/guardrail-ratchet.sh` (fail เมื่อไฟล์ใน `migrations/` ถูกแก้/ย้าย/ลบ) และ `migrations/` เป็น tier 3 ([risk-tiers](../risk-tiers.md)) |
+| SQL style และคำสงวน | sqlfluff (`.sqlfluff`, dialect postgres) — `uvx sqlfluff==4.5.0 lint migrations` |
+| integration test ใน CI | job `integration` (ต้องมี Docker; ไม่อยู่ใน verify เพื่อให้ inner loop เร็ว) |
+
+## การ apply migration
+- **Local และ test:** image `postgres` รันไฟล์ใน `/docker-entrypoint-initdb.d` ตามลำดับชื่อไฟล์ครั้งแรกที่สร้าง volume (`compose.yaml`, Testcontainers)
+- **Production:** template นี้ยังไม่เลือก migration runner ให้ ก่อน deploy ครั้งแรกต้องเลือกเครื่องมือที่บันทึกว่า migration ไหนรันแล้ว
+  (เช่น dbmate, Flyway, Alembic หรือ EF Core migrations) แล้วบันทึกเป็น ADR ใหม่ ไฟล์ SQL ใน `migrations/` ใช้ต่อได้ทันที
+
+## หมายเหตุ license
+{%- if stack == 'python' %}
+- `psycopg` ใช้ LGPL-3.0 ใช้เป็น dependency แบบไม่แก้ไขได้ตามปกติ
+{%- endif %}
+- Redis server ตั้งแต่ 7.4 ไม่ใช่ BSD แล้ว (8.x มีตัวเลือก AGPLv3) การรัน image แบบไม่แก้ไขเป็น service ใช้ได้ ถ้านโยบายองค์กรไม่รับ ให้ใช้ [Valkey](https://valkey.io/) (BSD) ซึ่งใช้ client เดิมได้
+- Client library ที่ใช้ทั้งหมดเป็น MIT/Apache-2.0{% if stack == 'python' %} ยกเว้น psycopg{% endif %}
+
+## ผลที่ตามมา
+เพิ่ม adapter และ test ต่อ datastore แลกกับ domain ที่ไม่ผูกกับ database และ adapter ที่สลับกันได้จริง
+Redis ในตัวอย่างนี้ implement port เดียวกับ PostgreSQL เพื่อแสดงการสลับ adapter ในงานจริงให้ใช้ Redis กับ cache, lock หรือ idempotency key ผ่าน port ของตัวเอง
