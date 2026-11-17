@@ -3,6 +3,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "0 3 * * 1"   # weekly: new advisories appear without code changes
 
 jobs:
   verify:
@@ -28,6 +30,8 @@ jobs:
 {%- endif %}
       - name: Verify (types, lint, architecture, tests)
         run: {{ cmd.verify }}
+      - name: Dependency audit (known vulnerabilities)
+        run: {{ cmd.audit }}
       - name: Guardrail ratchet
         if: github.event_name == 'pull_request'
         run: bash ci/guardrail-ratchet.sh origin/${{ '{{' }} github.base_ref {{ '}}' }}

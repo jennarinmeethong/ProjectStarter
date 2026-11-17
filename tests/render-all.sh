@@ -74,6 +74,12 @@ for stack in "${stacks[@]}"; do
     typescript)
       npm install --no-audit --no-fund >/dev/null 2>&1
       verify "npm run verify" "npm run verify"
+      # Dependency audit: clean on the render, rejects a known-vulnerable package.
+      verify "npm audit" "npm audit --audit-level=high"
+      cp package.json package-lock.json "$work/"
+      npm install --no-audit --no-fund lodash@4.17.20 >/dev/null 2>&1
+      expect_fail "npm audit: vulnerable dependency" npm audit --audit-level=high
+      cp "$work/package.json" "$work/package-lock.json" . && npm install --no-audit --no-fund >/dev/null 2>&1
       # Design rules (ADR 0002), one violation at a time.
       seeded "eslint: ambient clock in domain" src/domain/export-job.ts '\nexport const now = (): number => Date.now();\n' npm run lint
       seeded "eslint: too many parameters" src/application/complete-export.ts '\nexport function sum(a: number, b: number, c: number, d: number, e: number): number {\n  return a + b + c + d + e;\n}\n' npm run lint
@@ -89,6 +95,12 @@ for stack in "${stacks[@]}"; do
     python)
       uv sync >/dev/null 2>&1
       verify "python verify" "uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest -q"
+      # Dependency audit: clean on the render, rejects a known-vulnerable package.
+      verify "uv audit" "uv audit --locked --preview-features audit-command"
+      cp pyproject.toml uv.lock "$work/"
+      uv add --no-sync requests==2.19.0 >/dev/null 2>&1
+      expect_fail "uv audit: vulnerable dependency" uv audit --locked --preview-features audit-command
+      cp "$work/pyproject.toml" "$work/uv.lock" .
       # Design rules (ADR 0002), one violation at a time.
       seeded "ruff: ambient randomness in domain" src/demo_app/domain/export_job.py '\n\nimport random\n\n\ndef roll() -> float:\n    return random.random()\n' uv run ruff check .
       seeded "ruff: ambient clock in application" src/demo_app/application/complete_export.py '\n\ndef now() -> object:\n    import datetime\n\n    return datetime.datetime.now(tz=datetime.UTC)\n' uv run ruff check .
@@ -102,6 +114,12 @@ for stack in "${stacks[@]}"; do
       ;;
     dotnet)
       verify "dotnet verify" "dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build"
+      # Dependency audit (NuGetAudit + TreatWarningsAsErrors): clean, then rejects a known-vulnerable package.
+      verify "nuget audit" "dotnet restore --force-evaluate"
+      sed -i 's#<PackageVersion Include="xunit.v3"#<PackageVersion Include="Newtonsoft.Json" Version="12.0.1" />\n    &#' Directory.Packages.props
+      sed -i 's#</Project>#  <ItemGroup><PackageReference Include="Newtonsoft.Json" /></ItemGroup>\n</Project>#' src/DemoApp.Adapters/DemoApp.Adapters.csproj
+      expect_fail "nuget audit: vulnerable dependency" dotnet restore --force-evaluate
+      git checkout -q -- Directory.Packages.props src/DemoApp.Adapters/DemoApp.Adapters.csproj && dotnet restore --force-evaluate >/dev/null 2>&1
       # Design rules (ADR 0002), one violation at a time.
       seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build
       seeded "BannedApi: Guid.NewGuid in Application" src/DemoApp.Application/CompleteExport.cs '\npublic static class Ids\n{\n    public static Guid Next() => Guid.NewGuid();\n}\n' dotnet build
