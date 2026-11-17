@@ -1,0 +1,154 @@
+# ProjectStarter: Copier template for agent-ready projects.
+# Usage: uvx copier copy <path-or-git-url-of-ProjectStarter> <destination>
+_min_copier_version: "9.4.0"
+_subdirectory: template
+_answers_file: .copier-answers.yml
+_envops:
+  keep_trailing_newline: true
+
+project_name:
+  type: str
+  help: Project name (letters, digits, '-' or '_')
+  validator: >-
+    {% if not (project_name | regex_search('^[A-Za-z][A-Za-z0-9_-]*$')) %}
+    Use letters, digits, '-' or '_', starting with a letter.
+    {% endif %}
+
+project_description:
+  type: str
+  help: One sentence - who uses this and for what
+  default: "<who> uses this to <do what>"
+
+stack:
+  type: str
+  help: Language / tech stack
+  choices:
+    TypeScript (Node): typescript
+    Python: python
+    C# (.NET): dotnet
+  default: typescript
+
+agent_tools:
+  type: str
+  help: AI coding agents this repo must support
+  multiselect: true
+  choices:
+    Claude Code: claude
+    Codex: codex
+  default: [claude, codex]
+
+guardrail_owner:
+  type: str
+  help: >-
+    Optional. GitHub owner of guardrail files (@user or @org/team).
+    Leave empty to skip .github/CODEOWNERS.
+  default: ""
+  validator: >-
+    {% if guardrail_owner and not (guardrail_owner | regex_search('^@[A-Za-z0-9][A-Za-z0-9-]*(/[A-Za-z0-9._-]+)?$')) %}
+    Use @user or @org/team, or leave empty.
+    {% endif %}
+
+risk_paths:
+  type: yaml
+  help: Tier-3 (high risk) paths that always need owner review (YAML list)
+  default: "[auth/, payments/, migrations/, infra/]"
+
+# ---------- computed values (never asked) ----------
+package_name:
+  type: str
+  when: false
+  default: "{{ project_name | lower | replace('-', '_') }}"
+
+dotnet_name:
+  type: str
+  when: false
+  default: "{% for part in (project_name | replace('_', '-')).split('-') %}{{ part[:1] | upper }}{{ part[1:] }}{% endfor %}"
+
+src_root:
+  type: str
+  when: false
+  default: >-
+    {%- if stack == 'python' -%}src/{{ project_name | lower | replace('-', '_') }}
+    {%- else -%}src{%- endif -%}
+
+# Commands every generated file refers to (AGENTS.md, CI, hooks). One source of truth per stack.
+cmd:
+  type: yaml
+  when: false
+  default: |
+    {%- if stack == 'typescript' %}
+    install: npm install
+    typecheck: npm run typecheck
+    lint: npm run lint
+    lint_file: npx eslint --max-warnings=0
+    arch: npm run arch
+    test: npm test
+    test_single: npx vitest run path/to/file.test.ts
+    fast: npm run verify:fast
+    verify: npm run verify
+    {%- elif stack == 'python' %}
+    install: uv sync
+    typecheck: uv run pyright
+    lint: uv run ruff check .
+    lint_file: uv run ruff check
+    arch: uv run lint-imports
+    test: uv run pytest
+    test_single: "uv run pytest tests/test_file.py::test_name"
+    fast: uv run pyright && uv run ruff check . && uv run lint-imports
+    verify: uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest
+    {%- else %}
+    install: dotnet restore
+    typecheck: dotnet build --no-restore
+    lint: dotnet format --verify-no-changes
+    lint_file: dotnet format whitespace --folder --verify-no-changes --include
+    arch: dotnet test --filter-trait "Category=Architecture"
+    test: dotnet test
+    test_single: 'dotnet test --filter-method "*.ClassName.MethodName"'
+    fast: dotnet build
+    verify: dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build
+    {%- endif %}
+
+# Stack facts shared by AGENTS.md, the ratchet script, CODEOWNERS and the Claude Code hooks.
+stk:
+  type: yaml
+  when: false
+  default: |
+    {%- if stack == 'typescript' %}
+    language: TypeScript
+    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs]
+    escapes_display: "`eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `as any`, `as unknown as`, `.skip`/`.only`"
+    ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as']
+    src_globs: ['*.ts', '*.tsx']
+    test_globs: ['*.test.ts', '*.test.tsx']
+    skip_regex: '\b(it|test|describe)\.(skip|only)\('
+    lint_exts: '*.ts|*.tsx|*.mts|*.cts'
+    layers: {domain: src/domain, application: src/application, adapters: src/adapters, bootstrap: src/bootstrap}
+    {%- elif stack == 'python' %}
+    language: Python
+    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter]
+    escapes_display: "`# type: ignore`, `# pyright: ignore`, `# noqa`, `cast(Any, ...)`, `pytest.mark.skip`/`xfail`"
+    ratchet_patterns: ['type:[[:space:]]*ignore', 'pyright:[[:space:]]*ignore', 'noqa', 'cast\(Any']
+    src_globs: ['*.py']
+    test_globs: ['test_*.py', '*_test.py']
+    skip_regex: 'pytest\.mark\.(skip|xfail)|pytest\.skip\('
+    lint_exts: '*.py|*.pyi'
+    layers: {domain: "{{ src_root }}/domain", application: "{{ src_root }}/application", adapters: "{{ src_root }}/adapters", bootstrap: "{{ src_root }}/bootstrap"}
+    {%- else %}
+    language: C#
+    guardrail_files: [Directory.Build.props, .editorconfig]
+    escapes_display: "`#pragma warning disable`, `[SuppressMessage]`, `null!`/`default!`, `Skip =` on tests"
+    ratchet_patterns: ['#pragma warning disable', 'SuppressMessage', 'null!', 'default!']
+    src_globs: ['*.cs']
+    test_globs: ['*Tests.cs']
+    skip_regex: 'Skip[[:space:]]*='
+    lint_exts: '*.cs'
+    layers: {domain: "src/{{ dotnet_name }}.Domain", application: "src/{{ dotnet_name }}.Application", adapters: "src/{{ dotnet_name }}.Adapters", bootstrap: "src/{{ dotnet_name }}.Bootstrap"}
+    {%- endif %}
+
+_message_after_copy: |
+  Created {{ project_name }} ({{ stack }}).
+  Next:
+    1. cd {{ _copier_conf.dst_path }}
+    2. {{ cmd.install }}
+    3. {{ cmd.verify }}
+    4. Fill docs/feature-map.md and follow docs/roadmap.md (phase 0 -> 2).

@@ -1,0 +1,22 @@
+using {{ dotnet_name }}.Domain;
+
+namespace {{ dotnet_name }}.Application;
+
+/// <summary>Port: defined here, implemented in Adapters, wired in Bootstrap.</summary>
+public interface IArtifactStore
+{
+    Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken);
+}
+
+public sealed class CompleteExport(IArtifactStore store)
+{
+    public async Task<ExportJob.Ready> ExecuteAsync(
+        ExportJob.Running job,
+        string content,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        var key = await store.SaveAsync(job.Id, content, cancellationToken).ConfigureAwait(false);
+        return ExportTransitions.Complete(job, key);
+    }
+}

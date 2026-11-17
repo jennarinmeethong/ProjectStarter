@@ -1,0 +1,32 @@
+# 0001: Layered architecture — dependencies point inward
+
+- **สถานะ:** accepted
+- **วันที่:** <วันที่สร้างโปรเจค>
+- **เจ้าของ:** {{ guardrail_owner or '<เจ้าของ>' }}
+
+## บริบท
+Agent เลียนแบบสิ่งที่เห็นใน codebase ถ้า domain logic เรียก database หรือ HTTP ได้ตรง ๆ ตัวอย่างที่ผิดจะถูกคัดลอกไปเรื่อย ๆ ขอบเขต layer ต้องถูกบังคับด้วยเครื่องมือ ไม่ใช่ข้อความเตือน
+
+## การตัดสินใจ
+| Layer | Path | หน้าที่ | import ได้จาก |
+|---|---|---|---|
+| domain | `{{ stk.layers.domain }}` | state, invariant, transition (ไม่มี I/O) | — |
+| application | `{{ stk.layers.application }}` | use case, ประสานงานผ่าน ports ที่ตัวเองนิยาม | domain |
+| adapters | `{{ stk.layers.adapters }}` | HTTP, queue, storage — implement ports | application, domain |
+| bootstrap | `{{ stk.layers.bootstrap }}` | ประกอบ dependency, entry point จริง | ทุก layer |
+
+## การบังคับใช้
+{%- if stack == 'typescript' %}
+- `.dependency-cruiser.cjs` (`npm run arch`) — กฎ `domain-is-pure`, `application-not-to-adapters`, `no-circular`
+{%- elif stack == 'python' %}
+- `.importlinter` (`uv run lint-imports`) — contract แบบ `layers`
+{%- else %}
+- Project references: `Domain` ไม่อ้างถึง project อื่น, `Application` อ้างถึง `Domain` เท่านั้น — compiler บังคับ
+- `tests/{{ dotnet_name }}.Tests/ArchitectureTests.cs` (NetArchTest, `Category=Architecture`) ตรวจซ้ำระดับ namespace
+{%- endif %}
+
+## ทางที่ถูกต้อง
+ถ้า domain/application ต้องการ I/O ให้นิยาม port (interface) ใน application แล้ว implement ใน adapters จากนั้นประกอบใน bootstrap
+
+## ผลที่ตามมา
+เพิ่มไฟล์ port/adapter เล็กน้อย แลกกับ domain ที่ test ได้โดยไม่ต้องมี I/O ถ้า product ยังแกว่งมาก อย่าสร้าง abstraction ล่วงหน้าเกินกว่า port ที่ใช้จริง

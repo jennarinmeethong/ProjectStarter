@@ -1,0 +1,14 @@
+{
+  "name": "project-starter-marketplace",
+  "description": "ProjectStarter: agent-ready project templates",
+  "owner": {
+    "name": "jennarinmeethong"
+  },
+  "plugins": [
+    {
+      "name": "project-starter",
+      "source": "./",
+      "description": "Scaffold agent-ready projects (TypeScript, Python, C#/.NET) with enforced guardrails for Claude Code and Codex."
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# PreToolUse: block edits to guardrails and acceptance tests (exit 2 = block, stderr goes to Claude).
+# CI{% if guardrail_owner %} + CODEOWNERS{% endif %} remain the final arbiter; this hook only gives fast feedback.
+. "$(dirname "$0")/_lib.sh"
+
+rel=$(relative_path "$(read_file_path)")
+[ -n "$rel" ] || exit 0
+
+case "$rel" in
+  {{ stk.guardrail_files | join('|') }}|tests/acceptance/*|ci/*|.github/*|.claude/*|AGENTS.md{% if 'claude' in agent_tools %}|CLAUDE.md{% endif %})
+    echo "Protected path: $rel. Guardrails and acceptance tests are protected{% if guardrail_owner %} and owned by {{ guardrail_owner }} (.github/CODEOWNERS){% endif %}." >&2
+    echo "If a check or acceptance test looks wrong, STOP and explain the conflict to the human instead of editing it." >&2
+    exit 2 ;;
+esac
+exit 0

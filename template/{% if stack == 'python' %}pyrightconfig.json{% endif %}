@@ -1,0 +1,10 @@
+{
+  "include": ["src", "tests"],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.12",
+  "venvPath": ".",
+  "venv": ".venv",
+  "enableTypeIgnoreComments": false,
+  "reportUnnecessaryTypeIgnoreComment": "error",
+  "reportMissingTypeStubs": "error"
+}

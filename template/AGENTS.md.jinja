@@ -1,0 +1,36 @@
+# AGENTS.md
+
+{{ project_name }} ({{ stk.language }}): {{ project_description }}
+
+## Verify your work (required before you say "done")
+- Setup: `{{ cmd.install }}`
+- Fast checks (types, lint, architecture): `{{ cmd.fast }}`
+- Everything CI runs: `{{ cmd.verify }}`
+- Single test: `{{ cmd.test_single }}`
+- Report evidence: paste the commands you ran and their final output in the PR description.
+
+## Rules are enforced by tools — read the error, fix the cause
+- Type, lint and architecture errors say what to do instead and link an ADR in `docs/adr/`. Follow it.
+- Do not add {{ stk.escapes_display }}.
+  `ci/guardrail-ratchet.sh` counts these and fails CI if they increase.
+- If a rule looks wrong for this case, STOP and explain why in the PR. Do not work around it,
+  and do not justify a workaround in a comment.
+
+## When tests or specs conflict
+- Never edit `tests/acceptance/` or guardrail configs ({% for f in stk.guardrail_files %}`{{ f }}`{% if not loop.last %}, {% endif %}{% endfor %}).
+  If one contradicts the spec or the task, stop and report the exact conflict to a human.
+- Fixing a reproducible bug: write a failing test first, then fix.
+
+## Where things are
+- Feature map / domain vocabulary: `docs/feature-map.md`
+- Layers (dependencies point inward only): `{{ stk.layers.bootstrap }}` → `{{ stk.layers.adapters }}` → `{{ stk.layers.application }}` → `{{ stk.layers.domain }}`. See `docs/adr/0001-layered-architecture.md`.
+- Why rules exist: `docs/adr/` · Where a new rule belongs: `docs/engineering/where-rules-live.md`
+- Specs for risk tier 2–3 work: copy `SPEC.template.md` to `docs/specs/<feature-id>.md`
+
+## Preferences (judgment calls, not enforced)
+- Small PRs: one task, one branch, one PR.
+- Keep comments for reasons the code cannot show (ordering, provider limits, compatibility).
+
+## Risk
+- Changes under {% for p in risk_paths %}`{{ p }}`, {% endfor %}`.github/`{% if 'claude' in agent_tools %}, `.claude/`{% endif %} or guardrail configs need owner review
+  (`docs/risk-tiers.md`); never mark them ready for automerge.

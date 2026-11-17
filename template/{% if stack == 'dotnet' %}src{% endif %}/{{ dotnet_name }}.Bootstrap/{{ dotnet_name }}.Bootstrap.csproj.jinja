@@ -1,0 +1,9 @@
+<!-- Bootstrap: wires everything together; the only project that references every layer (ADR 0001). -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\{{ dotnet_name }}.Adapters\{{ dotnet_name }}.Adapters.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,33 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+{%- if stack == 'typescript' %}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+{%- elif stack == 'python' %}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+{%- else %}
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet restore
+{%- endif %}
+      - name: Verify (types, lint, architecture, tests)
+        run: {{ cmd.verify }}
+      - name: Guardrail ratchet
+        if: github.event_name == 'pull_request'
+        run: bash ci/guardrail-ratchet.sh origin/${{ '{{' }} github.base_ref {{ '}}' }}

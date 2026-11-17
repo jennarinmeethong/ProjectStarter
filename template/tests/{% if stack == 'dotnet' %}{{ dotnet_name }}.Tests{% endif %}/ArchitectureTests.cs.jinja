@@ -1,0 +1,48 @@
+using Xunit;
+using NetArchTest.Rules;
+using {{ dotnet_name }}.Adapters;
+using {{ dotnet_name }}.Application;
+using {{ dotnet_name }}.Domain;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Layer rules from docs/adr/0001-layered-architecture.md. Project references enforce most of this at
+/// compile time; these tests catch namespace leaks inside a project and document the intent.</summary>
+[Trait("Category", "Architecture")]
+public sealed class ArchitectureTests
+{
+    private const string Ns = "{{ dotnet_name }}";
+
+    [Fact]
+    public void DomainIsPure()
+    {
+        var result = Types.InAssembly(typeof(ExportJob).Assembly)
+            .ShouldNot().HaveDependencyOnAny($"{Ns}.Application", $"{Ns}.Adapters", $"{Ns}.Bootstrap")
+            .GetResult();
+
+        Assert.True(result.IsSuccessful, Explain("Domain must not depend on outer layers. Move I/O behind a port in Application (ADR 0001).", result));
+    }
+
+    [Fact]
+    public void ApplicationDoesNotDependOnAdapters()
+    {
+        var result = Types.InAssembly(typeof(IArtifactStore).Assembly)
+            .ShouldNot().HaveDependencyOnAny($"{Ns}.Adapters", $"{Ns}.Bootstrap")
+            .GetResult();
+
+        Assert.True(result.IsSuccessful, Explain("Application talks to the outside through ports it defines; Adapters implement them (ADR 0001).", result));
+    }
+
+    [Fact]
+    public void AdaptersDoNotDependOnBootstrap()
+    {
+        var result = Types.InAssembly(typeof(InMemoryArtifactStore).Assembly)
+            .ShouldNot().HaveDependencyOn($"{Ns}.Bootstrap")
+            .GetResult();
+
+        Assert.True(result.IsSuccessful, Explain("Only Bootstrap wires dependencies together (ADR 0001).", result));
+    }
+
+    private static string Explain(string rule, NetArchTest.Rules.TestResult result) =>
+        $"{rule} Offending types: {string.Join(", ", result.FailingTypeNames ?? [])}";
+}

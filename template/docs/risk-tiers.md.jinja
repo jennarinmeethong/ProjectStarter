@@ -1,0 +1,17 @@
+# Risk tiers: การอนุมัติตามความเสี่ยง
+
+การข้าม human review ต้องเป็น**การตัดสินใจที่ตั้งใจ** ตาม path และหลักฐาน ไม่ใช่เกิดขึ้นเอง (ที่มา: `docs/combined.md` ส่วนที่ 1 หัวข้อ 6.5)
+
+| Tier | ตัวอย่างการเปลี่ยนแปลง | ต้องมีอะไรก่อน merge | Human review | Automerge |
+|---|---|---|---|---|
+| 0 ต่ำมาก | docs, เพิ่ม test (ไม่แก้ test เดิม), แก้ lint, dependency patch | CI เขียวทั้งหมด, ratchet ไม่เพิ่ม | ไม่ต้อง | ได้ (เมื่อเปิดใช้ตาม roadmap ระยะ 5) |
+| 1 ต่ำ | product code ใน `{{ src_root }}/` ที่อยู่หลัง feature flag และไม่แตะ type ที่ใช้ร่วม | ข้างบน + runtime artifact (trace/screenshot) ของ feature ID ที่แตะ | ดู artifact แบบเร็ว | ได้ หลังผ่านเกณฑ์เลื่อนขั้น |
+| 2 กลาง | domain logic, data model, public API, shared type, performance | ข้างบน + property/model-based test + spec ที่อนุมัติ | review โค้ดเต็มรูปแบบ 1 คน | ไม่ได้ |
+| 3 สูง | {% for p in risk_paths %}`{{ p }}`, {% endfor %}`.github/`{% if 'claude' in agent_tools %}, `.claude/`{% endif %}, config ของ guardrail, `tests/acceptance/` | ข้างบน + owner{% if guardrail_owner %} ตาม CODEOWNERS{% endif %} + แผน rollback | owner + reviewer อีก 1 คน | ไม่ได้เด็ดขาด |
+
+## เกณฑ์เลื่อนหรือลด tier
+
+- tier จะผ่อนลง (เช่น tier 1 เปิด automerge) ได้เฉพาะเมื่อวัดแล้วว่า change failure rate และ revert rate ของ PR ประเภทนั้นคงที่ในช่วงเวลาที่กำหนดไว้ล่วงหน้า
+- นิยาม "revert" ให้ชัดก่อนวัด: <นิยามของทีม>
+- ถ้า incident ที่โยงกับ tier นั้นเพิ่มขึ้น ให้ยกระดับกลับทันที
+{% if guardrail_owner %}- tier ตาม path ถูกบังคับด้วย `.github/CODEOWNERS` และ required status checks ไม่ใช่ดุลยพินิจรายครั้ง{% else %}- tier ตาม path ควรถูกบังคับด้วย required status checks (และ CODEOWNERS เมื่อมี owner) ไม่ใช่ดุลยพินิจรายครั้ง{% endif %}

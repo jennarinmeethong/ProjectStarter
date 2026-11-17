@@ -1,0 +1,15 @@
+# Feature map: {{ project_name }}
+
+คำศัพท์ร่วมระหว่างคนกับ agent: แต่ละ feature มี ID, entry point จริง, ไฟล์อ้างอิง และระบุว่าถูกตรวจด้วยชั้นใด (type, example, property, E2E, model-checked) เพื่อให้รู้ความแข็งแรงของหลักฐาน ไม่ใช่แค่ว่ามี test หรือไม่
+
+{{ project_description }}
+
+| Feature ID | ชื่อ / คำศัพท์โดเมน | Entry point | Reference implementation | Tests | ตรวจด้วยชั้น | Risk tier |
+|---|---|---|---|---|---|---|
+| `example` | Example use case | `{{ src_root }}/bootstrap` | `{{ src_root }}/application` | `tests/` | type, example, property | 1 |
+
+## วิธีเพิ่ม feature
+
+1. เพิ่มแถวในตารางนี้ก่อน (ID ใช้ตั้งชื่อไฟล์ symbol และ test)
+2. เขียน spec จาก `SPEC.template.md` ถ้าเป็น tier 2–3
+3. เพิ่ม acceptance test ใน `tests/acceptance/` (owner อนุมัติ) แล้วจึง implement

@@ -1,0 +1,12 @@
+# Guardrail config (protected). See docs/adr/0001-layered-architecture.md.
+[importlinter]
+root_package = {{ package_name }}
+
+[importlinter:contract:layers]
+name = Layers point inward: bootstrap > adapters > application > domain (ADR 0001)
+type = layers
+layers =
+    {{ package_name }}.bootstrap
+    {{ package_name }}.adapters
+    {{ package_name }}.application
+    {{ package_name }}.domain

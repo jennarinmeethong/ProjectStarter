@@ -1,0 +1,15 @@
+# Guard the guardrails. Enable "Require review from Code Owners" in branch protection.
+{%- for f in stk.guardrail_files %}
+/{{ f }}    {{ guardrail_owner }}
+{%- endfor %}
+/ci/    {{ guardrail_owner }}
+/.github/    {{ guardrail_owner }}
+/tests/acceptance/    {{ guardrail_owner }}
+/AGENTS.md    {{ guardrail_owner }}
+{%- if 'claude' in agent_tools %}
+/CLAUDE.md    {{ guardrail_owner }}
+/.claude/    {{ guardrail_owner }}
+{%- endif %}
+{%- for p in risk_paths %}
+{{ p }}    {{ guardrail_owner }}
+{%- endfor %}

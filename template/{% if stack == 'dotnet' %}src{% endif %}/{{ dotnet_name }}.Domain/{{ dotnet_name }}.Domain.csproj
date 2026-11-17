@@ -1,0 +1,3 @@
+<!-- Domain: no project references. The compiler enforces that domain has no I/O dependencies (ADR 0001). -->
+<Project Sdk="Microsoft.NET.Sdk">
+</Project>

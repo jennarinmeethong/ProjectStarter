@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# ci/guardrail-ratchet.sh — fail if escape hatches increase, tests are deleted or skipped,
+# or type strictness is loosened, compared with the base branch.
+# Usage: ci/guardrail-ratchet.sh [base-ref]   (default: origin/main)
+set -euo pipefail
+
+base_ref="${1:-origin/main}"
+base=$(git merge-base "$base_ref" HEAD)
+
+src_specs=({% for g in stk.src_globs %}':(glob)**/{{ g }}' {% endfor %})
+test_specs=({% for g in stk.test_globs %}':(glob)**/{{ g }}' {% endfor %})
+patterns=({% for p in stk.ratchet_patterns %}'{{ p }}' {% endfor %})
+
+count() { # count <regex> <rev>
+  { git grep -E -- "$1" "$2" -- "${src_specs[@]}" || true; } | wc -l | tr -d ' '
+}
+
+status=0
+for pat in "${patterns[@]}"; do
+  before=$(count "$pat" "$base"); after=$(count "$pat" HEAD)
+  if [ "$after" -gt "$before" ]; then
+    echo "Escape hatch increased: '$pat' ($before -> $after). Fix the cause instead; see AGENTS.md." >&2
+    status=1
+  fi
+done
+
+if git diff --diff-filter=D --name-only "$base" HEAD -- "${test_specs[@]}" | grep -q .; then
+  echo "Test files deleted:" >&2
+  git diff --diff-filter=D --name-only "$base" HEAD -- "${test_specs[@]}" >&2
+  status=1
+fi
+
+if git diff "$base" HEAD -- "${test_specs[@]}" | grep -qE '^\+.*({{ stk.skip_regex }})'; then
+  echo "Skipped/focused tests added. Fix or delete the test with owner approval instead." >&2
+  status=1
+fi
+
+# Strictness must not be loosened.
+{%- if stack == 'typescript' %}
+node -e '
+const c = JSON.parse(require("child_process").execSync("npx tsc --showConfig").toString()).compilerOptions;
+const need = ["strict", "noUncheckedIndexedAccess", "exactOptionalPropertyTypes"];
+const bad = need.filter((k) => c[k] !== true);
+if (bad.length) { console.error("tsconfig strictness loosened: " + bad.join(", ")); process.exit(1); }
+' || status=1
+{%- elif stack == 'python' %}
+grep -Eq '"typeCheckingMode"[[:space:]]*:[[:space:]]*"strict"' pyrightconfig.json \
+  || { echo "pyright strict mode was turned off in pyrightconfig.json" >&2; status=1; }
+{%- else %}
+for prop in '<Nullable>enable</Nullable>' '<TreatWarningsAsErrors>true</TreatWarningsAsErrors>'; do
+  grep -q "$prop" Directory.Build.props \
+    || { echo "Directory.Build.props no longer contains $prop" >&2; status=1; }
+done
+{%- endif %}
+
+[ "$status" -eq 0 ] && echo "guardrail-ratchet: OK"
+exit "$status"
