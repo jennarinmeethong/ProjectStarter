@@ -13,7 +13,7 @@ A Copier template that scaffolds agent-ready projects (TypeScript, Python, C#/.N
 
 ## Commands
 
-Requires `git`, `bash`, `uv`; Node.js ≥ 22.12 for TypeScript renders; .NET SDK 10 for .NET renders.
+Requires `git`, `bash`, `uv`; Node.js ≥ 22.12 for TypeScript renders; .NET SDK 10 for .NET renders; a running Docker engine for the container and secret-scan checks in `tests/render-all.sh`.
 
 - Render one project: `uvx copier copy --trust --defaults -d project_name=demo -d stack=<typescript|python|dotnet> . <dest>` (renders the working tree, including uncommitted changes)
 - Full test (renders every stack × agent combination, runs each project's verify, then seeds violations that must be rejected): `bash tests/render-all.sh`

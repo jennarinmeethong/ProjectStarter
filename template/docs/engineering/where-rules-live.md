@@ -13,6 +13,9 @@
 | Style และ formatting | การจัดรูปแบบ, import order | **Config** (formatter/linter) | CI | AGENTS.md |
 | ไฟล์ที่ agent ห้ามแก้ | config ของ guardrail, acceptance test | **CI + CODEOWNERS** | harness deny/hook | AGENTS.md อย่างเดียว |
 | Dependency ที่มีช่องโหว่ที่รู้แล้ว | package ที่มี CVE | **CI** (dependency audit ทุก PR + รายสัปดาห์) | Dependabot/Renovate | AGENTS.md อย่างเดียว |
+| Secret ใน repo | API key, token, password | **CI** (gitleaks สแกน history ทุก PR) | rotate + ลบจาก history | AGENTS.md อย่างเดียว |
+| ความปลอดภัยของ container | รันเป็น root, tag `latest`, ADD จาก URL | **Lint** (hadolint) + **CI** (`ci/check-dockerfile.sh`) | `compose.yaml` แบบ read-only | code review |
+| ความปลอดภัยของ feature ใหม่ | สิทธิ์, input, secret ใน log | **Checklist** ใน `docs/security/owasp.md` สำหรับ PR tier 2–3 | DAST (ZAP) | ไม่ทำอะไร |
 | ต้องรัน check ก่อนจบงาน | typecheck ก่อน "เสร็จ" | **CI** (required check) | Stop hook | AGENTS.md อย่างเดียว |
 | ความถูกต้องของพฤติกรรม | ผลของการคำนวณ | **Tests** (example + property) | runtime verification | AGENTS.md |
 | Protocol กระจายหรือ concurrency | notification ข้ามอุปกรณ์ | **Verification** (model check) + property test | runtime monitor | code review อย่างเดียว |

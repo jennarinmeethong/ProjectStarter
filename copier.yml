@@ -53,6 +53,11 @@ risk_paths:
   help: Tier-3 (high risk) paths that always need owner review (YAML list)
   default: "[auth/, payments/, migrations/, infra/]"
 
+containerize:
+  type: bool
+  help: Add a Dockerfile (multi-stage, non-root), compose.yaml and hadolint checks
+  default: true
+
 # ---------- computed values (never asked) ----------
 package_name:
   type: str
@@ -118,7 +123,7 @@ stk:
   default: |
     {%- if stack == 'typescript' %}
     language: TypeScript
-    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs]
+    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}]
     escapes_display: "`eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `as any`, `as unknown as`, `.skip`/`.only`"
     ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as', 'NOSONAR']
     src_globs: ['*.ts', '*.tsx']
@@ -128,7 +133,7 @@ stk:
     layers: {domain: src/domain, application: src/application, adapters: src/adapters, bootstrap: src/bootstrap}
     {%- elif stack == 'python' %}
     language: Python
-    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter]
+    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}]
     escapes_display: "`# type: ignore`, `# pyright: ignore`, `# noqa`, `cast(Any, ...)`, `pytest.mark.skip`/`xfail`"
     ratchet_patterns: ['type:[[:space:]]*ignore', 'pyright:[[:space:]]*ignore', 'noqa', 'cast\(Any']
     src_globs: ['*.py']
@@ -138,7 +143,7 @@ stk:
     layers: {domain: "{{ src_root }}/domain", application: "{{ src_root }}/application", adapters: "{{ src_root }}/adapters", bootstrap: "{{ src_root }}/bootstrap"}
     {%- else %}
     language: C#
-    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt]
+    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}]
     escapes_display: "`#pragma warning disable`, `[SuppressMessage]`, `null!`/`default!`, `Skip =` on tests"
     ratchet_patterns: ['#pragma warning disable', 'SuppressMessage', 'null!', 'default!']
     src_globs: ['*.cs']

@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1
+# Checked by hadolint (.hadolint.yaml) and ci/check-dockerfile.sh: pinned base images, multi-stage,
+# no build tools or dev dependencies at runtime, and the final stage runs as a non-root user.
+{%- if stack == 'typescript' %}
+
+FROM node:24-slim AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && mkdir -p node_modules
+
+# Node 24 runs TypeScript directly (type stripping), so there is no separate compile step.
+FROM node:24-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./
+COPY src ./src
+# Numeric UID of the image's `node` user, so Kubernetes runAsNonRoot can verify it.
+USER 1000:1000
+CMD ["node", "src/bootstrap/main.ts"]
+{%- elif stack == 'python' %}
+
+FROM ghcr.io/astral-sh/uv:0.12.5 AS uv
+
+FROM python:3.13-slim AS build
+COPY --from=uv /uv /usr/local/bin/uv
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev --no-install-project
+COPY src ./src
+RUN uv sync --locked --no-dev --no-editable
+
+FROM python:3.13-slim AS runtime
+RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid 10001 --no-create-home app
+WORKDIR /app
+COPY --from=build /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
+USER 10001:10001
+CMD ["{{ project_name | lower }}"]
+{%- else %}
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY global.json Directory.Build.props Directory.Packages.props .editorconfig BannedSymbols.txt CodeMetricsConfig.txt ./
+COPY src ./src
+RUN dotnet publish src/{{ dotnet_name }}.Bootstrap/{{ dotnet_name }}.Bootstrap.csproj -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+WORKDIR /app
+COPY --from=build /app .
+USER $APP_UID
+ENTRYPOINT ["dotnet", "{{ dotnet_name }}.Bootstrap.dll"]
+{%- endif %}

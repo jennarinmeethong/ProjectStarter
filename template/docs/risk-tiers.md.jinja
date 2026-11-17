@@ -6,7 +6,7 @@
 |---|---|---|---|---|
 | 0 ต่ำมาก | docs, เพิ่ม test (ไม่แก้ test เดิม), แก้ lint, dependency patch | CI เขียวทั้งหมด, ratchet ไม่เพิ่ม | ไม่ต้อง | ได้ (เมื่อเปิดใช้ตาม roadmap ระยะ 5) |
 | 1 ต่ำ | product code ใน `{{ src_root }}/` ที่อยู่หลัง feature flag และไม่แตะ type ที่ใช้ร่วม | ข้างบน + runtime artifact (trace/screenshot) ของ feature ID ที่แตะ | ดู artifact แบบเร็ว | ได้ หลังผ่านเกณฑ์เลื่อนขั้น |
-| 2 กลาง | domain logic, data model, public API, shared type, performance | ข้างบน + property/model-based test + spec ที่อนุมัติ | review โค้ดเต็มรูปแบบ 1 คน | ไม่ได้ |
+| 2 กลาง | domain logic, data model, public API, shared type, performance | ข้างบน + property/model-based test + spec ที่อนุมัติ + ตอบ [security checklist](security/owasp.md) | review โค้ดเต็มรูปแบบ 1 คน | ไม่ได้ |
 | 3 สูง | {% for p in risk_paths %}`{{ p }}`, {% endfor %}`.github/`{% if 'claude' in agent_tools %}, `.claude/`{% endif %}, config ของ guardrail, `tests/acceptance/` | ข้างบน + owner{% if guardrail_owner %} ตาม CODEOWNERS{% endif %} + แผน rollback | owner + reviewer อีก 1 คน | ไม่ได้เด็ดขาด |
 
 ## เกณฑ์เลื่อนหรือลด tier
