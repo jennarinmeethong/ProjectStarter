@@ -16,7 +16,7 @@ ADR นี้แปลงแต่ละหลักการเป็น check 
 ### SRP — หนึ่งหน่วย หนึ่งเหตุผลที่จะเปลี่ยน
 เมื่อ function/class โตเกินขีดจำกัด ให้แยกตามเหตุผลที่จะเปลี่ยน (เช่น validation, การคำนวณ, การ map ข้อมูล) ไม่ใช่ตัดครึ่งตามจำนวนบรรทัด
 {%- if stack == 'typescript' %}
-- ESLint: `complexity` ≤ 10, `max-depth` ≤ 3, `max-params` ≤ 4, `max-lines-per-function` ≤ 60, `max-lines` ≤ 300 ต่อไฟล์
+- ESLint: `sonarjs/cognitive-complexity` ≤ 15 (วัดความยากในการอ่าน แทน cyclomatic `complexity`), `max-depth` ≤ 3, `max-params` ≤ 4, `max-lines-per-function` ≤ 60, `max-lines` ≤ 300 ต่อไฟล์
 {%- elif stack == 'python' %}
 - Ruff: `C901` (complexity ≤ 10), `PLR0913` (args ≤ 4), `PLR0912` (branches ≤ 10), `PLR0915` (statements ≤ 40), `PLR0911` (returns ≤ 6)
 {%- else %}
@@ -76,6 +76,12 @@ ADR นี้แปลงแต่ละหลักการเป็น check 
 {%- if stack == 'typescript' %}
 - Immutability: `prefer-readonly`, `no-param-reassign`, `prefer-const`; type ใน domain ใช้ `readonly`
 - Contract ชัดเจน: `explicit-module-boundary-types`, `eqeqeq`, `no-implicit-coercion`
+- SonarJS (`eslint-plugin-sonarjs`, LGPL-3.0, dev dependency) เปิดเฉพาะ rule ที่คัดแล้ว ไม่ใช้ preset `recommended`:
+  - โค้ดซ้ำ: `no-identical-functions`, `no-duplicate-string` (string เดียวกัน ≥ 3 ครั้ง ยกเว้นใน test), `no-duplicated-branches`, `no-all-duplicated-branches`
+  - bug pattern: `no-identical-conditions`, `no-identical-expressions`, `no-gratuitous-expressions`, `no-element-overwrite`, `no-collection-size-mischeck`, `no-unused-collection`, `no-use-of-empty-return-value`, `no-ignored-return`, `non-existent-operator`
+  - อ่านง่าย: `no-collapsible-if`, `no-redundant-boolean`, `no-redundant-jump`, `no-inverted-boolean-check`, `prefer-single-boolean-return`, `prefer-immediate-return`, `no-nested-conditional`, `no-nested-switch`, `no-small-switch`, `no-useless-catch`
+  - security: `no-hardcoded-passwords`, `no-hardcoded-ip`
+  - `NOSONAR` ถูกนับโดย `ci/guardrail-ratchet.sh` เหมือน `eslint-disable`
 {%- elif stack == 'python' %}
 - Encapsulation: `SLF001` (ห้ามเข้าถึง `_private` ของ object อื่น), `reportUninitializedInstanceVariable`
 - Error handling: `BLE` (ห้าม `except Exception` แบบกว้าง), `TRY`; security: `S` (bandit)
@@ -98,6 +104,11 @@ ADR นี้แปลงแต่ละหลักการเป็น check 
 ## ทางที่ถูกต้องเมื่อ check fail
 อ่าน message แล้วแก้ที่โครงสร้าง (แยก function, inject port, เพิ่ม case) ห้าม disable rule หรือเพิ่ม suppression
 ถ้าเห็นว่า rule ผิดสำหรับกรณีนี้ ให้เสนอแก้ config ใน PR ที่ owner อนุมัติ
+
+## ทำไมไม่ใช้ SonarQube server เป็น gate
+Quality profile อยู่นอก repo (ไม่ถูกปกป้องด้วย CODEOWNERS/ratchet) และให้ผลหลัง push เท่านั้น agent จึงไม่ได้ feedback ระหว่างทำงาน
+rule ที่มีประโยชน์จึงถูกนำมารันในเครื่องผ่าน linter แทน{% if stack == 'dotnet' %} สำหรับ .NET ไม่ใช้ `SonarAnalyzer.CSharp` เพราะใช้ Sonar Source-Available License (ไม่ใช่ open source) จึงใช้ `CA1502` แทน cognitive complexity{% elif stack == 'python' %} Python ไม่มี linter ของ Sonar แยก rule ที่เทียบเท่าส่วนใหญ่มีอยู่แล้วใน ruff (`C90`, `PL`, `SIM`){% endif %}
+ถ้าทีมใช้ SonarQube/SonarCloud อยู่แล้ว ใช้เป็น dashboard ดูแนวโน้มได้ แต่ไม่ใช่ gate หลัก
 
 ## ผลที่ตามมา
 โค้ดตัวอย่างจะมีไฟล์และ port มากขึ้นเล็กน้อย ขีดจำกัดตัวเลข (complexity, จำนวน parameter) เป็นจุดเริ่มต้น ปรับได้ผ่าน PR ที่ owner อนุมัติพร้อมเหตุผล

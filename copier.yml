@@ -117,7 +117,7 @@ stk:
     language: TypeScript
     guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs]
     escapes_display: "`eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `as any`, `as unknown as`, `.skip`/`.only`"
-    ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as']
+    ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as', 'NOSONAR']
     src_globs: ['*.ts', '*.tsx']
     test_globs: ['*.test.ts', '*.test.tsx']
     skip_regex: '\b(it|test|describe)\.(skip|only)\('
