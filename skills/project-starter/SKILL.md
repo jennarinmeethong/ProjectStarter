@@ -30,6 +30,7 @@ Use an **absolute** path or a git URL so `copier update` works later.
 | `agent_tools` | any of `claude`, `codex` | both |
 | `guardrail_owner` | optional: `@user` or `@org/team` for `.github/CODEOWNERS` | empty = no CODEOWNERS |
 | `risk_paths` | tier-3 paths that always need owner review | `[auth/, payments/, migrations/, infra/]` |
+| `datastores` | any of `postgres`, `redis`: adapters behind the existing port, migrations, Testcontainers integration tests | `[]`; add only what the user asked for, e.g. `-d 'datastores=["postgres"]'` |
 | `containerize` | Dockerfile (multi-stage, non-root), `compose.yaml`, hadolint and a container CI job | `true`; pass `false` for libraries or when the user does not deploy containers |
 | destination | folder to create | `./<project_name>` |
 

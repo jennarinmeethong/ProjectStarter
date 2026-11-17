@@ -1,0 +1,11 @@
+import pytest
+from tests.artifact_store_contract import ArtifactStoreContract, StoreUnderTest
+
+from {{ package_name }}.adapters.in_memory_artifact_store import InMemoryArtifactStore
+
+
+class TestInMemoryArtifactStore(ArtifactStoreContract):
+    @pytest.fixture
+    def subject(self) -> StoreUnderTest:
+        store = InMemoryArtifactStore()
+        return StoreUnderTest(store=store, read=store.read)

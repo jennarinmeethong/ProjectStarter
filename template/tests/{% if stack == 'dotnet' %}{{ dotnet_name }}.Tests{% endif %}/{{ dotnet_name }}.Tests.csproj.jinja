@@ -7,6 +7,12 @@
     <PackageReference Include="FsCheck.Xunit.v3" />
     <PackageReference Include="NetArchTest.Rules" />
     <PackageReference Include="xunit.v3" />
+{%- if 'postgres' in datastores %}
+    <PackageReference Include="Testcontainers.PostgreSql" />
+{%- endif %}
+{%- if 'redis' in datastores %}
+    <PackageReference Include="Testcontainers.Redis" />
+{%- endif %}
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\{{ dotnet_name }}.Bootstrap\{{ dotnet_name }}.Bootstrap.csproj" />

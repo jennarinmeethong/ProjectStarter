@@ -1,0 +1,37 @@
+import pg from "pg";
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+/** ArtifactStore on PostgreSQL. Schema: migrations/0001_create_export_artifacts.sql. Queries are always parameterised. */
+export class PostgresArtifactStore implements ArtifactStore {
+  readonly #pool: pg.Pool;
+
+  constructor(pool: pg.Pool) {
+    this.#pool = pool;
+  }
+
+  static fromUrl(connectionString: string): PostgresArtifactStore {
+    return new PostgresArtifactStore(new pg.Pool({ connectionString }));
+  }
+
+  async save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    await this.#pool.query(
+      `INSERT INTO export_artifacts (artifact_key, job_id, body) VALUES ($1, $2, $3)
+       ON CONFLICT (artifact_key) DO UPDATE SET body = EXCLUDED.body`,
+      [key, jobId, content],
+    );
+    return key;
+  }
+
+  async read(key: string): Promise<string | undefined> {
+    const result = await this.#pool.query<{ body: string }>(
+      "SELECT body FROM export_artifacts WHERE artifact_key = $1",
+      [key],
+    );
+    return result.rows[0]?.body;
+  }
+
+  async close(): Promise<void> {
+    await this.#pool.end();
+  }
+}

@@ -1,0 +1,62 @@
+using Testcontainers.PostgreSql;
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Starts PostgreSQL once per test class and applies migrations/ through the image's init hook.</summary>
+public sealed class PostgresFixture : IAsyncLifetime
+{
+    private readonly PostgreSqlContainer container = new PostgreSqlBuilder("postgres:17-alpine")
+        .WithResourceMapping(new DirectoryInfo(RepoPaths.Migrations), "/docker-entrypoint-initdb.d/")
+        .Build();
+
+    private PostgresArtifactStore? store;
+
+    public PostgresArtifactStore Store => store ?? throw new InvalidOperationException("Fixture not initialised.");
+
+    public async ValueTask InitializeAsync()
+    {
+        await container.StartAsync(TestContext.Current.CancellationToken);
+        store = PostgresArtifactStore.Create(container.GetConnectionString());
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (store is not null)
+        {
+            await store.DisposeAsync();
+        }
+
+        await container.DisposeAsync();
+    }
+}
+
+/// <summary>Integration test: needs Docker. Run with the Category=Integration filter (excluded from verify).</summary>
+[Trait("Category", "Integration")]
+public sealed class PostgresArtifactStoreTests(PostgresFixture fixture) : ArtifactStoreContract, IClassFixture<PostgresFixture>
+{
+    protected override StoreUnderTest Subject =>
+        new(fixture.Store, key => fixture.Store.ReadAsync(key, TestContext.Current.CancellationToken));
+}
+
+internal static class RepoPaths
+{
+    /// <summary>The repository's migrations/ folder, found by walking up from the test binaries.</summary>
+    public static string Migrations
+    {
+        get
+        {
+            for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+            {
+                var candidate = Path.Combine(dir.FullName, "migrations");
+                if (Directory.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            throw new DirectoryNotFoundException("migrations/ not found above " + AppContext.BaseDirectory);
+        }
+    }
+}

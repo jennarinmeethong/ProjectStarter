@@ -1,0 +1,20 @@
+// Integration test: needs Docker. Run with `npm run test:integration` (excluded from `npm test`).
+import { RedisContainer, type StartedRedisContainer } from "@testcontainers/redis";
+import { afterAll, beforeAll } from "vitest";
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { RedisArtifactStore } from "./redis-artifact-store.ts";
+
+let container: StartedRedisContainer;
+let store: RedisArtifactStore;
+
+beforeAll(async () => {
+  container = await new RedisContainer("redis:8-alpine").start();
+  store = await RedisArtifactStore.connect(container.getConnectionUrl());
+}, 180_000);
+
+afterAll(async () => {
+  await store.close();
+  await container.stop();
+});
+
+describeArtifactStoreContract("RedisArtifactStore", () => ({ store, read: (key) => store.read(key) }));

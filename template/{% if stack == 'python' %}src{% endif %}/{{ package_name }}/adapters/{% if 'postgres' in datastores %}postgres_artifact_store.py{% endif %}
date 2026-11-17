@@ -1,0 +1,37 @@
+"""ArtifactStore on PostgreSQL.
+
+Schema: migrations/0001_create_export_artifacts.sql.
+Queries are always parameterised (%s), never formatted.
+"""
+
+from typing import Self
+
+import psycopg
+from psycopg.rows import TupleRow
+
+
+class PostgresArtifactStore:
+    def __init__(self, connection: psycopg.Connection[TupleRow]) -> None:
+        self._connection = connection
+
+    @classmethod
+    def from_url(cls, url: str) -> Self:
+        return cls(psycopg.connect(url, autocommit=True))
+
+    def save(self, job_id: str, content: str) -> str:
+        key = f"exports/{job_id}.csv"
+        self._connection.execute(
+            "INSERT INTO export_artifacts (artifact_key, job_id, body) VALUES (%s, %s, %s) "
+            "ON CONFLICT (artifact_key) DO UPDATE SET body = EXCLUDED.body",
+            (key, job_id, content),
+        )
+        return key
+
+    def read(self, key: str) -> str | None:
+        row = self._connection.execute(
+            "SELECT body FROM export_artifacts WHERE artifact_key = %s", (key,)
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    def close(self) -> None:
+        self._connection.close()

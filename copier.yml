@@ -58,6 +58,15 @@ containerize:
   help: Add a Dockerfile (multi-stage, non-root), compose.yaml and hadolint checks
   default: true
 
+datastores:
+  type: str
+  help: Datastores to wire in as adapters behind application ports (integration tests use Testcontainers, so they need Docker)
+  multiselect: true
+  choices:
+    PostgreSQL: postgres
+    Redis: redis
+  default: []
+
 # ---------- computed values (never asked) ----------
 package_name:
   type: str
@@ -92,6 +101,9 @@ cmd:
     fast: npm run verify:fast
     verify: npm run verify
     audit: npm audit --audit-level=high
+    {%- if datastores %}
+    test_integration: npm run test:integration
+    {%- endif %}
     {%- elif stack == 'python' %}
     install: uv sync
     typecheck: uv run pyright
@@ -103,6 +115,9 @@ cmd:
     fast: uv run pyright && uv run ruff check . && uv run lint-imports
     verify: uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest
     audit: uv audit --locked --preview-features audit-command
+    {%- if datastores %}
+    test_integration: uv run pytest -m integration
+    {%- endif %}
     {%- else %}
     install: dotnet restore
     typecheck: dotnet build --no-restore
@@ -112,8 +127,14 @@ cmd:
     test: dotnet test
     test_single: 'dotnet test --filter-method "*.ClassName.MethodName"'
     fast: dotnet build
-    verify: dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build
+    verify: dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build{% if datastores %} --filter-not-trait "Category=Integration"{% endif %}
     audit: dotnet restore --force-evaluate
+    {%- if datastores %}
+    test_integration: dotnet test --filter-trait "Category=Integration"
+    {%- endif %}
+    {%- endif %}
+    {%- if 'postgres' in datastores %}
+    sql_lint: uvx sqlfluff==4.5.0 lint migrations
     {%- endif %}
 
 # Stack facts shared by AGENTS.md, the ratchet script, CODEOWNERS and the Claude Code hooks.
@@ -123,7 +144,7 @@ stk:
   default: |
     {%- if stack == 'typescript' %}
     language: TypeScript
-    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}]
+    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
     escapes_display: "`eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `as any`, `as unknown as`, `.skip`/`.only`"
     ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as', 'NOSONAR']
     src_globs: ['*.ts', '*.tsx']
@@ -133,7 +154,7 @@ stk:
     layers: {domain: src/domain, application: src/application, adapters: src/adapters, bootstrap: src/bootstrap}
     {%- elif stack == 'python' %}
     language: Python
-    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}]
+    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
     escapes_display: "`# type: ignore`, `# pyright: ignore`, `# noqa`, `cast(Any, ...)`, `pytest.mark.skip`/`xfail`"
     ratchet_patterns: ['type:[[:space:]]*ignore', 'pyright:[[:space:]]*ignore', 'noqa', 'cast\(Any']
     src_globs: ['*.py']
@@ -143,7 +164,7 @@ stk:
     layers: {domain: "{{ src_root }}/domain", application: "{{ src_root }}/application", adapters: "{{ src_root }}/adapters", bootstrap: "{{ src_root }}/bootstrap"}
     {%- else %}
     language: C#
-    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}]
+    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
     escapes_display: "`#pragma warning disable`, `[SuppressMessage]`, `null!`/`default!`, `Skip =` on tests"
     ratchet_patterns: ['#pragma warning disable', 'SuppressMessage', 'null!', 'default!']
     src_globs: ['*.cs']

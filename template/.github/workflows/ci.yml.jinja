@@ -32,9 +32,40 @@ jobs:
         run: {{ cmd.verify }}
       - name: Dependency audit (known vulnerabilities)
         run: {{ cmd.audit }}
+{%- if 'postgres' in datastores %}
+{%- if stack != 'python' %}
+      - uses: astral-sh/setup-uv@v6
+{%- endif %}
+      - name: SQL lint (migrations)
+        run: {{ cmd.sql_lint }}
+{%- endif %}
       - name: Guardrail ratchet
         if: github.event_name == 'pull_request'
         run: bash ci/guardrail-ratchet.sh origin/${{ '{{' }} github.base_ref {{ '}}' }}
+{%- if datastores %}
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+{%- if stack == 'typescript' %}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+{%- elif stack == 'python' %}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+{%- else %}
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet build
+{%- endif %}
+      - name: Adapter contract tests against real datastores (Testcontainers)
+        run: {{ cmd.test_integration }}
+{%- endif %}
 
   secrets:
     runs-on: ubuntu-latest

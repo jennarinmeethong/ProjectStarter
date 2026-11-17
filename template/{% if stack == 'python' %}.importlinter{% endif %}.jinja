@@ -1,6 +1,9 @@
 # Guardrail config (protected). See docs/adr/0001-layered-architecture.md.
 [importlinter]
 root_package = {{ package_name }}
+{%- if datastores %}
+include_external_packages = True
+{%- endif %}
 
 [importlinter:contract:layers]
 name = Layers point inward: bootstrap > adapters > application > domain (ADR 0001)
@@ -10,3 +13,21 @@ layers =
     {{ package_name }}.adapters
     {{ package_name }}.application
     {{ package_name }}.domain
+{%- if datastores %}
+
+[importlinter:contract:drivers]
+name = Datastore drivers only in adapters; bootstrap passes connection settings (ADR 0003)
+type = forbidden
+source_modules =
+    {{ package_name }}.domain
+    {{ package_name }}.application
+    {{ package_name }}.bootstrap
+forbidden_modules =
+{%- if 'postgres' in datastores %}
+    psycopg
+{%- endif %}
+{%- if 'redis' in datastores %}
+    redis
+{%- endif %}
+allow_indirect_imports = True
+{%- endif %}

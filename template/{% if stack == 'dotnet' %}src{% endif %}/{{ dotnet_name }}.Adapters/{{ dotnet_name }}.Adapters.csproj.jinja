@@ -1,6 +1,16 @@
-<!-- Adapters: implement Application ports (ADR 0001). -->
+<!-- Adapters: implement Application ports (ADR 0001). The only project that references datastore drivers (ADR 0003). -->
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\{{ dotnet_name }}.Application\{{ dotnet_name }}.Application.csproj" />
   </ItemGroup>
+{%- if datastores %}
+  <ItemGroup>
+{%- if 'postgres' in datastores %}
+    <PackageReference Include="Npgsql" />
+{%- endif %}
+{%- if 'redis' in datastores %}
+    <PackageReference Include="StackExchange.Redis" />
+{%- endif %}
+  </ItemGroup>
+{%- endif %}
 </Project>

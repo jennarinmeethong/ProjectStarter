@@ -1,0 +1,41 @@
+import { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";
+{%- if 'postgres' in datastores %}
+import { PostgresArtifactStore } from "../adapters/postgres-artifact-store.ts";
+{%- endif %}
+{%- if 'redis' in datastores %}
+import { RedisArtifactStore } from "../adapters/redis-artifact-store.ts";
+{%- endif %}
+import { completeExportUseCase, type ArtifactStore } from "../application/complete-export.ts";
+import { startExport } from "../domain/export-job.ts";
+
+interface OpenStore {
+  readonly store: ArtifactStore;
+  readonly close: () => Promise<void>;
+}
+
+/** Bootstrap is the only place that reads configuration; adapters receive plain values. */
+function openStore(): Promise<OpenStore> {
+{%- if 'postgres' in datastores %}
+  const databaseUrl = process.env.DATABASE_URL;
+  if (databaseUrl) {
+    const store = PostgresArtifactStore.fromUrl(databaseUrl);
+    return Promise.resolve({ store, close: () => store.close() });
+  }
+{%- endif %}
+{%- if 'redis' in datastores %}
+  const redisUrl = process.env.REDIS_URL;
+  if (redisUrl) {
+    return RedisArtifactStore.connect(redisUrl).then((store) => ({ store, close: () => store.close() }));
+  }
+{%- endif %}
+  return Promise.resolve({ store: new InMemoryArtifactStore(), close: () => Promise.resolve() });
+}
+
+const { store, close } = await openStore();
+try {
+  const job = startExport({ kind: "queued", id: "demo" });
+  const ready = await completeExportUseCase(store, job, "id,name\n1,demo\n");
+  console.log(`${ready.id} -> ${ready.artifactKey}`);
+} finally {
+  await close();
+}

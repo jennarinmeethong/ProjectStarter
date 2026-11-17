@@ -1,0 +1,36 @@
+"""Contract every ArtifactStore adapter must satisfy.
+
+Liskov: adapters are interchangeable behind the port. Subclass ArtifactStoreContract and provide a
+`subject` fixture. The in-memory adapter runs it in the unit suite; datastore adapters run it
+against real containers (marked `integration`).
+"""
+
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from {{ package_name }}.application.complete_export import ArtifactStore
+
+
+@dataclass(frozen=True)
+class StoreUnderTest:
+    store: ArtifactStore
+    read: Callable[[str], str | None]
+
+
+class ArtifactStoreContract:
+    def test_returns_a_key_that_reads_back_the_content(self, subject: StoreUnderTest) -> None:
+        key = subject.store.save("contract-1", "id\n1\n")
+        assert subject.read(key) == "id\n1\n"
+
+    def test_is_idempotent_per_job(self, subject: StoreUnderTest) -> None:
+        first = subject.store.save("contract-2", "old")
+        second = subject.store.save("contract-2", "new")
+        assert second == first
+        assert subject.read(second) == "new"
+
+    def test_keeps_different_jobs_apart(self, subject: StoreUnderTest) -> None:
+        a = subject.store.save("contract-3a", "a")
+        b = subject.store.save("contract-3b", "b")
+        assert a != b
+        assert subject.read(a) == "a"
+        assert subject.read(b) == "b"
