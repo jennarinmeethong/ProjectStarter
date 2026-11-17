@@ -1,0 +1,26 @@
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+/** The part of the Web Storage API this adapter needs (window.localStorage implements it). */
+export interface KeyValueStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+/** ArtifactStore in the browser: keeps artifacts in Web Storage. The storage is injected by the UI's composition root. */
+export class LocalStorageArtifactStore implements ArtifactStore {
+  readonly #storage: KeyValueStorage;
+
+  constructor(storage: KeyValueStorage) {
+    this.#storage = storage;
+  }
+
+  save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    this.#storage.setItem(key, content);
+    return Promise.resolve(key);
+  }
+
+  read(key: string): string | undefined {
+    return this.#storage.getItem(key) ?? undefined;
+  }
+}

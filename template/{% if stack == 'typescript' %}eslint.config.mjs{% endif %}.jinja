@@ -1,5 +1,12 @@
 // Guardrail config (protected). Rule messages say what to do instead and link an ADR.
+{% if frontend == 'react' -%}
+import eslintReact from "@eslint-react/eslint-plugin";
+{% endif -%}
 import js from "@eslint/js";
+{% if frontend == 'react' -%}
+import jsxA11y from "eslint-plugin-jsx-a11y-x";
+import reactHooks from "eslint-plugin-react-hooks";
+{% endif -%}
 import sonarjs from "eslint-plugin-sonarjs";
 import tseslint from "typescript-eslint";
 
@@ -46,7 +53,7 @@ const noHiddenInputs = [
 ];
 
 export default tseslint.config(
-  { ignores: ["node_modules/", "dist/", "coverage/", "*.config.*", ".dependency-cruiser.cjs"] },
+  { ignores: ["node_modules/", "dist/", "coverage/", "playwright-report*/", "test-results/", "*.config.*", ".dependency-cruiser.cjs"] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
@@ -128,7 +135,23 @@ export default tseslint.config(
   },
   {
     // Tests read best as one flat list of cases.
-    files: ["**/*.test.ts", "tests/**"],
+    files: ["**/*.test.ts", "**/*.test.tsx", "tests/**", "e2e/**", "e2e-ui/**"],
     rules: { "max-lines-per-function": "off", "max-lines": "off", "sonarjs/no-duplicate-string": "off" },
   },
+{%- if frontend == 'react' %}
+  {
+    // UI adapter (ADR 0005): React correctness, hooks rules and accessibility (jsx-a11y strict).
+    files: ["src/ui/**/*.tsx"],
+    ...eslintReact.configs["recommended-type-checked"],
+  },
+  {
+    files: ["src/ui/**/*.tsx"],
+    plugins: { "react-hooks": reactHooks },
+    rules: {
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "error",
+    },
+  },
+  { files: ["src/ui/**/*.tsx"], ...jsxA11y.configs.strict },
+{%- endif %}
 );

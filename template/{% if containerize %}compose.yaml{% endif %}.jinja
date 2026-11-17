@@ -59,6 +59,20 @@ services:
       interval: 2s
       retries: 30
 {%- endif %}
+{%- if frontend != 'none' %}
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: {{ project_name | lower }}-web:local
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: [/tmp]
+    # Published on the host's loopback only.
+    ports: ["127.0.0.1:8081:8080"]
+{%- endif %}
 {%- if 'postgres' in datastores %}
 
 volumes:

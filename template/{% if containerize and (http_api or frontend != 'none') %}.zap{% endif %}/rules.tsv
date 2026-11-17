@@ -8,3 +8,5 @@
 10037	FAIL	(Server Leaks Information via "X-Powered-By" HTTP Response Header Field(s))
 # The API sends Cache-Control: no-store on purpose (responses may contain export data).
 10049	IGNORE	(Non-Storable Content)
+# Informational only: suggests the Ajax spider for JavaScript apps; the UI flows are covered by Playwright.
+10109	IGNORE	(Modern Web Application)
