@@ -83,6 +83,7 @@ frontend:
   choices:
     None: none
     React (Vite): react
+    Vue (Vite): vue
   default: none
 
 # ---------- computed values (never asked) ----------

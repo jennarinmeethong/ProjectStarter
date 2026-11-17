@@ -3,8 +3,10 @@
     "target": "ES2023",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-{%- if frontend == 'react' %}
+{%- if frontend in ['react', 'vue'] %}
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
+{%- endif %}
+{%- if frontend == 'react' %}
     "jsx": "react-jsx",
 {%- endif %}
     "strict": true,
