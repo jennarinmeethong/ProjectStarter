@@ -7,6 +7,7 @@ src = ["src", "tests"]
 select = [
     "E", "W", "F",   # pycodestyle, pyflakes
     "I",             # import order
+    "N",             # PEP 8 naming
     "B",             # bugbear
     "UP",            # modern syntax
     "ANN",           # type annotations everywhere
@@ -14,11 +15,49 @@ select = [
     "RUF",           # incl. RUF100 unused noqa
     "SIM", "PT", "DTZ",
     "TID",           # banned APIs below
+    # Design rules (docs/adr/0002-design-rules.md)
+    "C90",           # SRP: cyclomatic complexity
+    "PL",            # SRP: too many args/branches/statements/returns; magic values
+    "FBT",           # ISP: boolean flag parameters hide two responsibilities
+    "ARG",           # unused arguments = interface does not fit the caller
+    "SLF",           # encapsulation: no access to another object's private members
+    "RET", "PIE", "C4", "PERF",
+    "BLE", "TRY",    # no blind `except Exception`, raise specific errors
+    "S",             # bandit security checks
+    "T20",           # no print outside bootstrap
+    "ERA",           # no commented-out code
+    "PTH",           # pathlib over os.path
 ]
+ignore = [
+    "TRY003",        # short messages in built-in exceptions are fine
+]
+
+[lint.mccabe]
+max-complexity = 10
+
+[lint.pylint]
+max-args = 4
+max-branches = 10
+max-returns = 6
+max-statements = 40
 
 [lint.flake8-tidy-imports.banned-api]
 "time.sleep".msg = "No sleeps in product code: model the state or inject a scheduler port (docs/engineering/agent-principles.md #2)."
 "typing.cast".msg = "Do not cast to silence the type checker. Validate/decode the value at the boundary instead (docs/adr/0001-layered-architecture.md)."
+"datetime.datetime.now".msg = "No ambient clock outside adapters/bootstrap. Inject a Clock port and pass the time in (docs/adr/0002-design-rules.md #DIP)."
+"datetime.datetime.utcnow".msg = "No ambient clock outside adapters/bootstrap. Inject a Clock port and pass the time in (docs/adr/0002-design-rules.md #DIP)."
+"datetime.date.today".msg = "No ambient clock outside adapters/bootstrap. Inject a Clock port and pass the date in (docs/adr/0002-design-rules.md #DIP)."
+"random".msg = "No ambient randomness outside adapters/bootstrap. Inject a generator port; use hypothesis in tests (docs/adr/0002-design-rules.md #DIP)."
+"uuid.uuid4".msg = "No ambient id generation outside adapters/bootstrap. Inject an IdGenerator port (docs/adr/0002-design-rules.md #DIP)."
+"os.environ".msg = "Read configuration in bootstrap and pass it in as typed settings (docs/adr/0002-design-rules.md #DIP)."
+"os.getenv".msg = "Read configuration in bootstrap and pass it in as typed settings (docs/adr/0002-design-rules.md #DIP)."
+"subprocess".msg = "No I/O outside adapters. Define a port in application and implement it in adapters (docs/adr/0001-layered-architecture.md)."
+"socket".msg = "No I/O outside adapters. Define a port in application and implement it in adapters (docs/adr/0001-layered-architecture.md)."
+"sqlite3".msg = "No I/O outside adapters. Define a port in application and implement it in adapters (docs/adr/0001-layered-architecture.md)."
+"urllib.request".msg = "No I/O outside adapters. Define a port in application and implement it in adapters (docs/adr/0001-layered-architecture.md)."
+"http.client".msg = "No I/O outside adapters. Define a port in application and implement it in adapters (docs/adr/0001-layered-architecture.md)."
 
 [lint.per-file-ignores]
 "src/{{ package_name }}/adapters/**" = ["TID251"]
+"src/{{ package_name }}/bootstrap/**" = ["TID251", "T201"]
+"tests/**" = ["S101", "PLR2004", "SLF001"]

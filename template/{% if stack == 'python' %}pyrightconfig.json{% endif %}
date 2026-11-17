@@ -6,5 +6,10 @@
   "venv": ".venv",
   "enableTypeIgnoreComments": false,
   "reportUnnecessaryTypeIgnoreComment": "error",
-  "reportMissingTypeStubs": "error"
+  "reportMissingTypeStubs": "error",
+  "reportImplicitOverride": "error",
+  "reportImportCycles": "error",
+  "reportUninitializedInstanceVariable": "error",
+  "reportPropertyTypeMismatch": "error",
+  "reportShadowedImports": "error"
 }

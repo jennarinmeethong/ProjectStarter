@@ -1,0 +1,21 @@
+# Guardrail config (protected). Applies to the Domain and Application projects only (Directory.Build.props).
+# Hidden inputs and I/O make domain/application code non-deterministic and untestable.
+# Inject a port instead (docs/adr/0002-design-rules.md #DIP); Adapters and Bootstrap may use these APIs.
+P:System.DateTime.Now;No ambient clock in Domain/Application. Inject TimeProvider and pass the time in (docs/adr/0002-design-rules.md #DIP)
+P:System.DateTime.UtcNow;No ambient clock in Domain/Application. Inject TimeProvider and pass the time in (docs/adr/0002-design-rules.md #DIP)
+P:System.DateTime.Today;No ambient clock in Domain/Application. Inject TimeProvider and pass the date in (docs/adr/0002-design-rules.md #DIP)
+P:System.DateTimeOffset.Now;No ambient clock in Domain/Application. Inject TimeProvider and pass the time in (docs/adr/0002-design-rules.md #DIP)
+P:System.DateTimeOffset.UtcNow;No ambient clock in Domain/Application. Inject TimeProvider and pass the time in (docs/adr/0002-design-rules.md #DIP)
+T:System.Random;No ambient randomness in Domain/Application. Inject a generator port (docs/adr/0002-design-rules.md #DIP)
+M:System.Guid.NewGuid;No ambient id generation in Domain/Application. Inject an IdGenerator port (docs/adr/0002-design-rules.md #DIP)
+M:System.Environment.GetEnvironmentVariable(System.String);Read configuration in Bootstrap and pass typed options in (docs/adr/0002-design-rules.md #DIP)
+M:System.Threading.Thread.Sleep(System.Int32);No sleeps: model the state or inject a scheduler port (docs/engineering/agent-principles.md #2)
+M:System.Threading.Thread.Sleep(System.TimeSpan);No sleeps: model the state or inject a scheduler port (docs/engineering/agent-principles.md #2)
+M:System.Threading.Tasks.Task.Delay(System.Int32);No delays: model the state or inject TimeProvider (docs/engineering/agent-principles.md #2)
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan);No delays: model the state or inject TimeProvider (docs/engineering/agent-principles.md #2)
+M:System.Threading.Tasks.Task.Delay(System.Int32,System.Threading.CancellationToken);No delays: model the state or inject TimeProvider (docs/engineering/agent-principles.md #2)
+M:System.Threading.Tasks.Task.Delay(System.TimeSpan,System.Threading.CancellationToken);No delays: model the state or inject TimeProvider (docs/engineering/agent-principles.md #2)
+T:System.Console;No console I/O in Domain/Application. Return results; Bootstrap or an adapter presents them (docs/adr/0001-layered-architecture.md)
+T:System.IO.File;No file I/O in Domain/Application. Define a port in Application and implement it in Adapters (docs/adr/0001-layered-architecture.md)
+T:System.IO.Directory;No file I/O in Domain/Application. Define a port in Application and implement it in Adapters (docs/adr/0001-layered-architecture.md)
+T:System.Net.Http.HttpClient;No HTTP in Domain/Application. Define a port in Application and implement it in Adapters (docs/adr/0001-layered-architecture.md)

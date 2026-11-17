@@ -22,6 +22,7 @@
 | Type เข้มงวด | `tsconfig` strict + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` | pyright strict, ปิด `# type: ignore` | Nullable + TreatWarningsAsErrors + `latest-recommended` analyzers |
 | Lint + ห้ามทางหนี | typescript-eslint `strictTypeChecked`, `ban-ts-comment` | ruff (PGH, ANN, TID banned APIs) | .NET analyzers, `.editorconfig` |
 | Architecture | dependency-cruiser | import-linter (layers) | project references + NetArchTest |
+| Design rules (SOLID, ADR 0002) | complexity/size limits, exhaustive `switch`, ห้าม clock/random/env/I/O ใน domain+application, domain ไม่มี dependency | ruff (C90, PL, FBT, ARG, SLF, TRY, S, banned APIs), pyright `reportImplicitOverride` | code-metrics analyzers, BannedApiAnalyzers, naming rules, NetArchTest (sealed, ไม่มี I/O) |
 | Property test | fast-check | hypothesis | FsCheck |
 | Test runner | vitest | pytest | xUnit v3 (Microsoft.Testing.Platform) |
 

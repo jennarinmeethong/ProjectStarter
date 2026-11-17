@@ -2,6 +2,34 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
+const ADR_LAYERS = "docs/adr/0001-layered-architecture.md";
+const ADR_DESIGN = "docs/adr/0002-design-rules.md";
+
+const noCastThroughUnknown = {
+  selector: "TSAsExpression > TSAsExpression[typeAnnotation.type='TSUnknownKeyword']",
+  message: `Do not cast through \`unknown\`. Decode/validate the value at the boundary instead (${ADR_LAYERS}).`,
+};
+
+// Hidden inputs make domain/application code non-deterministic and untestable (DIP: inject them as ports).
+const noHiddenInputs = [
+  {
+    selector: "CallExpression[callee.object.name='Date'][callee.property.name='now']",
+    message: `No ambient clock in domain/application. Inject a Clock port and pass the time in (${ADR_DESIGN} #DIP).`,
+  },
+  {
+    selector: "NewExpression[callee.name='Date'][arguments.length=0]",
+    message: `No ambient clock in domain/application. Inject a Clock port and pass the time in (${ADR_DESIGN} #DIP).`,
+  },
+  {
+    selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']",
+    message: `No ambient randomness in domain/application. Inject a random/id generator port (${ADR_DESIGN} #DIP).`,
+  },
+  {
+    selector: "CallExpression[callee.object.name='crypto'][callee.property.name='randomUUID']",
+    message: `No ambient id generation in domain/application. Inject an IdGenerator port (${ADR_DESIGN} #DIP).`,
+  },
+];
+
 export default tseslint.config(
   { ignores: ["node_modules/", "dist/", "coverage/", "*.config.*", ".dependency-cruiser.cjs"] },
   js.configs.recommended,
@@ -14,24 +42,46 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/ban-ts-comment": ["error", { "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true }],
       "@typescript-eslint/no-explicit-any": "error",
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "TSAsExpression > TSAsExpression[typeAnnotation.type='TSUnknownKeyword']",
-          message: "Do not cast through `unknown`. Decode/validate the value at the boundary instead (docs/adr/0001-layered-architecture.md).",
-        },
-      ],
+      "no-restricted-syntax": ["error", noCastThroughUnknown],
+
+      // Single responsibility: when a unit outgrows these limits, split it by reason to change (ADR 0002 #SRP).
+      complexity: ["error", 10],
+      "max-depth": ["error", 3],
+      "max-params": ["error", 4],
+      "max-lines-per-function": ["error", { max: 60, skipBlankLines: true, skipComments: true }],
+      "max-lines": ["error", { max: 300, skipBlankLines: true, skipComments: true }],
+
+      // Open/closed + Liskov: every variant of a union is handled; adding a variant breaks the build, not prod.
+      "@typescript-eslint/switch-exhaustiveness-check": ["error", { considerDefaultExhaustiveForUnions: false }],
+
+      // Explicit contracts at module boundaries; immutability by default.
+      "@typescript-eslint/explicit-module-boundary-types": "error",
+      "@typescript-eslint/prefer-readonly": "error",
+      "no-param-reassign": ["error", { props: true }],
+      eqeqeq: ["error", "always"],
+      "no-implicit-coercion": "error",
+      "prefer-const": "error",
     },
   },
   {
     // Timers in product code usually paper over ordering bugs. Use an explicit scheduler port instead.
     files: ["src/domain/**", "src/application/**"],
+    ignores: ["**/*.test.ts"],
     rules: {
       "no-restricted-globals": [
         "error",
         { name: "setTimeout", message: "No timers in domain/application. Model the state or inject a scheduler port (docs/engineering/agent-principles.md #2)." },
         { name: "setInterval", message: "No timers in domain/application. Inject a scheduler port instead." },
+        { name: "process", message: `No environment/process access in domain/application. Read config in bootstrap and pass it in (${ADR_DESIGN} #DIP).` },
+        { name: "fetch", message: `No I/O in domain/application. Define a port in application and implement it in adapters (${ADR_LAYERS}).` },
       ],
+      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noHiddenInputs],
+      "no-console": ["error"],
     },
+  },
+  {
+    // Tests read best as one flat list of cases.
+    files: ["**/*.test.ts"],
+    rules: { "max-lines-per-function": "off", "max-lines": "off" },
   },
 );
