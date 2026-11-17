@@ -1,0 +1,24 @@
+import type { NextConfig } from "next";
+
+// Security headers on every response; the CSP (with a per-request nonce) is set in src/proxy.ts.
+const securityHeaders = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "Referrer-Policy", value: "no-referrer" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+  { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
+];
+
+const config: NextConfig = {
+  output: "standalone",
+  poweredByHeader: false,
+  // Next.js rewrites the tsconfig it uses; keep that out of the protected tsconfig.json.
+  typescript: { tsconfigPath: "tsconfig.next.json" },
+  headers() {
+    return Promise.resolve([{ source: "/:path*", headers: securityHeaders }]);
+  },
+};
+
+export default config;

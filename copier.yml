@@ -84,6 +84,7 @@ frontend:
     None: none
     React (Vite): react
     Vue (Vite): vue
+    Next.js: nextjs
   default: none
 
 # ---------- computed values (never asked) ----------
@@ -126,7 +127,7 @@ cmd:
     test_single: npx vitest run path/to/file.test.ts
     fast: npm run verify:fast
     verify: npm run verify
-    audit: npm audit --audit-level=high
+    audit: node ci/npm-audit.mjs
     {%- if datastores %}
     test_integration: npm run test:integration
     {%- endif %}
@@ -217,7 +218,7 @@ stk:
   default: |
     {%- if stack == 'typescript' %}
     language: TypeScript
-    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api or frontend != 'none' %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .audit-exceptions.json, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api or frontend != 'none' %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
     escapes_display: "`eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `as any`, `as unknown as`, `.skip`/`.only`"
     ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as', 'NOSONAR']
     src_globs: ['*.ts', '*.tsx']

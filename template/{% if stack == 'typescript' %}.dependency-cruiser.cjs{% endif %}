@@ -55,7 +55,7 @@ module.exports = {
       name: "ui-not-to-datastore-drivers",
       comment: "The UI talks to use cases, never to datastores directly (ADR 0005).",
       severity: "error",
-      from: { path: "^src/ui/" },
+      from: { path: "^src/(ui|app)/" },
       to: { path: "^src/adapters/(postgres|redis)-" },
     },
     { name: "no-circular", severity: "error", from: {}, to: { circular: true } },

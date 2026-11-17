@@ -11,6 +11,7 @@ tests
 {%- if stack == 'typescript' %}
 node_modules
 dist
+.next
 coverage
 **/*.test.ts
 {%- elif stack == 'python' %}
@@ -21,6 +22,7 @@ coverage
 {%- elif stack == 'go' %}
 bin
 dist
+.next
 *.test
 coverage.out
 {%- elif stack == 'rust' %}

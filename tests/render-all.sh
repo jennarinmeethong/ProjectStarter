@@ -38,6 +38,7 @@ seeded() { # seeded <label> <file> <text-to-append> <command...>: append, expect
 
 seeded_new() { # seeded_new <label> <new-file> <content> <command...>: create the file, expect the command to fail, delete it
   local file=$2
+  mkdir -p "$(dirname "$file")"
   printf '%b' "$3" > "$file"
   expect_fail "$1" "${@:4}"
   rm -f "$file"
@@ -124,9 +125,11 @@ frontend_checks() { # frontend_checks <framework>: a separate TypeScript render 
   verify "$fw: web image smoke (non-root, read-only, /healthz)" \
     "docker build -q -f Dockerfile.web -t $image . && bash ci/dast.sh $image --smoke && $(declare -f image_runs_as_non_root); image_runs_as_non_root $image"
   verify "$fw: zap baseline of the web UI (from /)" "DAST_PATH=/ bash ci/dast.sh $image"
-  sed -i '/Content-Security-Policy/d' nginx.conf
+  local csp_file=nginx.conf csp_sed='/Content-Security-Policy/d'
+  if [ "$fw" = nextjs ]; then csp_file=src/proxy.ts csp_sed='/response.headers.set("Content-Security-Policy", csp);/d'; fi
+  sed -i "$csp_sed" "$csp_file"
   expect_fail "$fw: zap: missing Content-Security-Policy" bash -c "docker build -q -f Dockerfile.web -t $image-seed . >/dev/null && DAST_PATH=/ bash ci/dast.sh $image-seed"
-  git checkout -q -- nginx.conf
+  git checkout -q -- "$csp_file"
   unset MSYS_NO_PATHCONV
   "frontend_seeds_$fw"
   popd >/dev/null || return
@@ -148,6 +151,16 @@ defineProps<{ html: string }>();
 <template>
   <div v-html="html" />
 </template>
+' npm run lint
+}
+
+frontend_seeds_nextjs() {
+  frontend_seeds_react
+  seeded_new "nextjs: synchronous script (@next/next)" src/app/legacy/page.tsx 'import type { JSX } from "react";
+
+export default function Legacy(): JSX.Element {
+  return <script src="/legacy.js" />;
+}
 ' npm run lint
 }
 
@@ -241,11 +254,14 @@ for stack in "${stacks[@]}"; do
       npm install --no-audit --no-fund >/dev/null 2>&1
       verify "npm run verify" "npm run verify"
       # Dependency audit: clean on the render, rejects a known-vulnerable package.
-      verify "npm audit" "npm audit --audit-level=high"
+      verify "npm audit (ci/npm-audit.mjs)" "node ci/npm-audit.mjs"
       cp package.json package-lock.json "$work/"
       npm install --no-audit --no-fund lodash@4.17.20 >/dev/null 2>&1
-      expect_fail "npm audit: vulnerable dependency" npm audit --audit-level=high
+      expect_fail "npm audit: vulnerable dependency" node ci/npm-audit.mjs
       cp "$work/package.json" "$work/package-lock.json" . && npm install --no-audit --no-fund >/dev/null 2>&1
+      sed -i 's/"expires": "[0-9-]*"/"expires": "2000-01-01"/' .audit-exceptions.json
+      expect_fail "npm audit: expired exception" node ci/npm-audit.mjs
+      git checkout -q -- .audit-exceptions.json
       # Container and secret scanning (docs/security/owasp.md).
       container_checks typescript
       secret_checks
@@ -269,6 +285,7 @@ for stack in "${stacks[@]}"; do
       # Frontends (ADR 0005), each in its own render.
       frontend_checks react
       frontend_checks vue
+      frontend_checks nextjs
       printf '\nimport { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";\nexport const leak = new InMemoryArtifactStore() as any;\n' >> src/domain/export-job.ts
       expect_fail "eslint: as any" npm run lint
       expect_fail "depcruise: domain -> adapters" npm run arch

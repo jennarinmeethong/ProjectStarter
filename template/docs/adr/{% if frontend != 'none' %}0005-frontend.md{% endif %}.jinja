@@ -9,7 +9,7 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 
 ## การตัดสินใจ
 1. **UI เป็น driving adapter:** component รับ input แล้วเรียก use case เดียวกับที่ CLI/HTTP ใช้ domain และ application ห้าม import framework ของ UI
-2. **Composition root ของเบราว์เซอร์มีที่เดียว:** {% if frontend == 'react' %}`src/ui/main.tsx`{% elif frontend == 'vue' %}`src/ui/main.ts`{% endif %} เป็นไฟล์เดียวที่เลือก adapter (เช่น `LocalStorageArtifactStore`) แล้ว inject เข้า component
+2. **Composition root ของเบราว์เซอร์มีที่เดียว:** {% if frontend == 'react' %}`src/ui/main.tsx`{% elif frontend == 'vue' %}`src/ui/main.ts`{% elif frontend == 'nextjs' %}`src/app/page.tsx` (client component){% endif %} เป็นไฟล์เดียวที่เลือก adapter (เช่น `LocalStorageArtifactStore`) แล้ว inject เข้า component
 3. **Adapter ฝั่งเบราว์เซอร์ผ่าน contract test เดียวกัน** กับ adapter อื่นของ port (`tests/contracts/artifact-store.ts`)
 4. **Accessibility เป็นเกณฑ์ ไม่ใช่ข้อแนะนำ:** lint ({% if frontend == 'vue' %}`vuejs-accessibility`{% else %}`jsx-a11y` strict{% endif %}) ตอนเขียน และ axe (WCAG 2.1 AA) ในเบราว์เซอร์จริงทุก PR
 5. **ไม่มี inline script/style:** build ไม่ใส่ inline script ทำให้ CSP เข้มได้โดยไม่ต้องมี `'unsafe-inline'`
@@ -19,17 +19,19 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 |---|---|
 | framework อยู่นอก domain/application | dependency-cruiser `web-frameworks-only-in-adapters` |
 | UI ไม่เรียก datastore ตรง | dependency-cruiser `ui-not-to-datastore-drivers` |
-{%- if frontend == 'react' %}
+{%- if frontend in ['react', 'nextjs'] %}
 | React ถูกต้อง, hooks, accessibility | ESLint `@eslint-react` (recommended-type-checked), `react-hooks` (rules-of-hooks, exhaustive-deps), `jsx-a11y-x` strict |
 | พฤติกรรมของ component | Vitest + Testing Library (`src/ui/*.test.tsx`, jsdom) |
 {%- elif frontend == 'vue' %}
+| (Next.js) กฎของ framework | `@next/eslint-plugin-next` recommended + core-web-vitals; tsconfig ที่ Next.js แก้ได้แยกเป็น `tsconfig.next.json` เพื่อไม่แตะ `tsconfig.json` ที่ protected |
+| (Next.js) CSP ที่ไม่ต้องมี `'unsafe-inline'` | `src/proxy.ts` สร้าง nonce ต่อ request และ Next.js ใส่ nonce ให้ script ของตัวเอง; หน้าเว็บ render แบบ dynamic |
 | Vue ถูกต้อง, accessibility, ไม่มี `v-html` | ESLint `eslint-plugin-vue` (flat/recommended, `vue/no-v-html` เป็น error), `eslint-plugin-vuejs-accessibility`; `vue-tsc` ตรวจ type ใน `.vue` |
 | พฤติกรรมของ component | Vitest + Vue Test Utils (`src/ui/*.test.ts`, jsdom) |
 {%- endif %}
 | flow ของผู้ใช้และ accessibility ในเบราว์เซอร์ | Playwright (Chromium) + axe ใน `e2e-ui/` — `{{ cmd.test_ui }}`, job `ui` |
 {%- if containerize %}
-| header ของหน้าเว็บที่ deploy จริง (CSP, X-Frame-Options, COOP/COEP, Permissions-Policy) | `nginx.conf` + OWASP ZAP baseline ที่เริ่มสแกนจาก `/` (`DAST_PATH=/ bash ci/dast.sh <image>`), job `dast` |
-| image ของเว็บไม่รันเป็น root | `Dockerfile.web` (nginx-unprivileged, UID 101) + hadolint + `ci/check-dockerfile.sh` |
+| header ของหน้าเว็บที่ deploy จริง (CSP, X-Frame-Options, COOP/COEP, Permissions-Policy) | {% if frontend == 'nextjs' %}`src/proxy.ts` + `next.config.ts`{% else %}`nginx.conf`{% endif %} + OWASP ZAP baseline ที่เริ่มสแกนจาก `/` (`DAST_PATH=/ bash ci/dast.sh <image>`), job `dast` |
+| image ของเว็บไม่รันเป็น root | `Dockerfile.web` ({% if frontend == 'nextjs' %}Next.js standalone บน `node:24-slim`, UID 1000{% else %}nginx-unprivileged, UID 101{% endif %}) + hadolint + `ci/check-dockerfile.sh` |
 {%- endif %}
 
 ## สิ่งที่ยังไม่ครอบคลุม
