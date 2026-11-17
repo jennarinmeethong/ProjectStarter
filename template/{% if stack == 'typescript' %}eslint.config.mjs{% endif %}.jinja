@@ -8,6 +8,10 @@ import jsxA11y from "eslint-plugin-jsx-a11y-x";
 import reactHooks from "eslint-plugin-react-hooks";
 {% endif -%}
 import sonarjs from "eslint-plugin-sonarjs";
+{% if frontend == 'vue' -%}
+import pluginVue from "eslint-plugin-vue";
+import vueA11y from "eslint-plugin-vuejs-accessibility";
+{% endif -%}
 import tseslint from "typescript-eslint";
 
 const ADR_LAYERS = "docs/adr/0001-layered-architecture.md";
@@ -153,5 +157,19 @@ export default tseslint.config(
     },
   },
   { files: ["src/ui/**/*.tsx"], ...jsxA11y.configs.strict },
+{%- endif %}
+{%- if frontend == 'vue' %}
+  // UI adapter (ADR 0005): Vue correctness and accessibility. Templates are linted without type information;
+  // logic belongs in the use cases, so components stay thin.
+  ...pluginVue.configs["flat/recommended"].map((config) => ({ ...config, files: ["src/ui/**/*.vue"] })),
+  ...vueA11y.configs["flat/recommended"].map((config) => ({ ...config, files: ["src/ui/**/*.vue"] })),
+  {
+    files: ["src/ui/**/*.vue"],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      parserOptions: { parser: tseslint.parser, extraFileExtensions: [".vue"], projectService: false },
+    },
+    rules: { ...tseslint.configs.disableTypeChecked.rules, "vue/no-v-html": "error" },
+  },
 {%- endif %}
 );

@@ -2,6 +2,7 @@
 {%- if http_api %}{% set _ = deps.append('"@hono/node-server": "^2.1.0"') %}{% set _ = deps.append('"hono": "^4.13.0"') %}{% endif -%}
 {%- if 'postgres' in datastores %}{% set _ = deps.append('"pg": "^8.20.0"') %}{% endif -%}
 {%- if frontend == 'react' %}{% set _ = deps.append('"react": "^19.2.0"') %}{% set _ = deps.append('"react-dom": "^19.2.0"') %}{% endif -%}
+{%- if frontend == 'vue' %}{% set _ = deps.append('"vue": "^3.5.0"') %}{% endif -%}
 {%- if 'redis' in datastores %}{% set _ = deps.append('"redis": "^6.1.0"') %}{% endif -%}
 {%- set excludes = [] -%}
 {%- if datastores %}{% set _ = excludes.append(' --exclude \\"**/*.int.test.ts\\"') %}{% endif -%}
@@ -15,12 +16,12 @@
   "engines": { "node": ">=22.12" },
   "scripts": {
     "start": "tsx src/bootstrap/main.ts",
-{%- if frontend == 'react' %}
+{%- if frontend in ['react', 'vue'] %}
     "dev": "vite",
     "build": "vite build",
     "test:ui": "playwright test --config playwright.ui.config.ts",
 {%- endif %}
-    "typecheck": "tsc",
+    "typecheck": "{{ 'vue-tsc' if frontend == 'vue' else 'tsc' }}",
     "lint": "eslint --max-warnings=0 .",
     "arch": "depcruise src --config .dependency-cruiser.cjs",
     "test": "vitest run{{ excludes | join('') }}",
@@ -39,8 +40,10 @@
   },
 {%- endif %}
   "devDependencies": {
-{%- if frontend == 'react' %}
+{%- if frontend != 'none' %}
     "@axe-core/playwright": "^4.11.0",
+{%- endif %}
+{%- if frontend == 'react' %}
     "@eslint-react/eslint-plugin": "^5.0.0",
 {%- endif %}
     "@eslint/js": "^10.0.1",
@@ -66,6 +69,10 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.0",
 {%- endif %}
+{%- if frontend == 'vue' %}
+    "@vitejs/plugin-vue": "^6.0.0",
+    "@vue/test-utils": "^2.4.0",
+{%- endif %}
     "dependency-cruiser": "^18.8.0",
     "eslint": "^10.15.0",
 {%- if frontend == 'react' %}
@@ -73,16 +80,25 @@
     "eslint-plugin-react-hooks": "^7.0.0",
 {%- endif %}
     "eslint-plugin-sonarjs": "~4.2.2",
+{%- if frontend == 'vue' %}
+    "eslint-plugin-vue": "^10.0.0",
+    "eslint-plugin-vuejs-accessibility": "^2.4.0",
+{%- endif %}
     "fast-check": "^4.10.2",
-{%- if frontend == 'react' %}
+{%- if frontend == 'vue' %}
+    "globals": "^16.0.0",
+{%- endif %}
+{%- if frontend in ['react', 'vue'] %}
     "jsdom": "^27.0.0",
 {%- endif %}
     "tsx": "^4.23.15",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.73.0",
-{%- if frontend == 'react' %}
+{%- if frontend in ['react', 'vue'] %}
     "vite": "^8.0.0",
 {%- endif %}
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.0"{% if frontend == 'vue' %},
+    "vue-eslint-parser": "^10.0.0",
+    "vue-tsc": "^3.0.0"{% endif %}
   }
 }

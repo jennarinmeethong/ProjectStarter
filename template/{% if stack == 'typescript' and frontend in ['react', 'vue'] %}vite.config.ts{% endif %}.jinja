@@ -1,8 +1,8 @@
-import react from "@vitejs/plugin-react";
+import {{ frontend }} from "@vitejs/plugin-{{ frontend }}";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [{{ frontend }}()],
   // No inline scripts in the built HTML, so the strict Content-Security-Policy (nginx.conf) needs no exceptions.
   build: { outDir: "dist", modulePreload: { polyfill: false } },
 });

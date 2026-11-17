@@ -132,6 +132,25 @@ frontend_checks() { # frontend_checks <framework>: a separate TypeScript render 
   popd >/dev/null || return
 }
 
+frontend_seeds_vue() {
+  seeded "vue: framework imported in application" src/application/complete-export.ts '
+import { ref } from "vue";
+export const state = ref;
+' npm run arch
+  seeded_new "vue: image without alt text (vuejs-accessibility)" src/ui/Logo.vue '<template>
+  <img src="/logo.png">
+</template>
+' npm run lint
+  seeded_new "vue: v-html (XSS)" src/ui/Raw.vue '<script setup lang="ts">
+defineProps<{ html: string }>();
+</script>
+
+<template>
+  <div v-html="html" />
+</template>
+' npm run lint
+}
+
 frontend_seeds_react() {
   seeded "react: framework imported in application" src/application/complete-export.ts '\nimport { useState } from "react";\nexport const hook = useState;\n' npm run arch
   seeded "react: image without alt text (jsx-a11y)" src/ui/App.tsx '\nexport function Logo(): JSX.Element {\n  return <img src="/logo.png" />;\n}\n' npm run lint
@@ -249,6 +268,7 @@ for stack in "${stacks[@]}"; do
       seeded "depcruise: node built-in in application" src/application/complete-export.ts '\nimport { readFileSync } from "node:fs";\nexport const read = readFileSync;\n' npm run arch
       # Frontends (ADR 0005), each in its own render.
       frontend_checks react
+      frontend_checks vue
       printf '\nimport { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";\nexport const leak = new InMemoryArtifactStore() as any;\n' >> src/domain/export-job.ts
       expect_fail "eslint: as any" npm run lint
       expect_fail "depcruise: domain -> adapters" npm run arch

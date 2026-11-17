@@ -9,9 +9,9 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 
 ## การตัดสินใจ
 1. **UI เป็น driving adapter:** component รับ input แล้วเรียก use case เดียวกับที่ CLI/HTTP ใช้ domain และ application ห้าม import framework ของ UI
-2. **Composition root ของเบราว์เซอร์มีที่เดียว:** {% if frontend == 'react' %}`src/ui/main.tsx`{% endif %} เป็นไฟล์เดียวที่เลือก adapter (เช่น `LocalStorageArtifactStore`) แล้ว inject เข้า component
+2. **Composition root ของเบราว์เซอร์มีที่เดียว:** {% if frontend == 'react' %}`src/ui/main.tsx`{% elif frontend == 'vue' %}`src/ui/main.ts`{% endif %} เป็นไฟล์เดียวที่เลือก adapter (เช่น `LocalStorageArtifactStore`) แล้ว inject เข้า component
 3. **Adapter ฝั่งเบราว์เซอร์ผ่าน contract test เดียวกัน** กับ adapter อื่นของ port (`tests/contracts/artifact-store.ts`)
-4. **Accessibility เป็นเกณฑ์ ไม่ใช่ข้อแนะนำ:** lint (`jsx-a11y` strict) ตอนเขียน และ axe (WCAG 2.1 AA) ในเบราว์เซอร์จริงทุก PR
+4. **Accessibility เป็นเกณฑ์ ไม่ใช่ข้อแนะนำ:** lint ({% if frontend == 'vue' %}`vuejs-accessibility`{% else %}`jsx-a11y` strict{% endif %}) ตอนเขียน และ axe (WCAG 2.1 AA) ในเบราว์เซอร์จริงทุก PR
 5. **ไม่มี inline script/style:** build ไม่ใส่ inline script ทำให้ CSP เข้มได้โดยไม่ต้องมี `'unsafe-inline'`
 
 ## การบังคับใช้
@@ -22,6 +22,9 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 {%- if frontend == 'react' %}
 | React ถูกต้อง, hooks, accessibility | ESLint `@eslint-react` (recommended-type-checked), `react-hooks` (rules-of-hooks, exhaustive-deps), `jsx-a11y-x` strict |
 | พฤติกรรมของ component | Vitest + Testing Library (`src/ui/*.test.tsx`, jsdom) |
+{%- elif frontend == 'vue' %}
+| Vue ถูกต้อง, accessibility, ไม่มี `v-html` | ESLint `eslint-plugin-vue` (flat/recommended, `vue/no-v-html` เป็น error), `eslint-plugin-vuejs-accessibility`; `vue-tsc` ตรวจ type ใน `.vue` |
+| พฤติกรรมของ component | Vitest + Vue Test Utils (`src/ui/*.test.ts`, jsdom) |
 {%- endif %}
 | flow ของผู้ใช้และ accessibility ในเบราว์เซอร์ | Playwright (Chromium) + axe ใน `e2e-ui/` — `{{ cmd.test_ui }}`, job `ui` |
 {%- if containerize %}
