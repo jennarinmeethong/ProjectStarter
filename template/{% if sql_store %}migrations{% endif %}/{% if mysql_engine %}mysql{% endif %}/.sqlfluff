@@ -1,0 +1,3 @@
+# Guardrail config (protected). MySQL/MariaDB dialect for migrations/mysql (overrides the root .sqlfluff).
+[sqlfluff]
+dialect = mysql

@@ -6,6 +6,9 @@
 pub mod http;
 {%- endif %}
 pub mod in_memory;
+{%- if mysql_engine %}
+pub mod mysql;
+{%- endif %}
 {%- if 'postgres' in datastores %}
 pub mod postgres;
 {%- endif %}

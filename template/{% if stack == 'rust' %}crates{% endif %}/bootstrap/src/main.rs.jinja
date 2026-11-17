@@ -6,17 +6,22 @@ use std::process::ExitCode;
 
 {% if http_api %}use adapters::http::router;
 {% endif %}use adapters::in_memory::InMemoryArtifactStore;
+{%- if mysql_engine %}
+use adapters::mysql::MySqlArtifactStore;
+{%- endif %}
 {%- if 'postgres' in datastores %}
 use adapters::postgres::PostgresArtifactStore;
 {%- endif %}
 {%- if 'redis' in datastores %}
 use adapters::redis_store::RedisArtifactStore;
 {%- endif %}
+{%- if not http_api %}
+use application::complete_export;
+{%- endif %}
 {%- if datastores %}
 use application::{ArtifactStore, PortError};
 {%- endif %}
 {%- if not http_api %}
-use application::complete_export;
 use domain::{Queued, start};
 {%- endif %}
 
@@ -28,6 +33,9 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 #[derive(Clone)]
 enum AnyStore {
     InMemory(InMemoryArtifactStore),
+{%- if mysql_engine %}
+    MySql(MySqlArtifactStore),
+{%- endif %}
 {%- if 'postgres' in datastores %}
     Postgres(PostgresArtifactStore),
 {%- endif %}
@@ -40,6 +48,9 @@ impl ArtifactStore for AnyStore {
     async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
         match self {
             Self::InMemory(store) => store.save(job_id, content).await,
+{%- if mysql_engine %}
+            Self::MySql(store) => store.save(job_id, content).await,
+{%- endif %}
 {%- if 'postgres' in datastores %}
             Self::Postgres(store) => store.save(job_id, content).await,
 {%- endif %}
@@ -55,6 +66,11 @@ async fn open_store() -> Result<AnyStore, BoxError> {
 {%- if 'postgres' in datastores %}
     if let Ok(url) = std::env::var("DATABASE_URL") {
         return Ok(AnyStore::Postgres(PostgresArtifactStore::connect(&url).await?));
+    }
+{%- endif %}
+{%- if mysql_engine %}
+    if let Ok(url) = std::env::var("MYSQL_URL") {
+        return Ok(AnyStore::MySql(MySqlArtifactStore::connect(&url).await?));
     }
 {%- endif %}
 {%- if 'redis' in datastores %}

@@ -21,8 +21,12 @@ impl common::ReadBack for PostgresArtifactStore {
 /// migrations/*.sql in file-name order, as the image's init hook (and compose.yaml) applies them.
 fn migrations() -> Result<String, PortError> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
-    let mut files =
-        std::fs::read_dir(dir)?.map(|entry| entry.map(|e| e.path())).collect::<Result<Vec<_>, _>>()?;
+    let mut files = std::fs::read_dir(dir)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "sql"))
+        .collect::<Vec<_>>();
     files.sort();
     let scripts = files.iter().map(std::fs::read_to_string).collect::<Result<Vec<_>, _>>()?;
     Ok(scripts.join("\n"))

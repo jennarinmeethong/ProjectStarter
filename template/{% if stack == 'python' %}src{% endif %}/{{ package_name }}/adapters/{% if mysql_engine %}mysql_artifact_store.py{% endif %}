@@ -1,0 +1,55 @@
+"""ArtifactStore on MySQL or MariaDB.
+
+Schema: migrations/mysql/. Queries are always parameterised (%s), never formatted.
+"""
+
+from __future__ import annotations
+
+from typing import Self
+from urllib.parse import unquote, urlparse
+
+import pymysql
+from pymysql.connections import Connection
+from pymysql.cursors import Cursor
+
+UPSERT_SQL = (
+    "INSERT INTO export_artifacts (artifact_key, job_id, body) VALUES (%s, %s, %s) "
+    "ON DUPLICATE KEY UPDATE body = VALUES(body)"
+)
+READ_SQL = "SELECT body FROM export_artifacts WHERE artifact_key = %s"
+
+
+class MySqlArtifactStore:
+    def __init__(self, connection: Connection[Cursor]) -> None:
+        self._connection = connection
+
+    @classmethod
+    def from_url(cls, url: str) -> Self:
+        """Connects to mysql://user:pass@host:port/db."""
+        parts = urlparse(url)
+        return cls(
+            pymysql.connect(
+                host=parts.hostname or "localhost",
+                port=parts.port or 3306,
+                user=unquote(parts.username or ""),
+                password=unquote(parts.password or ""),
+                database=parts.path.lstrip("/"),
+                charset="utf8mb4",
+                autocommit=True,
+            )
+        )
+
+    def save(self, job_id: str, content: str) -> str:
+        key = f"exports/{job_id}.csv"
+        with self._connection.cursor() as cursor:
+            cursor.execute(UPSERT_SQL, (key, job_id, content))
+        return key
+
+    def read(self, key: str) -> str | None:
+        with self._connection.cursor() as cursor:
+            cursor.execute(READ_SQL, (key,))
+            row = cursor.fetchone()
+        return None if row is None else str(row[0])
+
+    def close(self) -> None:
+        self._connection.close()

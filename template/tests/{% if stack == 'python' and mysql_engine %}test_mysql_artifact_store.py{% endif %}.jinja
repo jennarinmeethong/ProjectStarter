@@ -1,0 +1,56 @@
+"""Integration test: needs Docker.
+
+Run with `uv run pytest -m integration` (deselected by default).
+"""
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import pymysql
+import pytest
+from testcontainers.community.mysql import MySqlContainer
+from tests.artifact_store_contract import ArtifactStoreContract, StoreUnderTest
+
+from {{ package_name }}.adapters.mysql_artifact_store import MySqlArtifactStore
+
+pytestmark = pytest.mark.integration
+
+MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations" / "mysql"
+
+
+def statements(sql: str) -> list[str]:
+    """Splits a migration into statements; PyMySQL runs one statement per call."""
+    code = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+    return [part.strip() for part in code.split(";") if part.strip()]
+
+
+@pytest.fixture(scope="module")
+def database_url() -> Iterator[str]:
+    image = "{{ 'mysql:8.4' if mysql_engine == 'mysql' else 'mariadb:11.8' }}"
+    with MySqlContainer(image, username="app", password="app-test-only", dbname="app") as mysql:
+        host = mysql.get_container_host_ip()
+        port = int(mysql.get_exposed_port(3306))
+        # Same order the image's init hook (and compose.yaml) uses: sorted file names.
+        with (
+            pymysql.connect(
+                host=host,
+                port=port,
+                user="app",
+                password="app-test-only",
+                database="app",
+                autocommit=True,
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
+            for migration in sorted(MIGRATIONS.glob("*.sql")):
+                for statement in statements(migration.read_text(encoding="utf-8")):
+                    cursor.execute(statement)
+        yield f"mysql://app:app-test-only@{host}:{port}/app"
+
+
+class TestMySqlArtifactStore(ArtifactStoreContract):
+    @pytest.fixture
+    def subject(self, database_url: str) -> Iterator[StoreUnderTest]:
+        store = MySqlArtifactStore.from_url(database_url)
+        yield StoreUnderTest(store=store, read=store.read)
+        store.close()

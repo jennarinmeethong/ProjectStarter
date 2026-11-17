@@ -39,24 +39,3 @@ public sealed class PostgresArtifactStoreTests(PostgresFixture fixture) : Artifa
     protected override StoreUnderTest Subject =>
         new(fixture.Store, key => fixture.Store.ReadAsync(key, TestContext.Current.CancellationToken));
 }
-
-internal static class RepoPaths
-{
-    /// <summary>The repository's migrations/ folder, found by walking up from the test binaries.</summary>
-    public static string Migrations
-    {
-        get
-        {
-            for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-            {
-                var candidate = Path.Combine(dir.FullName, "migrations");
-                if (Directory.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            throw new DirectoryNotFoundException("migrations/ not found above " + AppContext.BaseDirectory);
-        }
-    }
-}

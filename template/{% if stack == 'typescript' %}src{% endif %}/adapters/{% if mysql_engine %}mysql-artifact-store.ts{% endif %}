@@ -1,0 +1,35 @@
+import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+const UPSERT_SQL =
+  "INSERT INTO export_artifacts (artifact_key, job_id, body) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE body = VALUES(body)";
+const READ_SQL = "SELECT body FROM export_artifacts WHERE artifact_key = ?";
+
+/** ArtifactStore on MySQL or MariaDB. Schema: migrations/mysql/. Queries are always parameterised (ADR 0003). */
+export class MySqlArtifactStore implements ArtifactStore {
+  readonly #pool: Pool;
+
+  constructor(pool: Pool) {
+    this.#pool = pool;
+  }
+
+  static fromUrl(uri: string): MySqlArtifactStore {
+    return new MySqlArtifactStore(mysql.createPool({ uri, connectionLimit: 5 }));
+  }
+
+  async save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    await this.#pool.execute(UPSERT_SQL, [key, jobId, content]);
+    return key;
+  }
+
+  async read(key: string): Promise<string | undefined> {
+    const [rows] = await this.#pool.execute<RowDataPacket[]>(READ_SQL, [key]);
+    const body: unknown = rows[0]?.["body"];
+    return typeof body === "string" ? body : undefined;
+  }
+
+  async close(): Promise<void> {
+    await this.#pool.end();
+  }
+}

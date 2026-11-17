@@ -23,6 +23,9 @@ source_modules =
     {{ package_name }}.application
     {{ package_name }}.bootstrap
 forbidden_modules =
+{%- if mysql_engine %}
+    pymysql
+{%- endif %}
 {%- if 'postgres' in datastores %}
     psycopg
 {%- endif %}

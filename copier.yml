@@ -66,8 +66,14 @@ datastores:
   multiselect: true
   choices:
     PostgreSQL: postgres
+    MySQL: mysql
+    MariaDB: mariadb
     Redis: redis
   default: []
+  validator: >-
+    {% if 'mysql' in datastores and 'mariadb' in datastores %}
+    Pick MySQL or MariaDB, not both: they share one adapter.
+    {% endif %}
 
 http_api:
   type: bool
@@ -90,6 +96,17 @@ frontend:
   default: none
 
 # ---------- computed values (never asked) ----------
+sql_store:
+  type: bool
+  when: false
+  default: "{{ 'postgres' in datastores or 'mysql' in datastores or 'mariadb' in datastores }}"
+
+# MySQL and MariaDB share the MySQL adapter; this picks the server image.
+mysql_engine:
+  type: str
+  when: false
+  default: "{% if 'mysql' in datastores %}mysql{% elif 'mariadb' in datastores %}mariadb{% endif %}"
+
 package_name:
   type: str
   when: false
@@ -209,7 +226,7 @@ cmd:
     test_e2e: npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test
     {%- endif %}
     {%- endif %}
-    {%- if 'postgres' in datastores %}
+    {%- if sql_store %}
     sql_lint: uvx sqlfluff==4.5.0 lint migrations
     {%- endif %}
 
@@ -220,7 +237,7 @@ stk:
   default: |
     {%- if stack == 'typescript' %}
     language: TypeScript
-    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .audit-exceptions.json, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api or frontend != 'none' %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .audit-exceptions.json, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api or frontend != 'none' %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% endif %}]
     escapes_display: "`eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `as any`, `as unknown as`, `.skip`/`.only`"
     ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as', 'NOSONAR']
     src_globs: ['*.ts', '*.tsx']
@@ -230,7 +247,7 @@ stk:
     layers: {domain: src/domain, application: src/application, adapters: src/adapters, bootstrap: src/bootstrap}
     {%- elif stack == 'python' %}
     language: Python
-    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% endif %}]
     escapes_display: "`# type: ignore`, `# pyright: ignore`, `# noqa`, `cast(Any, ...)`, `pytest.mark.skip`/`xfail`"
     ratchet_patterns: ['type:[[:space:]]*ignore', 'pyright:[[:space:]]*ignore', 'noqa', 'cast\(Any']
     src_globs: ['*.py']
@@ -240,7 +257,7 @@ stk:
     layers: {domain: "{{ src_root }}/domain", application: "{{ src_root }}/application", adapters: "{{ src_root }}/adapters", bootstrap: "{{ src_root }}/bootstrap"}
     {%- elif stack == 'dotnet' %}
     language: C#
-    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% endif %}]
     escapes_display: "`#pragma warning disable`, `[SuppressMessage]`, `null!`/`default!`, `Skip =` on tests"
     ratchet_patterns: ['#pragma warning disable', 'SuppressMessage', 'null!', 'default!']
     src_globs: ['*.cs']
@@ -250,7 +267,7 @@ stk:
     layers: {domain: "src/{{ dotnet_name }}.Domain", application: "src/{{ dotnet_name }}.Application", adapters: "src/{{ dotnet_name }}.Adapters", bootstrap: "src/{{ dotnet_name }}.Bootstrap"}
     {%- elif stack == 'go' %}
     language: Go
-    guardrail_files: [.golangci.yml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [.golangci.yml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% endif %}]
     escapes_display: "`//nolint`, `//lint:ignore`, `#nosec`, `unsafe`, `t.Skip`"
     ratchet_patterns: ['//[[:space:]]*nolint', '//lint:ignore', '#nosec', 'unsafe\.']
     src_globs: ['*.go']
@@ -260,7 +277,7 @@ stk:
     layers: {domain: internal/domain, application: internal/application, adapters: internal/adapters, bootstrap: internal/bootstrap}
     {%- elif stack == 'rust' %}
     language: Rust
-    guardrail_files: [Cargo.toml, rust-toolchain.toml, clippy.toml, crates/domain/clippy.toml, crates/application/clippy.toml, deny.toml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [Cargo.toml, rust-toolchain.toml, clippy.toml, crates/domain/clippy.toml, crates/application/clippy.toml, deny.toml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% endif %}]
     escapes_display: "`#[allow(...)]`, `#[expect(...)]`, `unsafe`, `AssertSqlSafe`, `#[ignore]`"
     ratchet_patterns: ['#!?\[(allow|expect)\(', 'unsafe[[:space:]]*\{', 'AssertSqlSafe']
     src_globs: ['*.rs']

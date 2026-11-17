@@ -1,0 +1,49 @@
+//! Integration test: needs Docker. Run with `cargo test -p adapters --features integration`.
+#![cfg(feature = "integration")]
+
+mod common;
+
+use std::future::Future;
+use std::path::Path;
+
+use adapters::mysql::MySqlArtifactStore;
+use application::PortError;
+use testcontainers_modules::{{ mysql_engine }}::{{ 'Mysql' if mysql_engine == 'mysql' else 'Mariadb' }};
+use testcontainers_modules::testcontainers::ImageExt;
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+
+impl common::ReadBack for MySqlArtifactStore {
+    fn read_back(&self, key: &str) -> impl Future<Output = Result<Option<String>, PortError>> + Send {
+        self.read(key)
+    }
+}
+
+/// migrations/mysql/*.sql in file-name order, as the image's init hook (and compose.yaml) applies them.
+fn migrations() -> Result<String, PortError> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations/mysql");
+    let mut files = std::fs::read_dir(dir)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "sql"))
+        .collect::<Vec<_>>();
+    files.sort();
+    let scripts = files.iter().map(std::fs::read_to_string).collect::<Result<Vec<_>, _>>()?;
+    Ok(scripts.join("\n"))
+}
+
+#[tokio::test]
+async fn mysql_store_satisfies_the_contract() -> Result<(), PortError> {
+{%- if mysql_engine == 'mysql' %}
+    let container =
+        Mysql::default().with_init_sql(migrations()?.into_bytes()).with_tag("8.4").start().await?;
+{%- else %}
+    let container =
+        Mariadb::default().with_init_sql(migrations()?.into_bytes()).with_tag("11.8").start().await?;
+{%- endif %}
+    let host = container.get_host().await?;
+    let port = container.get_host_port_ipv4(3306).await?;
+    let store = MySqlArtifactStore::connect(&format!("mysql://root@{host}:{port}/test")).await?;
+
+    common::check_contract(&store).await
+}

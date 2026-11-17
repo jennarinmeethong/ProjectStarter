@@ -20,12 +20,19 @@ services:
 {%- if 'postgres' in datastores %}
       DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD:-local-dev-only}@postgres:5432/app
 {%- endif %}
+{%- if mysql_engine %}
+      MYSQL_URL: mysql://app:${MYSQL_PASSWORD:-local-dev-only}@{{ mysql_engine }}:3306/app
+{%- endif %}
 {%- if 'redis' in datastores %}
       REDIS_URL: redis://redis:6379/0
 {%- endif %}
     depends_on:
 {%- if 'postgres' in datastores %}
       postgres:
+        condition: service_healthy
+{%- endif %}
+{%- if mysql_engine %}
+      {{ mysql_engine }}:
         condition: service_healthy
 {%- endif %}
 {%- if 'redis' in datastores %}
@@ -50,6 +57,28 @@ services:
       interval: 2s
       retries: 30
 {%- endif %}
+{%- if mysql_engine %}
+
+  {{ mysql_engine }}:
+    image: {{ 'mysql:8.4' if mysql_engine == 'mysql' else 'mariadb:11.8' }}
+    environment:
+      MYSQL_DATABASE: app
+      MYSQL_USER: app
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-local-dev-only}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    volumes:
+      # Applied once, in file-name order, when the volume is first created (ADR 0003).
+      - ./migrations/mysql:/docker-entrypoint-initdb.d:ro
+      - {{ mysql_engine }}-data:/var/lib/mysql
+    healthcheck:
+{%- if mysql_engine == 'mysql' %}
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uapp -p$${MYSQL_PASSWORD}"]
+{%- else %}
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+{%- endif %}
+      interval: 2s
+      retries: 60
+{%- endif %}
 {%- if 'redis' in datastores %}
 
   redis:
@@ -73,8 +102,13 @@ services:
     # Published on the host's loopback only.
     ports: ["127.0.0.1:8081:8080"]
 {%- endif %}
-{%- if 'postgres' in datastores %}
+{%- if 'postgres' in datastores or mysql_engine %}
 
 volumes:
+{%- if 'postgres' in datastores %}
   postgres-data:
+{%- endif %}
+{%- if mysql_engine %}
+  {{ mysql_engine }}-data:
+{%- endif %}
 {%- endif %}

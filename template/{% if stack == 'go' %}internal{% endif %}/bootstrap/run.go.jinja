@@ -19,6 +19,9 @@ import (
 
 {% if http_api %}	"{{ go_module }}/internal/adapters/httpapi"
 {% endif %}	"{{ go_module }}/internal/adapters/inmemory"
+{%- if mysql_engine %}
+	"{{ go_module }}/internal/adapters/mysqlstore"
+{%- endif %}
 {%- if 'postgres' in datastores %}
 	"{{ go_module }}/internal/adapters/postgres"
 {%- endif %}
@@ -75,6 +78,15 @@ func openStore(ctx context.Context) (application.ArtifactStore, func(), error) {
 			return nil, nil, fmt.Errorf("open postgres: %w", err)
 		}
 		return store, store.Close, nil
+	}
+{%- endif %}
+{%- if mysql_engine %}
+	if url := os.Getenv("MYSQL_URL"); url != "" {
+		store, err := mysqlstore.Open(ctx, url)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open mysql: %w", err)
+		}
+		return store, func() { _ = store.Close() }, nil
 	}
 {%- endif %}
 {%- if 'redis' in datastores %}

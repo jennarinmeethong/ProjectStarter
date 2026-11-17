@@ -12,19 +12,23 @@ IArtifactStore store = new InMemoryArtifactStore();
 IAsyncDisposable? owned = null;
 {%- if 'postgres' in datastores %}
 var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
-{%- endif %}
-{%- if 'redis' in datastores %}
-var redisUrl = Environment.GetEnvironmentVariable("REDIS_URL");
-{%- endif %}
-{%- if 'postgres' in datastores %}
-if (!string.IsNullOrEmpty(databaseUrl))
+if (owned is null && !string.IsNullOrEmpty(databaseUrl))
 {
     var postgres = PostgresArtifactStore.Create(databaseUrl);
     (store, owned) = (postgres, postgres);
 }
 {%- endif %}
+{%- if mysql_engine %}
+var mysqlUrl = Environment.GetEnvironmentVariable("MYSQL_URL");
+if (owned is null && !string.IsNullOrEmpty(mysqlUrl))
+{
+    var mysql = MySqlArtifactStore.Create(mysqlUrl);
+    (store, owned) = (mysql, mysql);
+}
+{%- endif %}
 {%- if 'redis' in datastores %}
-{% if 'postgres' in datastores %}else {% endif %}if (!string.IsNullOrEmpty(redisUrl))
+var redisUrl = Environment.GetEnvironmentVariable("REDIS_URL");
+if (owned is null && !string.IsNullOrEmpty(redisUrl))
 {
     var redis = await RedisArtifactStore.ConnectAsync(redisUrl);
     (store, owned) = (redis, redis);

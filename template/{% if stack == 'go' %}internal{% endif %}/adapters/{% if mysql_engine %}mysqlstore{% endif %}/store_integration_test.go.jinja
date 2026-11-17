@@ -1,0 +1,45 @@
+//go:build integration
+
+// Integration test: needs Docker. Run with `go test -tags integration ./...`.
+package mysqlstore_test
+
+import (
+	"path/filepath"
+	"sort"
+	"testing"
+
+	"github.com/testcontainers/testcontainers-go"
+	tc{{ mysql_engine }} "github.com/testcontainers/testcontainers-go/modules/{{ mysql_engine }}"
+
+	"{{ go_module }}/internal/adapters/mysqlstore"
+	"{{ go_module }}/internal/adapters/storetest"
+)
+
+func TestMySQLStoreSatisfiesTheContract(t *testing.T) {
+	ctx := t.Context()
+	// The image's init hook applies migrations/mysql in file-name order, as compose.yaml does locally.
+	migrations, err := filepath.Glob(filepath.Join("..", "..", "..", "migrations", "mysql", "*.sql"))
+	if err != nil || len(migrations) == 0 {
+		t.Fatalf("no migrations found: %v", err)
+	}
+	sort.Strings(migrations)
+
+	container, err := tc{{ mysql_engine }}.Run(ctx, "{{ 'mysql:8.4' if mysql_engine == 'mysql' else 'mariadb:11.8' }}", tc{{ mysql_engine }}.WithScripts(migrations...))
+	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		t.Fatalf("start {{ mysql_engine }}: %v", err)
+	}
+	dsn, err := container.ConnectionString(ctx)
+	if err != nil {
+		t.Fatalf("connection string: %v", err)
+	}
+	store, err := mysqlstore.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	storetest.Run(t, func(*testing.T) storetest.Subject {
+		return storetest.Subject{Store: store, Read: store.Read}
+	})
+}
