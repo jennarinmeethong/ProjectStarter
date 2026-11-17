@@ -1,0 +1,103 @@
+# 0002: Design rules — SOLID และ clean architecture ที่บังคับด้วยเครื่องมือ
+
+- **สถานะ:** accepted
+- **วันที่:** <วันที่สร้างโปรเจค>
+- **เจ้าของ:** {{ guardrail_owner or '<เจ้าของ>' }}
+
+## บริบท
+SOLID และ clean architecture ที่เขียนเป็นคำแนะนำอย่างเดียว agent จะทำตามบ้างไม่ทำบ้าง และเลียนแบบโค้ดที่ละเมิดต่อไป
+ADR นี้แปลงแต่ละหลักการเป็น check ที่ fail ได้จริงเท่าที่ทำได้ (ตาม [where-rules-live](../engineering/where-rules-live.md))
+ส่วนที่เครื่องมือตรวจไม่ได้อยู่ในหัวข้อ "ดุลยพินิจ" ด้านล่าง และใช้ตอน review เท่านั้น
+
+ขอบเขต layer อยู่ใน [ADR 0001](0001-layered-architecture.md) ADR นี้ครอบคลุมสิ่งที่อยู่ภายในแต่ละ layer
+
+## การตัดสินใจ
+
+### SRP — หนึ่งหน่วย หนึ่งเหตุผลที่จะเปลี่ยน
+เมื่อ function/class โตเกินขีดจำกัด ให้แยกตามเหตุผลที่จะเปลี่ยน (เช่น validation, การคำนวณ, การ map ข้อมูล) ไม่ใช่ตัดครึ่งตามจำนวนบรรทัด
+{%- if stack == 'typescript' %}
+- ESLint: `complexity` ≤ 10, `max-depth` ≤ 3, `max-params` ≤ 4, `max-lines-per-function` ≤ 60, `max-lines` ≤ 300 ต่อไฟล์
+{%- elif stack == 'python' %}
+- Ruff: `C901` (complexity ≤ 10), `PLR0913` (args ≤ 4), `PLR0912` (branches ≤ 10), `PLR0915` (statements ≤ 40), `PLR0911` (returns ≤ 6)
+{%- else %}
+- Code metrics analyzers (เกณฑ์ใน `CodeMetricsConfig.txt`): `CA1502` complexity ≤ 15, `CA1506` class coupling, `CA1505` maintainability, `CA1501` inheritance depth ≤ 3
+{%- endif %}
+- พารามิเตอร์เกิน 4 ตัว = สัญญาณว่าควรรวมเป็น value object หรือ use case ทำหลายอย่างเกินไป
+
+### OCP — เพิ่มกรณีใหม่โดยไม่แก้โค้ดที่ทำงานอยู่ และให้ compiler ชี้จุดที่ต้องรองรับ
+- state ของ domain เป็น closed union (ดู `ExportJob`) การเพิ่ม variant ต้องทำให้ทุกจุดที่ยังไม่รองรับ build ไม่ผ่าน
+{%- if stack == 'typescript' %}
+- ESLint: `@typescript-eslint/switch-exhaustiveness-check` (ห้ามใช้ `default` แทนการจัดการทุก variant)
+{%- elif stack == 'python' %}
+- pyright strict: `reportMatchNotExhaustive` — `match` บน union ที่ไม่ครบทุก variant เป็น error (ห้ามใช้ `case _` กลืนกรณีใหม่)
+{%- else %}
+- `CS8509` (switch expression ไม่ครบ) เป็น error ผ่าน `TreatWarningsAsErrors`
+{%- endif %}
+- พฤติกรรมที่ต้องสลับได้ (ช่องทางส่ง, storage) ให้เป็น port + adapter ใหม่ ไม่ใช่ `if` ตามชนิด
+
+### LSP — subtype ต้องแทนกันได้จริง
+- เลือก composition ก่อน inheritance และไม่ override พฤติกรรมของ concrete class
+{%- if stack == 'typescript' %}
+- tsconfig: `noImplicitOverride` — การ override ต้องประกาศ `override` ชัดเจน
+{%- elif stack == 'python' %}
+- pyright: `reportImplicitOverride` — การ override ต้องมี `@override` และ signature ต้องเข้ากันได้ (strict mode ตรวจ)
+{%- else %}
+- `ArchitectureTests.ConcreteClassesAreSealed` — class ที่ไม่ abstract ต้อง `sealed`
+{%- endif %}
+- adapter ทุกตัวต้องผ่านชุด test เดียวกันของ port (contract test) ก่อนนับว่าแทนกันได้
+
+### ISP — port เล็กและเฉพาะผู้ใช้
+- port นิยามใน application ตามที่ use case ต้องใช้จริง ไม่ใช่ตามความสามารถทั้งหมดของ adapter (ดู `ArtifactStore` ที่มีแค่ `save`)
+- ห้ามพารามิเตอร์ boolean ที่สลับพฤติกรรม — แยกเป็นสอง function
+{%- if stack == 'typescript' %}
+- ESLint: `max-params`; boolean flag ตรวจตอน review
+{%- elif stack == 'python' %}
+- Ruff: `FBT` (boolean trap), `ARG` (argument ที่ไม่ใช้ = interface ไม่เข้ากับผู้เรียก)
+{%- else %}
+- Analyzers: `IDE0060` (parameter ที่ไม่ใช้), `CA1040` (interface ว่าง)
+{%- endif %}
+
+### DIP — นโยบายไม่ขึ้นกับรายละเอียด
+- domain และ application ไม่อ่าน input ที่ซ่อนอยู่: นาฬิกา, random, id generator, environment, timer, I/O ต้องถูก inject เป็น port หรือส่งเป็นค่าเข้ามา
+- config อ่านครั้งเดียวใน bootstrap แล้วส่งเป็นค่าที่มี type เข้าไป
+{%- if stack == 'typescript' %}
+- ESLint (`src/domain`, `src/application`): ห้าม `Date.now()`, `new Date()`, `Math.random()`, `crypto.randomUUID()`, `process`, `fetch`, `console`, timer
+- dependency-cruiser: `domain-has-no-dependencies` (domain ห้าม import npm package และ Node built-in), `application-no-io-modules` (application ห้าม import Node built-in)
+{%- elif stack == 'python' %}
+- Ruff `TID251` (ยกเว้นใน adapters และ bootstrap): ห้าม `datetime.now/utcnow`, `date.today`, `random`, `uuid.uuid4`, `os.environ/getenv`, `subprocess`, `socket`, `sqlite3`, `urllib.request`, `http.client`, `time.sleep`
+- import-linter: contract `layers` (ADR 0001); `print` อนุญาตเฉพาะ bootstrap (`T20`)
+{%- else %}
+- BannedApiAnalyzers (`BannedSymbols.txt`, `RS0030`) ใน Domain และ Application: ห้าม `DateTime.Now/UtcNow`, `DateTimeOffset.Now/UtcNow`, `Random`, `Guid.NewGuid`, `Environment.GetEnvironmentVariable`, `Thread.Sleep`, `Task.Delay`, `Console`, `File`, `Directory`, `HttpClient` — ใช้ `TimeProvider` ที่ inject เข้ามาแทนนาฬิกา
+- `ArchitectureTests.InnerLayersHaveNoIoDependencies` — Domain/Application ห้ามขึ้นกับ `System.IO`, `System.Net`, `System.Data`, EF Core, ASP.NET Core
+- `ArchitectureTests.PortsAreInterfacesInApplication` — Adapters ไม่ประกาศ public interface (port เป็นของ Application)
+{%- endif %}
+
+### Best practices อื่นที่บังคับแล้ว
+{%- if stack == 'typescript' %}
+- Immutability: `prefer-readonly`, `no-param-reassign`, `prefer-const`; type ใน domain ใช้ `readonly`
+- Contract ชัดเจน: `explicit-module-boundary-types`, `eqeqeq`, `no-implicit-coercion`
+{%- elif stack == 'python' %}
+- Encapsulation: `SLF001` (ห้ามเข้าถึง `_private` ของ object อื่น), `reportUninitializedInstanceVariable`
+- Error handling: `BLE` (ห้าม `except Exception` แบบกว้าง), `TRY`; security: `S` (bandit)
+- Naming `N`, ห้าม comment ที่เป็นโค้ดเก่า `ERA`, `pathlib` แทน `os.path` (`PTH`), ห้าม import cycle (`reportImportCycles`)
+{%- else %}
+- Encapsulation/immutability: `CA1051`, `CA2227`, `CA1819`, `CA1002`, field ที่ไม่ถูกแก้ต้อง `readonly` (`IDE0044`)
+- Contract ชัดเจน: `CA1062` (ตรวจ argument), `CA1031` (ห้าม catch `Exception` กว้าง ๆ), `CA1852`, accessibility modifiers ชัดเจน (`IDE0040`)
+- Naming: interface ขึ้นต้นด้วย `I`, method `async` ลงท้ายด้วย `Async` (`IDE1006`); culture/string comparison ชัดเจน (`CA1305`, `CA1307`, `CA1309`, `CA1310`)
+- Library ใช้ `ConfigureAwait(false)` (`CA2007` ใน Domain/Application/Adapters)
+{%- endif %}
+
+## ดุลยพินิจ (ไม่ถูกบังคับ ใช้ตอน review)
+- ตั้งชื่อตามภาษาของโดเมนใน [feature map](../feature-map.md) ไม่ใช่ตามเทคนิค (`ExportJob` ไม่ใช่ `JobDataManager`)
+- ใช้ value type แทน primitive เมื่อสับสนได้ (ID ต่างชนิด, เงิน, หน่วย)
+- Validate ที่ขอบ (adapter/bootstrap) ครั้งเดียว แล้วส่งค่าที่มี type ถูกต้องเข้าไปข้างใน
+- Error ที่คาดได้ของธุรกิจเป็นส่วนหนึ่งของ type ที่คืนค่า ส่วน exception ใช้กับสิ่งที่ผิดสัญญา
+- อย่าสร้าง abstraction ล่วงหน้า: port หนึ่งตัวต่อความต้องการจริงหนึ่งอย่าง ไม่ทำ generic repository หรือ base class "เผื่อไว้"
+- Test พฤติกรรมผ่าน public API ของ domain/use case ใช้ fake adapter แทน mock library
+
+## ทางที่ถูกต้องเมื่อ check fail
+อ่าน message แล้วแก้ที่โครงสร้าง (แยก function, inject port, เพิ่ม case) ห้าม disable rule หรือเพิ่ม suppression
+ถ้าเห็นว่า rule ผิดสำหรับกรณีนี้ ให้เสนอแก้ config ใน PR ที่ owner อนุมัติ
+
+## ผลที่ตามมา
+โค้ดตัวอย่างจะมีไฟล์และ port มากขึ้นเล็กน้อย ขีดจำกัดตัวเลข (complexity, จำนวน parameter) เป็นจุดเริ่มต้น ปรับได้ผ่าน PR ที่ owner อนุมัติพร้อมเหตุผล

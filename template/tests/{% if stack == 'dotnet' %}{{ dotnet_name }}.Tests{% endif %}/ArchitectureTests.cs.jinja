@@ -43,6 +43,38 @@ public sealed class ArchitectureTests
         Assert.True(result.IsSuccessful, Explain("Only Bootstrap wires dependencies together (ADR 0001).", result));
     }
 
+    [Fact]
+    public void InnerLayersHaveNoIoDependencies()
+    {
+        var result = Types.InAssemblies([typeof(ExportJob).Assembly, typeof(IArtifactStore).Assembly])
+            .ShouldNot().HaveDependencyOnAny("System.IO", "System.Net", "System.Data", "Microsoft.EntityFrameworkCore", "Microsoft.AspNetCore")
+            .GetResult();
+
+        Assert.True(result.IsSuccessful, Explain("Domain/Application must not touch I/O. Define a port in Application and implement it in Adapters (ADR 0001, ADR 0002 #DIP).", result));
+    }
+
+    [Fact]
+    public void ConcreteClassesAreSealed()
+    {
+        var result = Types.InAssemblies([typeof(ExportJob).Assembly, typeof(IArtifactStore).Assembly, typeof(InMemoryArtifactStore).Assembly])
+            .That().AreClasses().And().AreNotAbstract()
+            .Should().BeSealed()
+            .GetResult();
+
+        Assert.True(result.IsSuccessful, Explain("Concrete classes are sealed: extend behaviour through ports and composition, not inheritance (ADR 0002 #OCP #LSP).", result));
+    }
+
+    [Fact]
+    public void PortsAreInterfacesInApplication()
+    {
+        var result = Types.InAssembly(typeof(InMemoryArtifactStore).Assembly)
+            .That().AreInterfaces()
+            .Should().NotBePublic()
+            .GetResult();
+
+        Assert.True(result.IsSuccessful, Explain("Ports belong to Application, which owns the abstraction; Adapters only implement them (ADR 0002 #DIP #ISP).", result));
+    }
+
     private static string Explain(string rule, NetArchTest.Rules.TestResult result) =>
         $"{rule} Offending types: {string.Join(", ", result.FailingTypeNames ?? [])}";
 }

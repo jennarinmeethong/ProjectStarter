@@ -23,6 +23,20 @@ module.exports = {
       from: { path: "^src/adapters/" },
       to: { path: "^src/bootstrap/" },
     },
+    {
+      name: "domain-has-no-dependencies",
+      comment: "domain is plain TypeScript: no npm packages, no Node built-ins. Keep frameworks and I/O in adapters (ADR 0001, ADR 0002 #DIP).",
+      severity: "error",
+      from: { path: "^src/domain/", pathNot: "\\.test\\.ts$" },
+      to: { dependencyTypes: ["core", "npm", "npm-dev", "npm-optional", "npm-peer", "npm-bundled", "npm-no-pkg", "npm-unknown"] },
+    },
+    {
+      name: "application-no-io-modules",
+      comment: "application reaches I/O only through ports it defines. Implement the port in adapters (ADR 0001, ADR 0002 #DIP).",
+      severity: "error",
+      from: { path: "^src/application/", pathNot: "\\.test\\.ts$" },
+      to: { dependencyTypes: ["core"] },
+    },
     { name: "no-circular", severity: "error", from: {}, to: { circular: true } },
     {
       name: "no-dev-deps-in-src",

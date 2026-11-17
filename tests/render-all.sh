@@ -29,6 +29,13 @@ expect_fail() { # expect_fail <label> <command...>
   if "${@:2}" >/dev/null 2>&1; then fail "$1 (should have failed)"; else pass "$1 rejected"; fi
 }
 
+seeded() { # seeded <label> <file> <text-to-append> <command...>: append, expect the command to fail, restore
+  local file=$2
+  printf '%b' "$3" >> "$file"
+  expect_fail "$1" "${@:4}"
+  git checkout -q -- "$file"
+}
+
 for stack in "${stacks[@]}"; do
   echo "== $stack"
 
@@ -67,6 +74,12 @@ for stack in "${stacks[@]}"; do
     typescript)
       npm install --no-audit --no-fund >/dev/null 2>&1
       verify "npm run verify" "npm run verify"
+      # Design rules (ADR 0002), one violation at a time.
+      seeded "eslint: ambient clock in domain" src/domain/export-job.ts '\nexport const now = (): number => Date.now();\n' npm run lint
+      seeded "eslint: too many parameters" src/application/complete-export.ts '\nexport function sum(a: number, b: number, c: number, d: number, e: number): number {\n  return a + b + c + d + e;\n}\n' npm run lint
+      seeded "eslint: non-exhaustive switch" src/domain/export-job.ts '\nexport function label(job: ExportJob): string {\n  switch (job.kind) {\n    case "queued":\n      return "q";\n    default:\n      return "other";\n  }\n}\n' npm run lint
+      seeded "depcruise: npm package in domain" src/domain/export-job.ts '\nimport fc from "fast-check";\nexport const gen = fc;\n' npm run arch
+      seeded "depcruise: node built-in in application" src/application/complete-export.ts '\nimport { readFileSync } from "node:fs";\nexport const read = readFileSync;\n' npm run arch
       printf '\nimport { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";\nexport const leak = new InMemoryArtifactStore() as any;\n' >> src/domain/export-job.ts
       expect_fail "eslint: as any" npm run lint
       expect_fail "depcruise: domain -> adapters" npm run arch
@@ -74,6 +87,12 @@ for stack in "${stacks[@]}"; do
     python)
       uv sync >/dev/null 2>&1
       verify "python verify" "uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest -q"
+      # Design rules (ADR 0002), one violation at a time.
+      seeded "ruff: ambient randomness in domain" src/demo_app/domain/export_job.py '\n\nimport random\n\n\ndef roll() -> float:\n    return random.random()\n' uv run ruff check .
+      seeded "ruff: ambient clock in application" src/demo_app/application/complete_export.py '\n\ndef now() -> object:\n    import datetime\n\n    return datetime.datetime.now(tz=datetime.UTC)\n' uv run ruff check .
+      seeded "ruff: too many arguments" src/demo_app/application/complete_export.py '\n\ndef total(a: int, b: int, c: int, d: int, e: int) -> int:\n    return a + b + c + d + e\n' uv run ruff check .
+      seeded "ruff: boolean flag parameter" src/demo_app/domain/export_job.py '\n\ndef describe(job: ReadyExport, verbose: bool) -> str:\n    return job.artifact_key if verbose else job.id\n' uv run ruff check .
+      seeded "pyright: implicit override" src/demo_app/adapters/in_memory_artifact_store.py '\n\nclass Loud(InMemoryArtifactStore):\n    def read(self, key: str) -> str | None:\n        return key\n' uv run pyright
       printf '\nfrom demo_app.adapters.in_memory_artifact_store import InMemoryArtifactStore  # noqa\nleak: int = InMemoryArtifactStore()  # type: ignore\n' >> src/demo_app/domain/export_job.py
       expect_fail "pyright: type: ignore disabled" uv run pyright
       expect_fail "ruff: blanket noqa/type: ignore" uv run ruff check .
@@ -81,6 +100,11 @@ for stack in "${stacks[@]}"; do
       ;;
     dotnet)
       verify "dotnet verify" "dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build"
+      # Design rules (ADR 0002), one violation at a time.
+      seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build
+      seeded "BannedApi: Guid.NewGuid in Application" src/DemoApp.Application/CompleteExport.cs '\npublic static class Ids\n{\n    public static Guid Next() => Guid.NewGuid();\n}\n' dotnet build
+      seeded "naming: async method without Async suffix" src/DemoApp.Adapters/InMemoryArtifactStore.cs '\npublic static class Waits\n{\n    public static async Task Pause() => await Task.CompletedTask.ConfigureAwait(false);\n}\n' dotnet build
+      seeded "NetArchTest: unsealed concrete class" src/DemoApp.Application/CompleteExport.cs '\npublic class Helper\n{\n    public int Value { get; init; }\n}\n' dotnet test --filter-trait "Category=Architecture"
       printf '\npublic static class Leak\n{\n#pragma warning disable CA1823\n    public static string Value = null!;\n}\n' >> src/DemoApp.Domain/ExportJob.cs
       expect_fail "build: TreatWarningsAsErrors" dotnet build
       ;;

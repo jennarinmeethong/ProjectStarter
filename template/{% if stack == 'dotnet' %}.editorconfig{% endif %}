@@ -21,3 +21,64 @@ dotnet_diagnostic.CS8600.severity = error
 dotnet_diagnostic.CS8602.severity = error
 dotnet_diagnostic.CS8603.severity = error
 dotnet_diagnostic.CS8618.severity = error
+
+# ---- Design rules (docs/adr/0002-design-rules.md) ----
+# SRP: code-metric limits (thresholds in CodeMetricsConfig.txt).
+dotnet_diagnostic.CA1501.severity = error
+dotnet_diagnostic.CA1502.severity = error
+dotnet_diagnostic.CA1505.severity = error
+dotnet_diagnostic.CA1506.severity = error
+# Encapsulation and immutability.
+dotnet_diagnostic.CA1051.severity = error
+dotnet_diagnostic.CA2227.severity = error
+dotnet_diagnostic.CA1819.severity = error
+dotnet_diagnostic.CA1002.severity = error
+dotnet_style_readonly_field = true:warning
+dotnet_diagnostic.IDE0044.severity = warning
+# Explicit, honest contracts.
+dotnet_diagnostic.CA1062.severity = error
+dotnet_diagnostic.CA1031.severity = error
+dotnet_diagnostic.CA1040.severity = error
+dotnet_diagnostic.CA1852.severity = error
+dotnet_style_require_accessibility_modifiers = for_non_interface_members:warning
+dotnet_diagnostic.IDE0040.severity = warning
+dotnet_diagnostic.IDE0051.severity = warning
+dotnet_diagnostic.IDE0052.severity = warning
+dotnet_diagnostic.IDE0059.severity = warning
+dotnet_diagnostic.IDE0060.severity = warning
+csharp_prefer_braces = true:warning
+dotnet_diagnostic.IDE0011.severity = warning
+# Culture and string comparison must be explicit.
+dotnet_diagnostic.CA1305.severity = error
+dotnet_diagnostic.CA1307.severity = error
+dotnet_diagnostic.CA1309.severity = error
+dotnet_diagnostic.CA1310.severity = error
+# Naming: ports are interfaces named I*, async methods end in Async.
+dotnet_diagnostic.IDE1006.severity = warning
+dotnet_naming_symbols.interfaces.applicable_kinds = interface
+dotnet_naming_style.begins_with_i.required_prefix = I
+dotnet_naming_style.begins_with_i.capitalization = pascal_case
+dotnet_naming_rule.interfaces_begin_with_i.symbols = interfaces
+dotnet_naming_rule.interfaces_begin_with_i.style = begins_with_i
+dotnet_naming_rule.interfaces_begin_with_i.severity = warning
+dotnet_naming_symbols.async_methods.applicable_kinds = method
+dotnet_naming_symbols.async_methods.required_modifiers = async
+dotnet_naming_style.ends_with_async.required_suffix = Async
+dotnet_naming_style.ends_with_async.capitalization = pascal_case
+dotnet_naming_rule.async_methods_end_in_async.symbols = async_methods
+dotnet_naming_rule.async_methods_end_in_async.style = ends_with_async
+dotnet_naming_rule.async_methods_end_in_async.severity = warning
+dotnet_naming_symbols.types.applicable_kinds = class, struct, enum, delegate
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+dotnet_naming_rule.types_are_pascal_case.symbols = types
+dotnet_naming_rule.types_are_pascal_case.style = pascal_case
+dotnet_naming_rule.types_are_pascal_case.severity = warning
+
+# Libraries must not capture the caller's synchronization context.
+[src/*.{Domain,Application,Adapters}/**.cs]
+dotnet_diagnostic.CA2007.severity = error
+
+# Tests: the framework supplies arguments, and async test names follow the test naming convention.
+[tests/**.cs]
+dotnet_diagnostic.CA1062.severity = none
+dotnet_naming_rule.async_methods_end_in_async.severity = none

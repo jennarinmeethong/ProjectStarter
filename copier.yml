@@ -135,7 +135,7 @@ stk:
     layers: {domain: "{{ src_root }}/domain", application: "{{ src_root }}/application", adapters: "{{ src_root }}/adapters", bootstrap: "{{ src_root }}/bootstrap"}
     {%- else %}
     language: C#
-    guardrail_files: [Directory.Build.props, .editorconfig]
+    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt]
     escapes_display: "`#pragma warning disable`, `[SuppressMessage]`, `null!`/`default!`, `Skip =` on tests"
     ratchet_patterns: ['#pragma warning disable', 'SuppressMessage', 'null!', 'default!']
     src_globs: ['*.cs']
