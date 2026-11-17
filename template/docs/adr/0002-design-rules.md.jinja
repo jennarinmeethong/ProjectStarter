@@ -19,6 +19,8 @@ ADR นี้แปลงแต่ละหลักการเป็น check 
 - ESLint: `sonarjs/cognitive-complexity` ≤ 15 (วัดความยากในการอ่าน แทน cyclomatic `complexity`), `max-depth` ≤ 3, `max-params` ≤ 4, `max-lines-per-function` ≤ 60, `max-lines` ≤ 300 ต่อไฟล์
 {%- elif stack == 'python' %}
 - Ruff: `C901` (complexity ≤ 10), `PLR0913` (args ≤ 4), `PLR0912` (branches ≤ 10), `PLR0915` (statements ≤ 40), `PLR0911` (returns ≤ 6)
+{%- elif stack == 'go' %}
+- golangci-lint: `gocognit` ≤ 15, `funlen` ≤ 60 บรรทัด/40 statements, `nestif` ≤ 4, `maintidx`, revive `argument-limit` ≤ 4
 {%- else %}
 - Code metrics analyzers (เกณฑ์ใน `CodeMetricsConfig.txt`): `CA1502` complexity ≤ 15, `CA1506` class coupling, `CA1505` maintainability, `CA1501` inheritance depth ≤ 3
 {%- endif %}
@@ -30,6 +32,8 @@ ADR นี้แปลงแต่ละหลักการเป็น check 
 - ESLint: `@typescript-eslint/switch-exhaustiveness-check` (ห้ามใช้ `default` แทนการจัดการทุก variant)
 {%- elif stack == 'python' %}
 - pyright strict: `reportMatchNotExhaustive` — `match` บน union ที่ไม่ครบทุก variant เป็น error (ห้ามใช้ `case _` กลืนกรณีใหม่)
+{%- elif stack == 'go' %}
+- `gochecksumtype`: type switch บน interface ที่ประกาศ `//sumtype:decl` (เช่น `domain.ExportJob`) ต้องครบทุก state; `exhaustive` สำหรับ enum
 {%- else %}
 - `CS8509` (switch expression ไม่ครบ) เป็น error ผ่าน `TreatWarningsAsErrors`
 {%- endif %}
@@ -41,6 +45,8 @@ ADR นี้แปลงแต่ละหลักการเป็น check 
 - tsconfig: `noImplicitOverride` — การ override ต้องประกาศ `override` ชัดเจน
 {%- elif stack == 'python' %}
 - pyright: `reportImplicitOverride` — การ override ต้องมี `@override` และ signature ต้องเข้ากันได้ (strict mode ตรวจ)
+{%- elif stack == 'go' %}
+- Go ไม่มี inheritance: ใช้ composition และ interface เล็ก ๆ; `ireturn` บังคับให้ function คืน concrete type (accept interfaces, return structs)
 {%- else %}
 - `ArchitectureTests.ConcreteClassesAreSealed` — class ที่ไม่ abstract ต้อง `sealed`
 {%- endif %}
@@ -53,6 +59,8 @@ ADR นี้แปลงแต่ละหลักการเป็น check 
 - ESLint: `max-params`; boolean flag ตรวจตอน review
 {%- elif stack == 'python' %}
 - Ruff: `FBT` (boolean trap), `ARG` (argument ที่ไม่ใช้ = interface ไม่เข้ากับผู้เรียก)
+{%- elif stack == 'go' %}
+- golangci-lint: `interfacebloat` (interface ≤ 4 method), revive `flag-parameter` (ห้าม bool ที่สลับพฤติกรรม), revive `unused-parameter`, `unparam`
 {%- else %}
 - Analyzers: `IDE0060` (parameter ที่ไม่ใช้), `CA1040` (interface ว่าง)
 {%- endif %}
@@ -66,6 +74,10 @@ ADR นี้แปลงแต่ละหลักการเป็น check 
 {%- elif stack == 'python' %}
 - Ruff `TID251` (ยกเว้นใน adapters และ bootstrap): ห้าม `datetime.now/utcnow`, `date.today`, `random`, `uuid.uuid4`, `os.environ/getenv`, `subprocess`, `socket`, `sqlite3`, `urllib.request`, `http.client`, `time.sleep`
 - import-linter: contract `layers` (ADR 0001); `print` อนุญาตเฉพาะ bootstrap (`T20`)
+{%- elif stack == 'go' %}
+- `forbidigo` (ยกเว้นใน adapters, bootstrap และ `cmd/`): ห้าม `time.Now`, `time.Sleep`, `math/rand`, `os.Getenv/LookupEnv/Environ`, `fmt.Print*`
+- depguard: domain ใช้ได้แค่ standard library (ห้าม `os`, `net`, `database/sql`); application ห้าม import adapters/bootstrap และ I/O
+- `gochecknoglobals`, `gochecknoinits`: ห้าม state ระดับ package ที่ซ่อนอยู่
 {%- else %}
 - BannedApiAnalyzers (`BannedSymbols.txt`, `RS0030`) ใน Domain และ Application: ห้าม `DateTime.Now/UtcNow`, `DateTimeOffset.Now/UtcNow`, `Random`, `Guid.NewGuid`, `Environment.GetEnvironmentVariable`, `Thread.Sleep`, `Task.Delay`, `Console`, `File`, `Directory`, `HttpClient` — ใช้ `TimeProvider` ที่ inject เข้ามาแทนนาฬิกา
 - `ArchitectureTests.InnerLayersHaveNoIoDependencies` — Domain/Application ห้ามขึ้นกับ `System.IO`, `System.Net`, `System.Data`, EF Core, ASP.NET Core
@@ -86,6 +98,10 @@ ADR นี้แปลงแต่ละหลักการเป็น check 
 - Encapsulation: `SLF001` (ห้ามเข้าถึง `_private` ของ object อื่น), `reportUninitializedInstanceVariable`
 - Error handling: `BLE` (ห้าม `except Exception` แบบกว้าง), `TRY`; security: `S` (bandit)
 - Naming `N`, ห้าม comment ที่เป็นโค้ดเก่า `ERA`, `pathlib` แทน `os.path` (`PTH`), ห้าม import cycle (`reportImportCycles`)
+{%- elif stack == 'go' %}
+- Error handling: `wrapcheck` (wrap error ข้าม package ด้วย context), `errorlint`, `errname`, `nilerr`, `nilnil`
+- Context: `contextcheck`, `containedctx`, `noctx`; security: `gosec`; resources: `bodyclose`, `sqlclosecheck`, `rowserrcheck`
+- Formatting: `gofumpt` + `goimports`; ทางหนีต้องระบุ linter และเหตุผล (`nolintlint`)
 {%- else %}
 - Encapsulation/immutability: `CA1051`, `CA2227`, `CA1819`, `CA1002`, field ที่ไม่ถูกแก้ต้อง `readonly` (`IDE0044`)
 - Contract ชัดเจน: `CA1062` (ตรวจ argument), `CA1031` (ห้าม catch `Exception` กว้าง ๆ), `CA1852`, accessibility modifiers ชัดเจน (`IDE0040`)

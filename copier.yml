@@ -26,6 +26,7 @@ stack:
     TypeScript (Node): typescript
     Python: python
     C# (.NET): dotnet
+    Go: go
   default: typescript
 
 agent_tools:
@@ -70,7 +71,7 @@ datastores:
 http_api:
   type: bool
   help: >-
-    Serve the use case over HTTP (TypeScript: Hono, Python: FastAPI, .NET: ASP.NET Core) with
+    Serve the use case over HTTP (TypeScript: Hono, Python: FastAPI, .NET: ASP.NET Core, Go: net/http) with
     Playwright API tests and an OWASP ZAP baseline scan
   default: false
 
@@ -79,6 +80,11 @@ package_name:
   type: str
   when: false
   default: "{{ project_name | lower | replace('-', '_') }}"
+
+go_module:
+  type: str
+  when: false
+  default: "{{ project_name | lower }}"
 
 dotnet_name:
   type: str
@@ -90,6 +96,7 @@ src_root:
   when: false
   default: >-
     {%- if stack == 'python' -%}src/{{ project_name | lower | replace('-', '_') }}
+    {%- elif stack == 'go' -%}internal
     {%- else -%}src{%- endif -%}
 
 # Commands every generated file refers to (AGENTS.md, CI, hooks). One source of truth per stack.
@@ -131,7 +138,7 @@ cmd:
     {%- if http_api %}
     test_e2e: uv run pytest -m e2e
     {%- endif %}
-    {%- else %}
+    {%- elif stack == 'dotnet' %}
     install: dotnet restore
     typecheck: dotnet build --no-restore
     lint: dotnet format --verify-no-changes
@@ -147,6 +154,23 @@ cmd:
     {%- endif %}
     {%- if http_api %}
     test_e2e: dotnet test --filter-trait "Category=E2E"
+    {%- endif %}
+    {%- elif stack == 'go' %}
+    install: go mod tidy
+    typecheck: go build ./...
+    lint: go tool golangci-lint run
+    lint_file: bash ci/lint-file.sh
+    arch: go tool golangci-lint run --enable-only depguard
+    test: go test ./...
+    test_single: go test ./internal/domain -run TestName
+    fast: go vet ./... && go tool golangci-lint run
+    verify: go vet ./... && go tool golangci-lint run && go test ./...
+    audit: go tool govulncheck ./...
+    {%- if datastores %}
+    test_integration: go test -tags integration ./...
+    {%- endif %}
+    {%- if http_api %}
+    test_e2e: go test -tags e2e ./...
     {%- endif %}
     {%- endif %}
     {%- if 'postgres' in datastores %}
@@ -178,7 +202,7 @@ stk:
     skip_regex: 'pytest\.mark\.(skip|xfail)|pytest\.skip\('
     lint_exts: '*.py|*.pyi'
     layers: {domain: "{{ src_root }}/domain", application: "{{ src_root }}/application", adapters: "{{ src_root }}/adapters", bootstrap: "{{ src_root }}/bootstrap"}
-    {%- else %}
+    {%- elif stack == 'dotnet' %}
     language: C#
     guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
     escapes_display: "`#pragma warning disable`, `[SuppressMessage]`, `null!`/`default!`, `Skip =` on tests"
@@ -188,6 +212,16 @@ stk:
     skip_regex: 'Skip[[:space:]]*='
     lint_exts: '*.cs'
     layers: {domain: "src/{{ dotnet_name }}.Domain", application: "src/{{ dotnet_name }}.Application", adapters: "src/{{ dotnet_name }}.Adapters", bootstrap: "src/{{ dotnet_name }}.Bootstrap"}
+    {%- elif stack == 'go' %}
+    language: Go
+    guardrail_files: [.golangci.yml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    escapes_display: "`//nolint`, `//lint:ignore`, `#nosec`, `unsafe`, `t.Skip`"
+    ratchet_patterns: ['//[[:space:]]*nolint', '//lint:ignore', '#nosec', 'unsafe\.']
+    src_globs: ['*.go']
+    test_globs: ['*_test.go']
+    skip_regex: 't\.Skip(Now|f)?\('
+    lint_exts: '*.go'
+    layers: {domain: internal/domain, application: internal/application, adapters: internal/adapters, bootstrap: internal/bootstrap}
     {%- endif %}
 
 _message_after_copy: |

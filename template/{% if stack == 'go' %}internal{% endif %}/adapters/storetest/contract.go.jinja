@@ -1,0 +1,69 @@
+// Package storetest holds the contract every application.ArtifactStore adapter must satisfy (Liskov:
+// adapters are interchangeable behind the port). The in-memory adapter runs it in the unit suite;
+// datastore adapters run it against real containers (build tag `integration`).
+package storetest
+
+import (
+	"context"
+	"testing"
+
+	"{{ go_module }}/internal/application"
+)
+
+// Subject is an adapter under test plus a way to read back what it stored.
+type Subject struct {
+	Store application.ArtifactStore
+	Read  func(ctx context.Context, key string) (string, error)
+}
+
+// Run checks the contract. newSubject is called once per case.
+func Run(t *testing.T, newSubject func(t *testing.T) Subject) {
+	t.Helper()
+
+	t.Run("returns a key that reads back the content", func(t *testing.T) {
+		s := newSubject(t)
+		key := save(t, s, "contract-1", "id\n1\n")
+		expectContent(t, s, key, "id\n1\n")
+	})
+
+	t.Run("is idempotent per job", func(t *testing.T) {
+		s := newSubject(t)
+		first := save(t, s, "contract-2", "old")
+		second := save(t, s, "contract-2", "new")
+		if first != second {
+			t.Fatalf("keys differ: %q and %q", first, second)
+		}
+		expectContent(t, s, second, "new")
+	})
+
+	t.Run("keeps different jobs apart", func(t *testing.T) {
+		s := newSubject(t)
+		a := save(t, s, "contract-3a", "a")
+		b := save(t, s, "contract-3b", "b")
+		if a == b {
+			t.Fatalf("both jobs got key %q", a)
+		}
+		expectContent(t, s, a, "a")
+		expectContent(t, s, b, "b")
+	})
+}
+
+func save(t *testing.T, s Subject, jobID, content string) string {
+	t.Helper()
+	key, err := s.Store.Save(t.Context(), jobID, content)
+	if err != nil {
+		t.Fatalf("Save(%q): %v", jobID, err)
+	}
+	return key
+}
+
+func expectContent(t *testing.T, s Subject, key, want string) {
+	t.Helper()
+	got, err := s.Read(t.Context(), key)
+	if err != nil {
+		t.Fatalf("Read(%q): %v", key, err)
+	}
+	if got != want {
+		t.Fatalf("Read(%q) = %q, want %q", key, got, want)
+	}
+}

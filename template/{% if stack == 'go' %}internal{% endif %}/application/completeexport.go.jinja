@@ -1,0 +1,29 @@
+// Package application holds use cases. It reaches the outside world only through ports it defines,
+// which adapters implement and bootstrap wires (ADR 0001).
+package application
+
+import (
+	"context"
+	"fmt"
+
+	"{{ go_module }}/internal/domain"
+)
+
+// ArtifactStore is a port: defined here, implemented in adapters, wired in bootstrap.
+type ArtifactStore interface {
+	// Save stores the content for a job and returns its key. Saving the same job again replaces it.
+	Save(ctx context.Context, jobID, content string) (string, error)
+}
+
+// CompleteExport stores the export content and completes the running job.
+func CompleteExport(ctx context.Context, store ArtifactStore, job domain.Running, content string) (domain.Ready, error) {
+	key, err := store.Save(ctx, job.ID(), content)
+	if err != nil {
+		return domain.Ready{}, fmt.Errorf("save artifact for %s: %w", job.ID(), err)
+	}
+	ready, err := domain.Complete(job, key)
+	if err != nil {
+		return domain.Ready{}, fmt.Errorf("complete %s: %w", job.ID(), err)
+	}
+	return ready, nil
+}

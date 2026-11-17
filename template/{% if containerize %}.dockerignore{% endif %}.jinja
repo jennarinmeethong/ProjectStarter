@@ -18,6 +18,11 @@ coverage
 **/__pycache__
 .pytest_cache
 .ruff_cache
+{%- elif stack == 'go' %}
+bin
+dist
+*.test
+coverage.out
 {%- else %}
 **/bin
 **/obj

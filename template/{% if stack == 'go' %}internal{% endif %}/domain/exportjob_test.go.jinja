@@ -1,0 +1,49 @@
+package domain_test
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"{{ go_module }}/internal/domain"
+)
+
+func TestCompletesRunningJobWithArtifactKey(t *testing.T) {
+	t.Parallel()
+	running := domain.Start(domain.NewQueued("job-1"))
+
+	ready, err := domain.Complete(running, "exports/job-1.csv")
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if ready.ID() != "job-1" || ready.ArtifactKey() != "exports/job-1.csv" {
+		t.Fatalf("got %q %q", ready.ID(), ready.ArtifactKey())
+	}
+}
+
+func TestRejectsBlankArtifactKey(t *testing.T) {
+	t.Parallel()
+	_, err := domain.Complete(domain.Start(domain.NewQueued("job-1")), "  ")
+	if !errors.Is(err, domain.ErrBlankArtifactKey) {
+		t.Fatalf("want ErrBlankArtifactKey, got %v", err)
+	}
+}
+
+// FuzzCompleteKeepsIDAndKey is a property test: for any id and any non-blank key, completing keeps both.
+// `go test` runs the seed corpus; `go test -fuzz=FuzzCompleteKeepsIDAndKey ./internal/domain` explores more.
+func FuzzCompleteKeepsIDAndKey(f *testing.F) {
+	f.Add("job-1", "exports/job-1.csv")
+	f.Add("", "k")
+	f.Fuzz(func(t *testing.T, id, key string) {
+		if strings.TrimSpace(key) == "" {
+			return // blank keys are rejected by design (TestRejectsBlankArtifactKey)
+		}
+		ready, err := domain.Complete(domain.Start(domain.NewQueued(id)), key)
+		if err != nil {
+			t.Fatalf("Complete(%q, %q): %v", id, key, err)
+		}
+		if ready.ID() != id || ready.ArtifactKey() != key {
+			t.Fatalf("got %q %q, want %q %q", ready.ID(), ready.ArtifactKey(), id, key)
+		}
+	})
+}

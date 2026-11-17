@@ -1,0 +1,26 @@
+// Command {{ go_module }} is the entry point; all wiring lives in internal/bootstrap.
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"{{ go_module }}/internal/bootstrap"
+)
+
+func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := bootstrap.Run(ctx, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}

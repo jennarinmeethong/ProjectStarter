@@ -4,6 +4,7 @@ trustedRegistries:
   - docker.io
   - ghcr.io
   - mcr.microsoft.com
+  - gcr.io # distroless base images
 override:
   error:
     - DL3002   # last USER must not be root

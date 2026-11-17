@@ -27,6 +27,10 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 | driver อยู่ใน adapters | import-linter contract `drivers` (forbidden: domain, application, bootstrap → driver) |
 | SQL ใช้ parameter | Ruff `S608` (bandit: SQL ที่สร้างจาก string) |
 | contract test | `tests/artifact_store_contract.py`; integration: `uv run pytest -m integration` |
+{%- elif stack == 'go' %}
+| driver อยู่ใน adapters | depguard rule `drivers` (domain, application, bootstrap, cmd → pgx/go-redis) |
+| SQL ใช้ parameter | gocritic ruleguard `sqlFromStrings` (`ci/gorules/rules.go`: `Exec`/`Query`/`QueryRow` ที่ประกอบ SQL ด้วย `+` หรือ `fmt.Sprintf` รวมถึง pgx) และ `gosec` G201/G202 |
+| contract test | `internal/adapters/storetest`; integration: `go test -tags integration ./...` |
 {%- else %}
 | driver อยู่ใน adapters | project references: มีแค่ `Adapters` ที่อ้าง `Npgsql`/`StackExchange.Redis` (compiler บังคับ) |
 | SQL ใช้ parameter | `CA2100` เป็น error |

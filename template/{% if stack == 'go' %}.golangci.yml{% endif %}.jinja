@@ -1,0 +1,177 @@
+# Guardrail config (protected). Rule messages say what to do instead and link an ADR.
+# Run with `go tool golangci-lint run` (version pinned in go.mod).
+version: "2"
+
+run:
+  build-tags: [integration, e2e]
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    # Layer boundaries and banned ambient APIs (ADR 0001, ADR 0002 #DIP)
+    - depguard
+    - forbidigo
+    - gochecknoglobals
+    - gochecknoinits
+    # SRP: size and complexity (ADR 0002 #SRP)
+    - gocognit
+    - funlen
+    - nestif
+    - maintidx
+    # OCP / LSP: closed sum types and enums are handled exhaustively (ADR 0002 #OCP)
+    - gochecksumtype
+    - exhaustive
+    # ISP: small interfaces, return concrete types (ADR 0002 #ISP)
+    - interfacebloat
+    - ireturn
+    # Errors and context
+    - errorlint
+    - errname
+    - wrapcheck
+    - nilerr
+    - nilnil
+    - contextcheck
+    - containedctx
+    - noctx
+    # Security (OWASP), including SQL built from strings (gosec G201/G202)
+    - gosec
+    - bodyclose
+    - rowserrcheck
+    - sqlclosecheck
+    # Duplication and readability
+    - dupl
+    - goconst
+    - gocritic
+    - revive
+    - unparam
+    - perfsprint
+    - prealloc
+    - usestdlibvars
+    - wastedassign
+    - musttag
+    # Escape hatches must be specific and explained
+    - nolintlint
+
+  settings:
+    gocognit:
+      min-complexity: 15
+    funlen:
+      lines: 60
+      statements: 40
+    nestif:
+      min-complexity: 4
+    interfacebloat:
+      max: 4
+    revive:
+      rules:
+        - name: argument-limit
+          arguments: [4]
+        - name: flag-parameter # a bool parameter that switches behaviour hides two functions (ISP)
+        - name: exported
+        - name: package-comments
+        - name: unused-parameter
+        - name: unexported-return
+    gocritic:
+      enabled-tags: [diagnostic, style, performance]
+      disabled-checks: [hugeParam, whyNoLint]
+      settings:
+        ruleguard:
+          # Project rules, e.g. no SQL built from strings (ADR 0003). Relative to the project root, where
+          # golangci-lint runs; the setting is comma-separated, so an absolute path with a comma would break.
+          rules: "ci/gorules/rules.go"
+          failOn: all
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    exhaustive:
+      default-signifies-exhaustive: false
+    depguard:
+      rules:
+        domain:
+          files: ["**/internal/domain/**", "!$test"]
+          list-mode: strict
+          allow: ["$gostd"]
+          deny:
+            - pkg: os
+              desc: "domain has no I/O; inject a port (docs/adr/0001-layered-architecture.md)"
+            - pkg: net
+              desc: "domain has no I/O; inject a port (docs/adr/0001-layered-architecture.md)"
+            - pkg: database/sql
+              desc: "domain has no I/O; inject a port (docs/adr/0001-layered-architecture.md)"
+        application:
+          files: ["**/internal/application/**"]
+          deny:
+            - pkg: "{{ go_module }}/internal/adapters"
+              desc: "application talks to the outside through ports it defines; adapters implement them (ADR 0001)"
+            - pkg: "{{ go_module }}/internal/bootstrap"
+              desc: "only bootstrap wires dependencies (ADR 0001)"
+            - pkg: os
+              desc: "no I/O in application; define a port and implement it in adapters (ADR 0001)"
+            - pkg: net
+              desc: "no I/O in application; define a port and implement it in adapters (ADR 0001)"
+            - pkg: database/sql
+              desc: "no I/O in application; define a port and implement it in adapters (ADR 0001)"
+        adapters:
+          files: ["**/internal/adapters/**"]
+          deny:
+            - pkg: "{{ go_module }}/internal/bootstrap"
+              desc: "only bootstrap wires dependencies (ADR 0001)"
+        drivers:
+          files: ["**/internal/domain/**", "**/internal/application/**", "**/internal/bootstrap/**", "**/cmd/**"]
+          deny:
+            - pkg: github.com/jackc/pgx
+              desc: "datastore drivers live in adapters; bootstrap passes connection settings (docs/adr/0003-datastores.md)"
+            - pkg: github.com/redis/go-redis
+              desc: "datastore drivers live in adapters; bootstrap passes connection settings (docs/adr/0003-datastores.md)"
+            - pkg: github.com/lib/pq
+              desc: "datastore drivers live in adapters (docs/adr/0003-datastores.md)"
+            - pkg: go.mongodb.org/mongo-driver
+              desc: "datastore drivers live in adapters (docs/adr/0003-datastores.md)"
+        web:
+          files: ["**/internal/domain/**", "**/internal/application/**"]
+          deny:
+            - pkg: net/http
+              desc: "HTTP is a driving adapter: decode requests in internal/adapters/httpapi (ADR 0001)"
+            - pkg: github.com/gin-gonic/gin
+              desc: "HTTP is a driving adapter (ADR 0001)"
+            - pkg: github.com/labstack/echo
+              desc: "HTTP is a driving adapter (ADR 0001)"
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^time\.Now$
+          msg: "No ambient clock outside adapters/bootstrap. Inject a Clock port and pass the time in (docs/adr/0002-design-rules.md #DIP)."
+        - pattern: ^time\.Sleep$
+          msg: "No sleeps: model the state or inject a scheduler port (docs/engineering/agent-principles.md #2)."
+        - pattern: ^rand\.
+          pkg: ^math/rand
+          msg: "No ambient randomness outside adapters/bootstrap. Inject a generator port (docs/adr/0002-design-rules.md #DIP)."
+        - pattern: ^os\.(Getenv|LookupEnv|Environ)$
+          msg: "Read configuration in bootstrap and pass typed values in (docs/adr/0002-design-rules.md #DIP)."
+        - pattern: ^fmt\.Print(f|ln)?$
+          msg: "No printing to stdout; return results and let bootstrap or an adapter present them."
+
+  exclusions:
+    presets: [std-error-handling]
+    rules:
+      # Adapters and bootstrap are where the outside world is allowed.
+      - path: internal/(adapters|bootstrap)/
+        linters: [forbidigo]
+      - path: cmd/
+        linters: [forbidigo]
+      # Bootstrap chooses an adapter at runtime, so it returns the port.
+      - path: internal/bootstrap/
+        linters: [ireturn]
+      # Tests read best as one flat list of cases.
+      - path: _test\.go
+        linters: [funlen, dupl, goconst, wrapcheck, maintidx, ireturn] # ireturn: Playwright exposes only interfaces
+      - path: internal/adapters/storetest/
+        linters: [wrapcheck]
+
+formatters:
+  enable: [gofumpt, goimports]
+  settings:
+    gofumpt:
+      module-path: "{{ go_module }}" # module paths without a dot otherwise look like the standard library
+    goimports:
+      local-prefixes: ["{{ go_module }}"]

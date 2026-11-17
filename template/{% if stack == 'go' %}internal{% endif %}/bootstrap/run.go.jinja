@@ -1,0 +1,126 @@
+// Package bootstrap reads configuration and wires adapters to use cases. It is the only package that
+// does either (ADR 0001, ADR 0003).
+package bootstrap
+
+import (
+	"context"
+	"fmt"
+	"io"
+{%- if http_api %}
+	"net"
+	"net/http"
+{%- endif %}
+{%- if datastores or http_api %}
+	"os"
+{%- endif %}
+{%- if http_api %}
+	"time"
+{%- endif %}
+
+{% if http_api %}	"{{ go_module }}/internal/adapters/httpapi"
+{% endif %}	"{{ go_module }}/internal/adapters/inmemory"
+{%- if 'postgres' in datastores %}
+	"{{ go_module }}/internal/adapters/postgres"
+{%- endif %}
+{%- if 'redis' in datastores %}
+	"{{ go_module }}/internal/adapters/redisstore"
+{%- endif %}
+	"{{ go_module }}/internal/application"
+{%- if not http_api %}
+	"{{ go_module }}/internal/domain"
+{%- endif %}
+)
+
+{%- if http_api %}
+
+// Run serves the HTTP API until ctx is cancelled, then shuts down gracefully.
+{%- else %}
+
+// Run completes a demo export and prints its artifact key.
+{%- endif %}
+func Run(ctx context.Context, stdout io.Writer) error {
+{%- if datastores %}
+	store, closeStore, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+{%- else %}
+	store := inmemory.New()
+{%- endif %}
+{%- if http_api %}
+
+	return serve(ctx, store, stdout)
+{%- else %}
+
+	job := domain.Start(domain.NewQueued("demo"))
+	ready, err := application.CompleteExport(ctx, store, job, "id,name\n1,demo\n")
+	if err != nil {
+		return fmt.Errorf("demo export: %w", err)
+	}
+	if _, err := fmt.Fprintf(stdout, "%s -> %s\n", ready.ID(), ready.ArtifactKey()); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	return nil
+{%- endif %}
+}
+{%- if datastores %}
+
+// openStore picks the adapter from configuration; in-memory when nothing is configured.
+func openStore(ctx context.Context) (application.ArtifactStore, func(), error) {
+{%- if 'postgres' in datastores %}
+	if url := os.Getenv("DATABASE_URL"); url != "" {
+		store, err := postgres.Open(ctx, url)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open postgres: %w", err)
+		}
+		return store, store.Close, nil
+	}
+{%- endif %}
+{%- if 'redis' in datastores %}
+	if url := os.Getenv("REDIS_URL"); url != "" {
+		store, err := redisstore.Open(ctx, url)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open redis: %w", err)
+		}
+		return store, func() { _ = store.Close() }, nil
+	}
+{%- endif %}
+	return inmemory.New(), func() {}, nil
+}
+{%- endif %}
+{%- if http_api %}
+
+func serve(ctx context.Context, store application.ArtifactStore, stdout io.Writer) error {
+	// Loopback by default; the container image sets HOST=0.0.0.0 explicitly.
+	server := &http.Server{
+		Addr:              net.JoinHostPort(envOr("HOST", "127.0.0.1"), envOr("PORT", "8080")),
+		Handler:           httpapi.NewHandler(store),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	errs := make(chan error, 1)
+	go func() { errs <- server.ListenAndServe() }()
+	if _, err := fmt.Fprintf(stdout, "listening on http://%s\n", server.Addr); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+
+	select {
+	case err := <-errs:
+		return fmt.Errorf("serve: %w", err)
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown: %w", err)
+		}
+		return nil
+	}
+}
+
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+{%- endif %}

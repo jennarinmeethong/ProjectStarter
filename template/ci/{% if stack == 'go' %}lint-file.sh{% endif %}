@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# ci/lint-file.sh <file.go> — lint the package that contains one Go file (golangci-lint works per package).
+# Used by the Claude Code PostToolUse hook; CI lints everything with `go tool golangci-lint run`.
+set -euo pipefail
+dir=$(dirname "${1:?usage: ci/lint-file.sh <file.go>}")
+go tool golangci-lint run "./$dir/"

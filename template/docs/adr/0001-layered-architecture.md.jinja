@@ -20,6 +20,9 @@ Agent เลียนแบบสิ่งที่เห็นใน codebase �
 - `.dependency-cruiser.cjs` (`npm run arch`) — กฎ `domain-is-pure`, `application-not-to-adapters`, `no-circular`
 {%- elif stack == 'python' %}
 - `.importlinter` (`uv run lint-imports`) — contract แบบ `layers`
+{%- elif stack == 'go' %}
+- `.golangci.yml` depguard (`go tool golangci-lint run`) — กฎ `domain` (stdlib เท่านั้น), `application`, `adapters`
+- `internal/` ทำให้ package อื่นนอก module import ไม่ได้ และ Go compiler ห้าม import cycle
 {%- else %}
 - Project references: `Domain` ไม่อ้างถึง project อื่น, `Application` อ้างถึง `Domain` เท่านั้น — compiler บังคับ
 - `tests/{{ dotnet_name }}.Tests/ArchitectureTests.cs` (NetArchTest, `Category=Architecture`) ตรวจซ้ำระดับ namespace
