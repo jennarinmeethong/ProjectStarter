@@ -30,6 +30,10 @@
 - Datastores: drivers only in adapters, append-only `migrations/`, parameterised SQL (`docs/adr/0003-datastores.md`).
   Integration tests need Docker: `{{ cmd.test_integration }}`
 {%- endif %}
+{%- if http_api %}
+- HTTP API: validate at the adapter, problem details, security headers (`docs/adr/0004-http-api.md`).
+  API tests: `{{ cmd.test_e2e }}`{% if containerize %} · ZAP scan: `bash ci/dast.sh <image>`{% endif %}
+{%- endif %}
 - Why rules exist: `docs/adr/` · Where a new rule belongs: `docs/engineering/where-rules-live.md`
 - Specs for risk tier 2–3 work: copy `SPEC.template.md` to `docs/specs/<feature-id>.md`
 

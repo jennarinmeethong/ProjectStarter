@@ -67,6 +67,13 @@ datastores:
     Redis: redis
   default: []
 
+http_api:
+  type: bool
+  help: >-
+    Serve the use case over HTTP (TypeScript: Hono, Python: FastAPI, .NET: ASP.NET Core) with
+    Playwright API tests and an OWASP ZAP baseline scan
+  default: false
+
 # ---------- computed values (never asked) ----------
 package_name:
   type: str
@@ -104,6 +111,9 @@ cmd:
     {%- if datastores %}
     test_integration: npm run test:integration
     {%- endif %}
+    {%- if http_api %}
+    test_e2e: npm run test:e2e
+    {%- endif %}
     {%- elif stack == 'python' %}
     install: uv sync
     typecheck: uv run pyright
@@ -118,6 +128,9 @@ cmd:
     {%- if datastores %}
     test_integration: uv run pytest -m integration
     {%- endif %}
+    {%- if http_api %}
+    test_e2e: uv run pytest -m e2e
+    {%- endif %}
     {%- else %}
     install: dotnet restore
     typecheck: dotnet build --no-restore
@@ -127,10 +140,13 @@ cmd:
     test: dotnet test
     test_single: 'dotnet test --filter-method "*.ClassName.MethodName"'
     fast: dotnet build
-    verify: dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build{% if datastores %} --filter-not-trait "Category=Integration"{% endif %}
+    verify: dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build{% if datastores %} --filter-not-trait "Category=Integration"{% endif %}{% if http_api %} --filter-not-trait "Category=E2E"{% endif %}
     audit: dotnet restore --force-evaluate
     {%- if datastores %}
     test_integration: dotnet test --filter-trait "Category=Integration"
+    {%- endif %}
+    {%- if http_api %}
+    test_e2e: dotnet test --filter-trait "Category=E2E"
     {%- endif %}
     {%- endif %}
     {%- if 'postgres' in datastores %}
@@ -144,7 +160,7 @@ stk:
   default: |
     {%- if stack == 'typescript' %}
     language: TypeScript
-    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
     escapes_display: "`eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `as any`, `as unknown as`, `.skip`/`.only`"
     ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as', 'NOSONAR']
     src_globs: ['*.ts', '*.tsx']
@@ -154,7 +170,7 @@ stk:
     layers: {domain: src/domain, application: src/application, adapters: src/adapters, bootstrap: src/bootstrap}
     {%- elif stack == 'python' %}
     language: Python
-    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
     escapes_display: "`# type: ignore`, `# pyright: ignore`, `# noqa`, `cast(Any, ...)`, `pytest.mark.skip`/`xfail`"
     ratchet_patterns: ['type:[[:space:]]*ignore', 'pyright:[[:space:]]*ignore', 'noqa', 'cast\(Any']
     src_globs: ['*.py']
@@ -164,7 +180,7 @@ stk:
     layers: {domain: "{{ src_root }}/domain", application: "{{ src_root }}/application", adapters: "{{ src_root }}/adapters", bootstrap: "{{ src_root }}/bootstrap"}
     {%- else %}
     language: C#
-    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
     escapes_display: "`#pragma warning disable`, `[SuppressMessage]`, `null!`/`default!`, `Skip =` on tests"
     ratchet_patterns: ['#pragma warning disable', 'SuppressMessage', 'null!', 'default!']
     src_globs: ['*.cs']

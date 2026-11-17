@@ -46,8 +46,9 @@ container_checks() { # container_checks <stack>: run inside the rendered project
   export MSYS_NO_PATHCONV=1
   verify "hadolint" "docker run --rm -v '$vol:/w' -w /w $hadolint hadolint Dockerfile"
   verify "check-dockerfile" "bash ci/check-dockerfile.sh"
-  verify "docker build + hardened smoke run (non-root, read-only)" \
-    "docker build -q -t $image . && docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true $image | grep -q 'demo -> exports/demo.csv' && [ \"\$(docker run --rm --entrypoint id $image -u)\" != 0 ]"
+  # This render serves HTTP, so the smoke run starts the hardened container and waits for /healthz.
+  verify "docker build + hardened smoke run (non-root, read-only, /healthz)" \
+    "docker build -q -t $image . && bash ci/dast.sh $image --smoke && [ \"\$(docker run --rm --entrypoint id $image -u)\" != 0 ]"
   sed -i '0,/^FROM \([^ :]*\):[^ ]*/s//FROM \1:latest/' Dockerfile
   expect_fail "hadolint: :latest base image" docker run --rm -v "$vol:/w" -w /w $hadolint hadolint Dockerfile
   git checkout -q -- Dockerfile
@@ -72,13 +73,26 @@ datastore_checks() { # datastore_checks <stack>: rendered with datastores=[postg
   git -c user.name=t -c user.email=t@t commit -qam "edit migration"
   expect_fail "ratchet: edited migration" bash ci/guardrail-ratchet.sh base
   git -c user.name=t -c user.email=t@t revert -q --no-edit HEAD
-  # End to end: compose starts PostgreSQL + Redis, applies migrations, and the app writes through the adapter.
+  # End to end: compose starts PostgreSQL + Redis (migrations applied) and the app; an HTTP request is stored
+  # through the PostgreSQL adapter.
   local compose="docker compose -p ps-$1"
   $compose down -v >/dev/null 2>&1
-  verify "compose: app stores the export in PostgreSQL" \
-    "$compose up -d --wait postgres redis && $compose run --rm --build app | grep -q 'demo -> exports/demo.csv' \
-     && [ \"\$($compose exec -T postgres psql -U app -d app -tAc 'SELECT count(*) FROM export_artifacts')\" = 1 ]"
+  verify "compose: HTTP request is stored in PostgreSQL" \
+    "$compose build app && $compose up -d --wait postgres redis && $compose up -d app \
+     && for _ in \$(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break; sleep 1; done \
+     && curl -fsS -X POST -H 'Content-Type: application/json' -d '{\"content\":\"id\\n1\\n\"}' http://127.0.0.1:8080/exports/compose-1/complete | grep -q 'exports/compose-1.csv' \
+     && [ \"\$($compose exec -T postgres psql -U app -d app -tAc \"SELECT count(*) FROM export_artifacts WHERE job_id = 'compose-1'\")\" = 1 ]"
   $compose down -v >/dev/null 2>&1
+}
+
+http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: rendered with http_api=true
+  local image="project-starter-$1"
+  verify "playwright: API tests against the real server" "$2"
+  verify "zap: baseline scan of the running container" "bash ci/dast.sh $image"
+  # Drop one security header: the ZAP scan must fail the build.
+  sed -i "$4" "$3"
+  expect_fail "zap: missing X-Content-Type-Options" bash -c "docker build -q -t $image-seed . >/dev/null && bash ci/dast.sh $image-seed"
+  git checkout -q -- "$3"
 }
 
 secret_checks() { # secret_checks: gitleaks is clean on the render and rejects a committed token
@@ -101,9 +115,9 @@ for stack in "${stacks[@]}"; do
   # The both-tools render also sets a guardrail owner; the others leave it empty (no CODEOWNERS).
   for tools in '["claude"]' '["codex"]' '["claude","codex"]'; do
     d="$work/$stack-$(echo "$tools" | tr -dc 'a-z,')"
-    # The both-tools render also wires in every datastore; it gets the full verification below.
+    # The both-tools render also wires in every datastore and the HTTP API; it gets the full verification below.
     if [ "$tools" = '["claude","codex"]' ]; then
-      owner_args=(-d guardrail_owner=@demo-org/platform -d 'datastores=["postgres","redis"]')
+      owner_args=(-d guardrail_owner=@demo-org/platform -d 'datastores=["postgres","redis"]' -d http_api=true)
     else
       owner_args=()
     fi
@@ -126,6 +140,14 @@ for stack in "${stacks[@]}"; do
       [ -f "$d/migrations/0001_create_export_artifacts.sql" ] && grep -q '\.sqlfluff' "$d/AGENTS.md" && grep -q 'integration:' "$d/.github/workflows/ci.yml"         && pass "datastore files ($tools)" || fail "datastore files missing or unprotected ($tools)"
     else
       [ ! -e "$d/migrations" ] && [ ! -e "$d/.sqlfluff" ] && ! grep -q 'integration:' "$d/.github/workflows/ci.yml" && [ -f "$d/docs/adr/0003-datastores.md" ] && pass "no datastore files without datastores ($tools)" || fail "datastore files generated without datastores ($tools)"
+    fi
+    if [ ${#owner_args[@]} -gt 0 ]; then
+      [ -f "$d/ci/dast.sh" ] && [ -f "$d/docs/adr/0004-http-api.md" ] && grep -q '\.zap/rules\.tsv' "$d/AGENTS.md" \
+        && grep -q 'e2e:' "$d/.github/workflows/ci.yml" && grep -q 'dast:' "$d/.github/workflows/ci.yml" \
+        && pass "http api files ($tools)" || fail "http api files missing or unprotected ($tools)"
+    else
+      [ ! -e "$d/ci/dast.sh" ] && [ ! -e "$d/.zap" ] && [ ! -e "$d/docs/adr/0004-http-api.md" ] && ! grep -q 'dast:' "$d/.github/workflows/ci.yml" \
+        && pass "no http api files without http_api ($tools)" || fail "http api files generated without http_api ($tools)"
     fi
     if [ ${#owner_args[@]} -gt 0 ]; then
       grep -q '@demo-org/platform' "$d/.github/CODEOWNERS" 2>/dev/null && pass "CODEOWNERS with owner ($tools)" || fail "CODEOWNERS missing ($tools)"
@@ -168,6 +190,9 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks typescript
       verify "integration: adapter contracts on real PostgreSQL + Redis" "npm run test:integration"
+      # HTTP API (docs/adr/0004-http-api.md).
+      http_checks typescript "npm run test:e2e" src/adapters/http/app.ts 's/      xFrameOptions: "DENY",/&\n      xContentTypeOptions: false,/'
+      seeded "depcruise: web framework imported in application" src/application/complete-export.ts '\nimport { Hono } from "hono";\nexport const framework = Hono;\n' npm run arch
       seeded "depcruise: driver imported in application" src/application/complete-export.ts '\nimport pg from "pg";\nexport const driver = pg;\n' npm run arch
       seeded "depcruise: driver imported in bootstrap" src/bootstrap/main.ts '\nimport { createClient } from "redis";\nexport const driver = createClient;\n' npm run arch
       seeded "eslint: SQL built by concatenation" src/adapters/postgres-artifact-store.ts '\nexport function unsafe(pool: pg.Pool, jobId: string): Promise<pg.QueryResult> {\n  return pool.query("SELECT body FROM export_artifacts WHERE job_id = \x27" + jobId + "\x27");\n}\n' npm run lint
@@ -189,7 +214,8 @@ for stack in "${stacks[@]}"; do
       # Dependency audit: clean on the render, rejects a known-vulnerable package.
       verify "uv audit" "uv audit --locked --preview-features audit-command"
       cp pyproject.toml uv.lock "$work/"
-      uv add --no-sync requests==2.19.0 >/dev/null 2>&1
+      # pyyaml 5.3 has known advisories and no dependencies, so it resolves next to any other package set.
+      uv add --no-sync pyyaml==5.3 >/dev/null 2>&1
       expect_fail "uv audit: vulnerable dependency" uv audit --locked --preview-features audit-command
       cp "$work/pyproject.toml" "$work/uv.lock" .
       # Container and secret scanning (docs/security/owasp.md).
@@ -198,6 +224,9 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks python
       verify "integration: adapter contracts on real PostgreSQL + Redis" "uv run pytest -q -p no:warnings -m integration"
+      # HTTP API (docs/adr/0004-http-api.md).
+      http_checks python "uv run pytest -q -p no:warnings -m e2e" src/demo_app/adapters/http/app.py '/"X-Content-Type-Options": "nosniff",/d'
+      seeded "import-linter: web framework imported in application" src/demo_app/application/complete_export.py '\nimport fastapi\n\nFRAMEWORK = fastapi\n' uv run lint-imports
       seeded "import-linter: driver imported in application" src/demo_app/application/complete_export.py '\nimport psycopg\n\nDRIVER = psycopg\n' uv run lint-imports
       seeded "import-linter: driver imported in bootstrap" src/demo_app/bootstrap/main.py '\nimport redis\n\nDRIVER = redis\n' uv run lint-imports
       seeded "ruff: SQL built with an f-string" src/demo_app/adapters/postgres_artifact_store.py '\n\ndef unsafe(connection: psycopg.Connection[TupleRow], job_id: str) -> None:\n    connection.execute(f"SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27")\n' uv run ruff check .
@@ -213,7 +242,7 @@ for stack in "${stacks[@]}"; do
       expect_fail "import-linter: domain -> adapters" uv run lint-imports
       ;;
     dotnet)
-      verify "dotnet verify" 'dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build --filter-not-trait "Category=Integration"'
+      verify "dotnet verify" 'dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build --filter-not-trait "Category=Integration" --filter-not-trait "Category=E2E"'
       # Dependency audit (NuGetAudit + TreatWarningsAsErrors): clean, then rejects a known-vulnerable package.
       verify "nuget audit" "dotnet restore --force-evaluate"
       sed -i 's#<PackageVersion Include="xunit.v3"#<PackageVersion Include="Newtonsoft.Json" Version="12.0.1" />\n    &#' Directory.Packages.props
@@ -226,6 +255,8 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks dotnet
       verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --filter-trait "Category=Integration"'
+      # HTTP API (docs/adr/0004-http-api.md).
+      http_checks dotnet 'dotnet test --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
       seeded "CA2100: SQL built by concatenation" src/DemoApp.Adapters/PostgresArtifactStore.cs '\npublic static class Unsafe\n{\n    public static NpgsqlCommand Query(NpgsqlConnection connection, string jobId) =>\n        new() { Connection = connection, CommandText = "SELECT body FROM export_artifacts WHERE job_id = \x27" + jobId + "\x27" };\n}\n' dotnet build
       # Design rules (ADR 0002), one violation at a time.
       seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build

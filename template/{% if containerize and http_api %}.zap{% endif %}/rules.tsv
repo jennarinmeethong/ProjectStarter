@@ -1,0 +1,10 @@
+# Guardrail config (protected). OWASP ZAP baseline rules, used by ci/dast.sh (docs/security/owasp.md).
+# Format: <rule id><TAB><IGNORE|INFO|WARN|FAIL><TAB>(<name>) — any rule not listed defaults to WARN,
+# and warnings fail the scan too. IGNORE only with a reason, never to make a real finding go away.
+10020	FAIL	(Missing Anti-clickjacking Header)
+10021	FAIL	(X-Content-Type-Options Header Missing)
+10038	FAIL	(Content Security Policy Header Not Set)
+10036	FAIL	(Server Leaks Version Information via "Server" HTTP Response Header Field)
+10037	FAIL	(Server Leaks Information via "X-Powered-By" HTTP Response Header Field(s))
+# The API sends Cache-Control: no-store on purpose (responses may contain export data).
+10049	IGNORE	(Non-Storable Content)

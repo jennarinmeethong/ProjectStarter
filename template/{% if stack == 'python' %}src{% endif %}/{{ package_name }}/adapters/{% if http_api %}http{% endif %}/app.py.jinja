@@ -1,0 +1,84 @@
+"""HTTP adapter: FastAPI app for the export use case.
+
+Requests are validated here; domain and application never see HTTP types (ADR 0001).
+Security baseline: docs/security/owasp.md.
+"""
+
+from collections.abc import Awaitable, Callable
+from typing import Annotated
+
+from fastapi import FastAPI, Path, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.exceptions import HTTPException
+
+from {{ package_name }}.application.complete_export import ArtifactStore, complete_export_use_case
+from {{ package_name }}.domain.export_job import QueuedExport, start_export
+
+JOB_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+MAX_CONTENT_LENGTH = 1_000_000
+NOT_FOUND = 404
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cache-Control": "no-store",
+}
+
+
+class CompleteExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: str = Field(min_length=1, max_length=MAX_CONTENT_LENGTH)
+
+
+class CompleteExportResponse(BaseModel):
+    id: str
+    artifact_key: str = Field(serialization_alias="artifactKey")
+
+
+def problem(status: int, title: str) -> JSONResponse:
+    """RFC 9457 problem details. Never includes stack traces or internal messages."""
+    return JSONResponse(
+        {"type": "about:blank", "title": title, "status": status},
+        status_code=status,
+        media_type="application/problem+json",
+    )
+
+
+def create_app(store: ArtifactStore) -> FastAPI:
+    # No interactive docs: the strict CSP blocks their scripts, and they widen the attack surface.
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.middleware("http")
+    async def security_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        response.headers.update(SECURITY_HEADERS)
+        return response
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_request: Request, _error: RequestValidationError) -> JSONResponse:
+        return problem(400, "Invalid request")
+
+    @app.exception_handler(HTTPException)
+    async def http_error(_request: Request, error: HTTPException) -> JSONResponse:
+        title = "Not found" if error.status_code == NOT_FOUND else "Error"
+        return problem(error.status_code, title)
+
+    @app.get("/healthz")
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.post("/exports/{job_id}/complete", status_code=201)
+    def complete(
+        job_id: Annotated[str, Path(pattern=JOB_ID_PATTERN)], body: CompleteExportRequest
+    ) -> CompleteExportResponse:
+        job = start_export(QueuedExport(id=job_id))
+        ready = complete_export_use_case(store, job, body.content)
+        return CompleteExportResponse(id=ready.id, artifact_key=ready.artifact_key)
+
+    return app

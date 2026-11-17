@@ -1,0 +1,116 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Playwright;
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+using {{ dotnet_name }}.Bootstrap;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Starts the real HTTP host on a free port and a Playwright API client against it.</summary>
+public sealed class HttpApiFixture : IAsyncLifetime
+{
+    private WebApplication? app;
+    private IPlaywright? playwright;
+    private IAPIRequestContext? api;
+
+    public IAPIRequestContext Api => api ?? throw new InvalidOperationException("Fixture not initialised.");
+
+    public async ValueTask InitializeAsync()
+    {
+        app = HttpHost.Build(new InMemoryArtifactStore(), "http://127.0.0.1:0");
+        await app.StartAsync(TestContext.Current.CancellationToken);
+        playwright = await Playwright.CreateAsync();
+        api = await playwright.APIRequest.NewContextAsync(new() { BaseURL = BoundAddress(app) });
+    }
+
+    /// <summary>The address Kestrel actually bound to (port 0 picks a free port).</summary>
+    private static string BoundAddress(WebApplication host) =>
+        host.Services.GetRequiredService<IServer>().Features.GetRequiredFeature<IServerAddressesFeature>().Addresses.First();
+
+    public async ValueTask DisposeAsync()
+    {
+        if (api is not null)
+        {
+            await api.DisposeAsync();
+        }
+
+        playwright?.Dispose();
+        if (app is not null)
+        {
+            await app.DisposeAsync();
+        }
+    }
+}
+
+/// <summary>
+/// Black-box API tests with Playwright: real HTTP behaviour, validation and security headers.
+/// Run with the Category=E2E filter (excluded from verify).
+/// </summary>
+[Trait("Category", "E2E")]
+public sealed class HttpApiTests(HttpApiFixture fixture) : IClassFixture<HttpApiFixture>
+{
+    [Fact]
+    public async Task HealthCheckAnswersOk()
+    {
+        var response = await fixture.Api.GetAsync("/healthz");
+
+        Assert.Equal(200, response.Status);
+        var json = await response.JsonAsync();
+        Assert.Equal("ok", json?.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task CompletesAnExportAndReturnsItsArtifactKey()
+    {
+        var response = await fixture.Api.PostAsync("/exports/e2e-1/complete", new() { DataObject = new { content = "id\n1\n" } });
+
+        Assert.Equal(201, response.Status);
+        var json = await response.JsonAsync();
+        Assert.Equal("e2e-1", json?.GetProperty("id").GetString());
+        Assert.Equal("exports/e2e-1.csv", json?.GetProperty("artifactKey").GetString());
+    }
+
+    [Fact]
+    public async Task RejectsAnInvalidJobIdWithProblemDetails()
+    {
+        var response = await fixture.Api.PostAsync("/exports/not%20valid/complete", new() { DataObject = new { content = "x" } });
+
+        Assert.Equal(400, response.Status);
+        Assert.Contains("application/problem+json", response.Headers["content-type"], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RejectsABodyWithoutContent()
+    {
+        var response = await fixture.Api.PostAsync("/exports/e2e-2/complete", new() { DataObject = new { other = "x" } });
+
+        Assert.Equal(400, response.Status);
+    }
+
+    [Fact]
+    public async Task AnswersUnknownRoutesWith404ProblemDetails()
+    {
+        var response = await fixture.Api.GetAsync("/does-not-exist");
+
+        Assert.Equal(404, response.Status);
+        Assert.Contains("application/problem+json", response.Headers["content-type"], StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("/healthz")]
+    [InlineData("/does-not-exist")]
+    public async Task SendsTheSecurityHeaders(string path)
+    {
+        var headers = (await fixture.Api.GetAsync(path)).Headers;
+
+        Assert.Equal("nosniff", headers["x-content-type-options"]);
+        Assert.Equal("DENY", headers["x-frame-options"]);
+        Assert.Contains("default-src 'none'", headers["content-security-policy"], StringComparison.Ordinal);
+        Assert.Equal("no-store", headers["cache-control"]);
+        Assert.False(headers.ContainsKey("server"));
+    }
+}

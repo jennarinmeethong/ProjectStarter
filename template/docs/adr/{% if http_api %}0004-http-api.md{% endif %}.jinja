@@ -1,0 +1,40 @@
+# 0004: HTTP API — driving adapter, ตรวจที่ขอบ, ทดสอบแบบ black-box
+
+- **สถานะ:** accepted
+- **วันที่:** <วันที่สร้างโปรเจค>
+- **เจ้าของ:** {{ guardrail_owner or '<เจ้าของ>' }}
+
+## บริบท
+HTTP เป็นขอบที่ input ที่ไม่น่าไว้ใจเข้ามา (OWASP A01, A03, A05) ถ้า framework หลุดเข้า domain/application หรือ validation กระจายอยู่หลายที่ agent จะเลียนแบบ และ security header ที่ขาดหายจะไม่มีใครเห็นจนกว่าจะถูกสแกนจากภายนอก
+
+## การตัดสินใจ
+1. **HTTP เป็น driving adapter** อยู่ใน {% if stack == 'typescript' %}`src/adapters/http`{% elif stack == 'python' %}`{{ src_root }}/adapters/http`{% else %}`src/{{ dotnet_name }}.Adapters/Http`{% endif %}: decode และ validate request แล้วเรียก use case ส่วน hosting อยู่ใน bootstrap
+2. **Validate ที่ขอบครั้งเดียว** job id ต้องตรง `^[A-Za-z0-9_-]{1,64}$` body ต้องเป็น `{"content": "<string ไม่ว่าง>"}` ขนาดไม่เกิน 1 MB ส่วนข้างในได้ค่าที่ถูกต้องแล้วเสมอ
+3. **Error เป็น RFC 9457 problem details** (`application/problem+json`) ไม่มี stack trace หรือข้อความภายใน
+4. **Security header ทุก response รวม error:** `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` และไม่ส่ง `Server`/`X-Powered-By`
+5. **Bind loopback เป็นค่าเริ่มต้น** (`HOST=127.0.0.1`) image ตั้ง `HOST=0.0.0.0` เอง และ compose publish เฉพาะ `127.0.0.1:8080`
+6. **ไม่มี interactive docs/OpenAPI UI ใน production** ถ้าต้องการ ให้เปิดเฉพาะ environment ที่ไม่ใช่ production ผ่าน ADR ใหม่
+
+## การบังคับใช้
+| กฎ | เครื่องมือ |
+|---|---|
+{%- if stack == 'typescript' %}
+| framework อยู่ใน adapters | dependency-cruiser `web-frameworks-only-in-adapters` |
+{%- elif stack == 'python' %}
+| framework อยู่ใน adapters | import-linter contract `web` (domain, application → fastapi/starlette/uvicorn) |
+{%- else %}
+| framework อยู่ใน adapters | project references: มีแค่ `Adapters` (FrameworkReference) และ `Bootstrap` (Web SDK) ที่อ้าง ASP.NET Core; NetArchTest ตรวจว่า Domain/Application ไม่ขึ้นกับ `Microsoft.AspNetCore` |
+{%- endif %}
+| พฤติกรรม HTTP, validation, problem details, header | Playwright API tests (`{{ cmd.test_e2e }}`) กับ server จริง — job `e2e` |
+{%- if containerize %}
+| header และการรั่วไหลของข้อมูลใน container ที่รันจริง | OWASP ZAP baseline (`ci/dast.sh`, rule ใน `.zap/rules.tsv`) — job `dast`; warning ก็ fail |
+| container เริ่มได้ภายใต้ read-only/no capabilities | `ci/dast.sh <image> --smoke` — job `container` |
+{%- endif %}
+
+## สิ่งที่ยังไม่ครอบคลุม
+- Authentication/authorization (A01, A07): ยังไม่มี endpoint ที่ต้องตรวจสิทธิ์ เมื่อเพิ่มให้ใช้ provider ที่ผ่านการตรวจสอบ และเพิ่ม test ว่า request ที่ไม่มีสิทธิ์ถูกปฏิเสธ
+- Rate limiting, CORS (ปิดอยู่ = same-origin เท่านั้น), HTTPS termination (ทำที่ load balancer/ingress)
+- ZAP baseline เป็น passive scan เท่านั้น active scan ต้องรันกับ environment ทดสอบที่แยกออกมา
+
+## ผลที่ตามมา
+Endpoint ใหม่ต้องมี Playwright test ของทั้ง happy path และ input ที่ไม่ถูกต้อง และต้องผ่าน ZAP ก่อน merge

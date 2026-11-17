@@ -15,6 +15,11 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
+{%- if http_api %}
+# The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
+ENV HOST=0.0.0.0 PORT=8080
+EXPOSE 8080
+{%- endif %}
 # Numeric UID of the image's `node` user, so Kubernetes runAsNonRoot can verify it.
 USER 1000:1000
 CMD ["node", "src/bootstrap/main.ts"]
@@ -36,6 +41,11 @@ RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid 1000
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
+{%- if http_api %}
+# The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
+ENV HOST=0.0.0.0 PORT=8080
+EXPOSE 8080
+{%- endif %}
 USER 10001:10001
 CMD ["{{ project_name | lower }}"]
 {%- else %}
@@ -46,9 +56,14 @@ COPY global.json Directory.Build.props Directory.Packages.props .editorconfig Ba
 COPY src ./src
 RUN dotnet publish src/{{ dotnet_name }}.Bootstrap/{{ dotnet_name }}.Bootstrap.csproj -c Release -o /app
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/{% if http_api %}aspnet{% else %}runtime{% endif %}:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app .
+{%- if http_api %}
+# The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
+ENV HOST=0.0.0.0 PORT=8080
+EXPOSE 8080
+{%- endif %}
 USER $APP_UID
 ENTRYPOINT ["dotnet", "{{ dotnet_name }}.Bootstrap.dll"]
 {%- endif %}

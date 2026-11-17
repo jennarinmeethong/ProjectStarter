@@ -23,6 +23,7 @@
 | ความถูกต้องของพฤติกรรม | ผลของการคำนวณ | **Tests** (example + property) | runtime verification | AGENTS.md |
 | Protocol กระจายหรือ concurrency | notification ข้ามอุปกรณ์ | **Verification** (model check) + property test | runtime monitor | code review อย่างเดียว |
 | พฤติกรรม UI | ปุ่ม, สถานะหน้าจอ | **Runtime verification** (Playwright) | artifact ใน PR | unit test อย่างเดียว |
+| พฤติกรรมและ header ของ HTTP API | validation, problem details, CSP | **Runtime verification** (Playwright API tests) | **DAST** (OWASP ZAP baseline ใน CI) | code review อย่างเดียว |
 | โค้ด legacy ที่ห้ามเลียนแบบ | `legacy/` | **Architecture check** (ห้าม import) | AGENTS.md (ชั่วคราว) | ไม่ทำอะไร |
 | คำสั่งที่ใช้ตรวจงาน | คำสั่งรัน test ไฟล์เดียว | **Agent instructions** | README | ไม่ระบุเลย |
 | เจตนาและการจัดการความขัดแย้ง | "test ขัดกับ spec ให้หยุดและถาม" | **Agent instructions** | protected acceptance test | — |

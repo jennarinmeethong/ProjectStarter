@@ -1,10 +1,14 @@
 using {{ dotnet_name }}.Adapters;
 using {{ dotnet_name }}.Application;
+{%- if http_api %}
+using {{ dotnet_name }}.Bootstrap;
+{%- else %}
 using {{ dotnet_name }}.Domain;
-{%- if datastores %}
+{%- endif %}
 
 // Bootstrap is the only place that reads configuration; adapters receive plain values (ADR 0003).
 IArtifactStore store = new InMemoryArtifactStore();
+{%- if datastores %}
 IAsyncDisposable? owned = null;
 {%- if 'postgres' in datastores %}
 var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
@@ -26,6 +30,29 @@ if (!string.IsNullOrEmpty(databaseUrl))
     (store, owned) = (redis, redis);
 }
 {%- endif %}
+{%- endif %}
+{%- if http_api %}
+
+// Loopback by default; the container image sets HOST=0.0.0.0 explicitly.
+var host = Environment.GetEnvironmentVariable("HOST") ?? "127.0.0.1";
+var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+await using var app = HttpHost.Build(store, $"http://{host}:{port}");
+{%- if datastores %}
+try
+{
+    await app.RunAsync();
+}
+finally
+{
+    if (owned is not null)
+    {
+        await owned.DisposeAsync();
+    }
+}
+{%- else %}
+await app.RunAsync();
+{%- endif %}
+{%- elif datastores %}
 
 try
 {
@@ -42,7 +69,6 @@ finally
 }
 {%- else %}
 
-var store = new InMemoryArtifactStore();
 var job = ExportTransitions.Start(new ExportJob.Queued("demo"));
 var ready = await new CompleteExport(store).ExecuteAsync(job, "id,name\n1,demo\n", CancellationToken.None);
 Console.WriteLine($"{ready.Id} -> {ready.ArtifactKey}");

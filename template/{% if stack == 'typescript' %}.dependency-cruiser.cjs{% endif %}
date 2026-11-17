@@ -38,6 +38,13 @@ module.exports = {
       to: { dependencyTypes: ["core"] },
     },
     {
+      name: "web-frameworks-only-in-adapters",
+      comment: "HTTP frameworks are a driving adapter: decode requests in src/adapters/http and call the use case (ADR 0001).",
+      severity: "error",
+      from: { path: "^src/(domain|application)/" },
+      to: { path: "node_modules/(hono|@hono/[^/]+|express|fastify|koa|@nestjs/[^/]+)/" },
+    },
+    {
       name: "datastore-drivers-only-in-adapters",
       comment: "Database/cache drivers live in adapters only. Application defines a port, bootstrap passes connection settings to the adapter (ADR 0003).",
       severity: "error",

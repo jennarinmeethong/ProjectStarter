@@ -3,6 +3,12 @@
   <ItemGroup>
     <ProjectReference Include="..\{{ dotnet_name }}.Application\{{ dotnet_name }}.Application.csproj" />
   </ItemGroup>
+{%- if http_api %}
+  <ItemGroup>
+    <!-- HTTP is a driving adapter: endpoint mapping lives here, hosting lives in Bootstrap. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+{%- endif %}
 {%- if datastores %}
   <ItemGroup>
 {%- if 'postgres' in datastores %}

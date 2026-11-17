@@ -1,0 +1,86 @@
+"""Black-box API tests with Playwright.
+
+Covers the real server's HTTP behaviour, validation and security headers.
+
+Marked `e2e`: run with `uv run pytest -m e2e` (deselected by default).
+"""
+
+import threading
+from collections.abc import Iterator
+
+import pytest
+import uvicorn
+from playwright.sync_api import APIRequestContext, sync_playwright
+
+from {{ package_name }}.adapters.http.app import create_app
+from {{ package_name }}.adapters.in_memory_artifact_store import InMemoryArtifactStore
+
+pytestmark = pytest.mark.e2e
+
+
+@pytest.fixture(scope="module")
+def base_url() -> Iterator[str]:
+    config = uvicorn.Config(
+        create_app(InMemoryArtifactStore()),
+        host="127.0.0.1",
+        port=0,
+        log_level="warning",
+        server_header=False,
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    ready = threading.Event()
+    while not server.started:
+        ready.wait(0.05)
+    port: int = server.servers[0].sockets[0].getsockname()[1]
+    yield f"http://127.0.0.1:{port}"
+    server.should_exit = True
+    thread.join(timeout=10)
+
+
+@pytest.fixture(scope="module")
+def api(base_url: str) -> Iterator[APIRequestContext]:
+    with sync_playwright() as playwright:
+        context = playwright.request.new_context(base_url=base_url)
+        yield context
+        context.dispose()
+
+
+def test_health_check_answers_ok(api: APIRequestContext) -> None:
+    response = api.get("/healthz")
+    assert response.status == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_completes_an_export_and_returns_its_artifact_key(api: APIRequestContext) -> None:
+    response = api.post("/exports/e2e-1/complete", data={"content": "id\n1\n"})
+    assert response.status == 201
+    assert response.json() == {"id": "e2e-1", "artifactKey": "exports/e2e-1.csv"}
+
+
+def test_rejects_an_invalid_job_id_with_problem_details(api: APIRequestContext) -> None:
+    response = api.post("/exports/not%20valid/complete", data={"content": "x"})
+    assert response.status == 400
+    assert "application/problem+json" in response.headers["content-type"]
+
+
+def test_rejects_a_body_without_content(api: APIRequestContext) -> None:
+    response = api.post("/exports/e2e-2/complete", data={"other": "x"})
+    assert response.status == 400
+
+
+def test_answers_unknown_routes_with_404_problem_details(api: APIRequestContext) -> None:
+    response = api.get("/does-not-exist")
+    assert response.status == 404
+    assert "application/problem+json" in response.headers["content-type"]
+
+
+@pytest.mark.parametrize("path", ["/healthz", "/does-not-exist"])
+def test_sends_the_security_headers(api: APIRequestContext, path: str) -> None:
+    headers = api.get(path).headers
+    assert headers["x-content-type-options"] == "nosniff"
+    assert headers["x-frame-options"] == "DENY"
+    assert "default-src 'none'" in headers["content-security-policy"]
+    assert headers["cache-control"] == "no-store"
+    assert "server" not in headers

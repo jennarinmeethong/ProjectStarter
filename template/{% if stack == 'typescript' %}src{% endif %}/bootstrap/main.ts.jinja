@@ -5,8 +5,14 @@ import { PostgresArtifactStore } from "../adapters/postgres-artifact-store.ts";
 {%- if 'redis' in datastores %}
 import { RedisArtifactStore } from "../adapters/redis-artifact-store.ts";
 {%- endif %}
+{%- if http_api %}
+import { serve } from "@hono/node-server";
+import { createHttpApp } from "../adapters/http/app.ts";
+import type { ArtifactStore } from "../application/complete-export.ts";
+{%- else %}
 import { completeExportUseCase, type ArtifactStore } from "../application/complete-export.ts";
 import { startExport } from "../domain/export-job.ts";
+{%- endif %}
 
 interface OpenStore {
   readonly store: ArtifactStore;
@@ -31,6 +37,26 @@ function openStore(): Promise<OpenStore> {
   return Promise.resolve({ store: new InMemoryArtifactStore(), close: () => Promise.resolve() });
 }
 
+{%- if http_api %}
+
+const { store, close } = await openStore();
+// Loopback by default; the container image sets HOST=0.0.0.0 explicitly.
+const hostname = process.env.HOST ?? "127.0.0.1";
+const port = Number(process.env.PORT ?? "8080");
+const server = serve({ fetch: createHttpApp(store).fetch, hostname, port }, (info) => {
+  console.log(`listening on http://${info.address}:${String(info.port)}`);
+});
+
+// Graceful shutdown: stop accepting connections, finish in-flight requests, then release the store.
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    server.close(() => {
+      void close();
+    });
+  });
+}
+{%- else %}
+
 const { store, close } = await openStore();
 try {
   const job = startExport({ kind: "queued", id: "demo" });
@@ -39,3 +65,4 @@ try {
 } finally {
   await close();
 }
+{%- endif %}
