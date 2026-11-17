@@ -1,7 +1,8 @@
 {%- set deps = [] -%}
 {%- if http_api %}{% set _ = deps.append('"@hono/node-server": "^2.1.0"') %}{% set _ = deps.append('"hono": "^4.13.0"') %}{% endif -%}
 {%- if 'postgres' in datastores %}{% set _ = deps.append('"pg": "^8.20.0"') %}{% endif -%}
-{%- if frontend == 'react' %}{% set _ = deps.append('"react": "^19.2.0"') %}{% set _ = deps.append('"react-dom": "^19.2.0"') %}{% endif -%}
+{%- if frontend == 'nextjs' %}{% set _ = deps.append('"next": "^16.2.0"') %}{% endif -%}
+{%- if frontend in ['react', 'nextjs'] %}{% set _ = deps.append('"react": "^19.2.0"') %}{% set _ = deps.append('"react-dom": "^19.2.0"') %}{% endif -%}
 {%- if frontend == 'vue' %}{% set _ = deps.append('"vue": "^3.5.0"') %}{% endif -%}
 {%- if 'redis' in datastores %}{% set _ = deps.append('"redis": "^6.1.0"') %}{% endif -%}
 {%- set excludes = [] -%}
@@ -19,6 +20,11 @@
 {%- if frontend in ['react', 'vue'] %}
     "dev": "vite",
     "build": "vite build",
+{%- elif frontend == 'nextjs' %}
+    "dev": "next dev",
+    "build": "next build",
+{%- endif %}
+{%- if frontend != 'none' %}
     "test:ui": "playwright test --config playwright.ui.config.ts",
 {%- endif %}
     "typecheck": "{{ 'vue-tsc' if frontend == 'vue' else 'tsc' }}",
@@ -43,8 +49,11 @@
 {%- if frontend != 'none' %}
     "@axe-core/playwright": "^4.11.0",
 {%- endif %}
-{%- if frontend == 'react' %}
+{%- if frontend in ['react', 'nextjs'] %}
     "@eslint-react/eslint-plugin": "^5.0.0",
+{%- endif %}
+{%- if frontend == 'nextjs' %}
+    "@next/eslint-plugin-next": "^16.2.0",
 {%- endif %}
     "@eslint/js": "^10.0.1",
 {%- if http_api or frontend != 'none' %}
@@ -56,7 +65,7 @@
 {%- if 'redis' in datastores %}
     "@testcontainers/redis": "^12.0.1",
 {%- endif %}
-{%- if frontend == 'react' %}
+{%- if frontend in ['react', 'nextjs'] %}
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.0",
 {%- endif %}
@@ -64,9 +73,11 @@
 {%- if 'postgres' in datastores %}
     "@types/pg": "^8.20.0",
 {%- endif %}
-{%- if frontend == 'react' %}
+{%- if frontend in ['react', 'nextjs'] %}
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+{%- endif %}
+{%- if frontend == 'react' %}
     "@vitejs/plugin-react": "^6.0.0",
 {%- endif %}
 {%- if frontend == 'vue' %}
@@ -75,7 +86,7 @@
 {%- endif %}
     "dependency-cruiser": "^18.8.0",
     "eslint": "^10.15.0",
-{%- if frontend == 'react' %}
+{%- if frontend in ['react', 'nextjs'] %}
     "eslint-plugin-jsx-a11y-x": "^0.2.0",
     "eslint-plugin-react-hooks": "^7.0.0",
 {%- endif %}
@@ -88,7 +99,7 @@
 {%- if frontend == 'vue' %}
     "globals": "^16.0.0",
 {%- endif %}
-{%- if frontend in ['react', 'vue'] %}
+{%- if frontend != 'none' %}
     "jsdom": "^27.0.0",
 {%- endif %}
     "tsx": "^4.23.15",

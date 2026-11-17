@@ -11,7 +11,11 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${String(port)}`, trace: "retain-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
+{%- if frontend == 'nextjs' %}
+    command: `npm run build && npx next start --hostname 127.0.0.1 --port ${String(port)}`,
+{%- else %}
     command: `npm run build && npx vite preview --host 127.0.0.1 --port ${String(port)} --strictPort`,
+{%- endif %}
     url: `http://127.0.0.1:${String(port)}`,
     reuseExistingServer: false,
     timeout: 120_000,

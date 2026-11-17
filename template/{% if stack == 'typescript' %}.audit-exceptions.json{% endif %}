@@ -1,0 +1,12 @@
+{
+  "$comment": "Guardrail config (protected). Time-boxed exceptions for ci/npm-audit.mjs. Each needs a reason and an expiry date; expired entries fail CI. Remove an entry as soon as a fixed release exists.",
+  "exceptions": [
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "reason": "ReDoS in extglob matching with no fixed release yet (4.0.7 is the latest). Only build and test tooling (vite, vitest, eslint, dependency-cruiser) depends on it, and the patterns come from project config, not from user input.",
+      "devOnly": true,
+      "expires": "2026-12-31"
+    }
+  ]
+}

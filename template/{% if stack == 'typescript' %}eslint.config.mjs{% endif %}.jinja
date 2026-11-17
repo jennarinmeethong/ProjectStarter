@@ -1,9 +1,12 @@
 // Guardrail config (protected). Rule messages say what to do instead and link an ADR.
-{% if frontend == 'react' -%}
+{% if frontend in ['react', 'nextjs'] -%}
 import eslintReact from "@eslint-react/eslint-plugin";
 {% endif -%}
 import js from "@eslint/js";
-{% if frontend == 'react' -%}
+{% if frontend == 'nextjs' -%}
+import nextPlugin from "@next/eslint-plugin-next";
+{% endif -%}
+{% if frontend in ['react', 'nextjs'] -%}
 import jsxA11y from "eslint-plugin-jsx-a11y-x";
 import reactHooks from "eslint-plugin-react-hooks";
 {% endif -%}
@@ -57,7 +60,7 @@ const noHiddenInputs = [
 ];
 
 export default tseslint.config(
-  { ignores: ["node_modules/", "dist/", "coverage/", "playwright-report*/", "test-results/", "*.config.*", ".dependency-cruiser.cjs"] },
+  { ignores: ["node_modules/", "dist/", "coverage/", "playwright-report*/", "test-results/", "*.config.*", ".dependency-cruiser.cjs", "ci/"{% if frontend == 'nextjs' %}, ".next/", "next-env.d.ts"{% endif %}] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
@@ -142,21 +145,29 @@ export default tseslint.config(
     files: ["**/*.test.ts", "**/*.test.tsx", "tests/**", "e2e/**", "e2e-ui/**"],
     rules: { "max-lines-per-function": "off", "max-lines": "off", "sonarjs/no-duplicate-string": "off" },
   },
-{%- if frontend == 'react' %}
+{%- if frontend in ['react', 'nextjs'] %}
   {
     // UI adapter (ADR 0005): React correctness, hooks rules and accessibility (jsx-a11y strict).
-    files: ["src/ui/**/*.tsx"],
+    files: ["src/ui/**/*.tsx"{% if frontend == 'nextjs' %}, "src/app/**/*.tsx"{% endif %}],
     ...eslintReact.configs["recommended-type-checked"],
   },
   {
-    files: ["src/ui/**/*.tsx"],
+    files: ["src/ui/**/*.tsx"{% if frontend == 'nextjs' %}, "src/app/**/*.tsx"{% endif %}],
     plugins: { "react-hooks": reactHooks },
     rules: {
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "error",
     },
   },
-  { files: ["src/ui/**/*.tsx"], ...jsxA11y.configs.strict },
+  { files: ["src/ui/**/*.tsx"{% if frontend == 'nextjs' %}, "src/app/**/*.tsx"{% endif %}], ...jsxA11y.configs.strict },
+{%- if frontend == 'nextjs' %}
+  {
+    // Next.js rules: core web vitals, no sync scripts, no raw <img> or <a> where Next has a safer primitive.
+    files: ["src/app/**/*.{ts,tsx}", "src/proxy.ts"],
+    plugins: { "@next/next": nextPlugin },
+    rules: { ...nextPlugin.configs.recommended.rules, ...nextPlugin.configs["core-web-vitals"].rules },
+  },
+{%- endif %}
 {%- endif %}
 {%- if frontend == 'vue' %}
   // UI adapter (ADR 0005): Vue correctness and accessibility. Templates are linted without type information;

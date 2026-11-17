@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+# Web UI image: Next.js standalone server (no dev dependencies), running as a non-root user.
+# Checked by hadolint and ci/check-dockerfile.sh like the main Dockerfile.
+
+FROM node:24-slim AS build
+ENV NEXT_TELEMETRY_DISABLED=1
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY next.config.ts tsconfig.json tsconfig.next.json ./
+COPY src ./src
+RUN npx next build
+
+FROM node:24-slim AS runtime
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=8080
+WORKDIR /app
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+EXPOSE 8080
+# Numeric UID of the image's `node` user.
+USER 1000:1000
+CMD ["node", "server.js"]

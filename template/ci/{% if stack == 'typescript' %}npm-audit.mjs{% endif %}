@@ -1,0 +1,60 @@
+#!/usr/bin/env node
+// ci/npm-audit.mjs — fail on high/critical advisories unless a time-boxed exception in .audit-exceptions.json
+// covers them. Every exception needs a reason and an expiry date, and expired exceptions fail. Exceptions marked
+// "devOnly" must not reach production dependencies (`npm audit --omit=dev`). See docs/security/owasp.md.
+import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+const LEVELS = new Set(["high", "critical"]);
+
+function audit(flags) {
+  try {
+    // A fixed command string: works with npm.cmd on Windows and takes no outside input.
+    const out = execSync(`npm audit --json ${flags}`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return JSON.parse(out);
+  } catch (error) {
+    // npm audit exits non-zero when it finds anything; the report is still on stdout.
+    if (error.stdout) return JSON.parse(error.stdout);
+    throw error;
+  }
+}
+
+function advisories(report) {
+  const found = new Map();
+  for (const vulnerability of Object.values(report.vulnerabilities ?? {})) {
+    for (const via of vulnerability.via) {
+      if (typeof via === "object" && LEVELS.has(via.severity)) found.set(via.url.split("/").pop(), via);
+    }
+  }
+  return found;
+}
+
+const exceptions = JSON.parse(readFileSync(".audit-exceptions.json", "utf8")).exceptions ?? [];
+const today = new Date().toISOString().slice(0, 10);
+const problems = [];
+
+for (const exception of exceptions) {
+  if (!exception.id || !exception.reason || !exception.expires) {
+    problems.push(`exception needs id, reason and expires: ${JSON.stringify(exception)}`);
+  } else if (exception.expires < today) {
+    problems.push(`exception ${exception.id} expired on ${exception.expires}: fix the dependency or renew it with owner approval`);
+  }
+}
+
+const all = advisories(audit(""));
+const production = advisories(audit("--omit=dev"));
+for (const [id, via] of all) {
+  const exception = exceptions.find((e) => e.id === id);
+  if (!exception) {
+    problems.push(`${via.severity}: ${via.name} ${via.range} — ${via.title} (${via.url})`);
+  } else if (exception.devOnly && production.has(id)) {
+    problems.push(`${id} is excepted as dev-only, but ${via.name} is in production dependencies`);
+  }
+}
+
+if (problems.length > 0) {
+  for (const problem of problems) console.error(problem);
+  console.error("npm-audit: update the dependency (npm update, overrides) or add a time-boxed exception with owner approval.");
+  process.exit(1);
+}
+console.log(`npm-audit: OK (${all.size} high/critical advisories, all covered by unexpired exceptions)`);
