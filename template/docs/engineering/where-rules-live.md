@@ -12,6 +12,7 @@
 | ทางหนีจากกฎ | cast, ignore, disable | **Lint** | **CI** ratchet | AGENTS.md อย่างเดียว |
 | Style และ formatting | การจัดรูปแบบ, import order | **Config** (formatter/linter) | CI | AGENTS.md |
 | ไฟล์ที่ agent ห้ามแก้ | config ของ guardrail, acceptance test | **CI + CODEOWNERS** | harness deny/hook | AGENTS.md อย่างเดียว |
+| Dependency ที่มีช่องโหว่ที่รู้แล้ว | package ที่มี CVE | **CI** (dependency audit ทุก PR + รายสัปดาห์) | Dependabot/Renovate | AGENTS.md อย่างเดียว |
 | ต้องรัน check ก่อนจบงาน | typecheck ก่อน "เสร็จ" | **CI** (required check) | Stop hook | AGENTS.md อย่างเดียว |
 | ความถูกต้องของพฤติกรรม | ผลของการคำนวณ | **Tests** (example + property) | runtime verification | AGENTS.md |
 | Protocol กระจายหรือ concurrency | notification ข้ามอุปกรณ์ | **Verification** (model check) + property test | runtime monitor | code review อย่างเดียว |

@@ -86,6 +86,7 @@ cmd:
     test_single: npx vitest run path/to/file.test.ts
     fast: npm run verify:fast
     verify: npm run verify
+    audit: npm audit --audit-level=high
     {%- elif stack == 'python' %}
     install: uv sync
     typecheck: uv run pyright
@@ -96,6 +97,7 @@ cmd:
     test_single: "uv run pytest tests/test_file.py::test_name"
     fast: uv run pyright && uv run ruff check . && uv run lint-imports
     verify: uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest
+    audit: uv audit --locked --preview-features audit-command
     {%- else %}
     install: dotnet restore
     typecheck: dotnet build --no-restore
@@ -106,6 +108,7 @@ cmd:
     test_single: 'dotnet test --filter-method "*.ClassName.MethodName"'
     fast: dotnet build
     verify: dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build
+    audit: dotnet restore --force-evaluate
     {%- endif %}
 
 # Stack facts shared by AGENTS.md, the ratchet script, CODEOWNERS and the Claude Code hooks.

@@ -5,7 +5,7 @@
 ## Verify your work (required before you say "done")
 - Setup: `{{ cmd.install }}`
 - Fast checks (types, lint, architecture): `{{ cmd.fast }}`
-- Everything CI runs: `{{ cmd.verify }}`
+- Everything CI runs: `{{ cmd.verify }}`, then `{{ cmd.audit }}` (known-vulnerable dependencies; needs network)
 - Single test: `{{ cmd.test_single }}`
 - Report evidence: paste the commands you ran and their final output in the PR description.
 
