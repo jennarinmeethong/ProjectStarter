@@ -8,3 +8,4 @@ playwright-report-ui/
 .next/
 next-env.d.ts
 .angular/
+.expo/

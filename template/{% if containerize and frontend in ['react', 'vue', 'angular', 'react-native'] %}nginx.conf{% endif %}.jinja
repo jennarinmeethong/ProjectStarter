@@ -6,7 +6,13 @@ server {
     root /usr/share/nginx/html;
 
     # The build has no inline scripts or styles, so nothing needs 'unsafe-inline'.
+{%- if frontend == 'react-native' %}
+    # react-native-web creates one empty <style> element and fills it through the CSSOM; the hash is the
+    # SHA-256 of the empty string, so it allows that element and nothing that carries inline CSS text.
+    set $csp "default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+{%- else %}
     set $csp "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+{%- endif %}
 
     add_header Content-Security-Policy $csp always;
     add_header X-Content-Type-Options "nosniff" always;

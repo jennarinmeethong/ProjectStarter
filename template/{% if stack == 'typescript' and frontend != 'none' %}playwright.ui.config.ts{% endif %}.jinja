@@ -13,6 +13,8 @@ export default defineConfig({
   webServer: {
 {%- if frontend == 'nextjs' %}
     command: `npm run build && npx next start --hostname 127.0.0.1 --port ${String(port)}`,
+{%- elif frontend == 'react-native' %}
+    command: `npm run build && npx expo serve --port ${String(port)}`,
 {%- elif frontend == 'angular' %}
     command: `npx ng serve --configuration production --host 127.0.0.1 --port ${String(port)}`,
 {%- else %}

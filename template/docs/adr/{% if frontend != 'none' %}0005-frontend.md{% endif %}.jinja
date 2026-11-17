@@ -9,9 +9,9 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 
 ## การตัดสินใจ
 1. **UI เป็น driving adapter:** component รับ input แล้วเรียก use case เดียวกับที่ CLI/HTTP ใช้ domain และ application ห้าม import framework ของ UI
-2. **Composition root ของเบราว์เซอร์มีที่เดียว:** {% if frontend == 'react' %}`src/ui/main.tsx`{% elif frontend == 'vue' %}`src/ui/main.ts`{% elif frontend == 'nextjs' %}`src/app/page.tsx` (client component){% elif frontend == 'angular' %}`src/ui/main.ts` (provider ของ `ARTIFACT_STORE`){% endif %} เป็นไฟล์เดียวที่เลือก adapter (เช่น `LocalStorageArtifactStore`) แล้ว inject เข้า component
+2. **Composition root ของเบราว์เซอร์มีที่เดียว:** {% if frontend == 'react' %}`src/ui/main.tsx`{% elif frontend == 'vue' %}`src/ui/main.ts`{% elif frontend == 'nextjs' %}`src/app/page.tsx` (client component){% elif frontend == 'angular' %}`src/ui/main.ts` (provider ของ `ARTIFACT_STORE`){% elif frontend == 'react-native' %}`src/ui/Root.tsx` (ใช้ทั้ง web และ native){% endif %} เป็นไฟล์เดียวที่เลือก adapter (เช่น `LocalStorageArtifactStore`) แล้ว inject เข้า component
 3. **Adapter ฝั่งเบราว์เซอร์ผ่าน contract test เดียวกัน** กับ adapter อื่นของ port (`tests/contracts/artifact-store.ts`)
-4. **Accessibility เป็นเกณฑ์ ไม่ใช่ข้อแนะนำ:** lint ({% if frontend == 'vue' %}`vuejs-accessibility`{% elif frontend == 'angular' %}angular-eslint `templateAccessibility`{% else %}`jsx-a11y` strict{% endif %}) ตอนเขียน และ axe (WCAG 2.1 AA) ในเบราว์เซอร์จริงทุก PR
+4. **Accessibility เป็นเกณฑ์ ไม่ใช่ข้อแนะนำ:** lint ({% if frontend == 'vue' %}`vuejs-accessibility`{% elif frontend == 'angular' %}angular-eslint `templateAccessibility`{% elif frontend == 'react-native' %}กฎ `no-restricted-syntax` ที่บังคับ role/aria-label บน touchable และ alt บน Image{% else %}`jsx-a11y` strict{% endif %}) ตอนเขียน และ axe (WCAG 2.1 AA) ในเบราว์เซอร์จริงทุก PR
 5. **ไม่มี inline script/style:** build ไม่ใส่ inline script ทำให้ CSP เข้มได้โดยไม่ต้องมี `'unsafe-inline'`
 
 ## การบังคับใช้
@@ -25,6 +25,9 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 {%- elif frontend == 'vue' %}
 | (Next.js) กฎของ framework | `@next/eslint-plugin-next` recommended + core-web-vitals; tsconfig ที่ Next.js แก้ได้แยกเป็น `tsconfig.next.json` เพื่อไม่แตะ `tsconfig.json` ที่ protected |
 | (Next.js) CSP ที่ไม่ต้องมี `'unsafe-inline'` | `src/proxy.ts` สร้าง nonce ต่อ request และ Next.js ใส่ nonce ให้ script ของตัวเอง; หน้าเว็บ render แบบ dynamic |
+| (React Native) accessibility ตอนเขียน | ESLint `no-restricted-syntax`: `Pressable`/`Touchable*` ต้องมี `role` และ `aria-label`, `Image` ต้องมี `alt` หรือ `aria-hidden` (ไม่มี a11y plugin ของ React Native ที่รองรับ ESLint 10) |
+| (React Native) พฤติกรรมของหน้าจอ | Vitest + Testing Library ผ่าน react-native-web (`vitest.config.ts` alias `react-native`) |
+| (React Native) web build ใต้ CSP เข้ม | Expo web export (`public/index.html` ไม่มี inline style); `style-src` อนุญาตเฉพาะ hash ของ string ว่างสำหรับ `<style>` ที่ react-native-web สร้างแล้วเติมผ่าน CSSOM |
 | (Angular) component และ template | angular-eslint `tsRecommended` + `templateRecommended` + `templateAccessibility` (inline template ถูก lint เป็น HTML); `strictTemplates` ใน `tsconfig.app.json`; zoneless + `OnPush` + signals |
 | (Angular) พฤติกรรมของ component | `ng test` (Angular unit-test builder บน Vitest, jsdom) — `src/ui/*.spec.ts` |
 | Vue ถูกต้อง, accessibility, ไม่มี `v-html` | ESLint `eslint-plugin-vue` (flat/recommended, `vue/no-v-html` เป็น error), `eslint-plugin-vuejs-accessibility`; `vue-tsc` ตรวจ type ใน `.vue` |
@@ -37,6 +40,10 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 {%- endif %}
 
 ## สิ่งที่ยังไม่ครอบคลุม
+{%- if frontend == 'react-native' %}
+- Build และทดสอบบนอุปกรณ์จริง (iOS/Android): Playwright, axe และ ZAP ตรวจเฉพาะ web build — เพิ่ม EAS Build และ Maestro หรือ Detox เมื่อเริ่มส่งแอปมือถือ
+- Native storage adapter: บนมือถือ `Root.tsx` ใช้ in-memory จนกว่าจะเพิ่ม adapter (เช่น expo-sqlite) หลัง port เดียวกันพร้อม contract test
+{%- endif %}
 - Visual regression (screenshot diff) และการทดสอบบนหลายเบราว์เซอร์ (เพิ่ม project ใน `playwright.ui.config.ts`)
 - Authentication ของผู้ใช้และการเก็บ token (ห้ามเก็บ secret ใน Web Storage)
 

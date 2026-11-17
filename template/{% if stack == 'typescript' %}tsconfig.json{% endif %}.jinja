@@ -3,10 +3,10 @@
     "target": "ES2023",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-{%- if frontend in ['react', 'vue', 'nextjs', 'angular'] %}
+{%- if frontend in ['react', 'vue', 'nextjs', 'angular', 'react-native'] %}
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
 {%- endif %}
-{%- if frontend in ['react', 'nextjs'] %}
+{%- if frontend in ['react', 'nextjs', 'react-native'] %}
     "jsx": "react-jsx",
 {%- endif %}
     "strict": true,
@@ -21,5 +21,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["src", "tests", "e2e"{% if frontend != 'none' %}, "e2e-ui"{% endif %}]
+  "include": ["src", "tests", "e2e"{% if frontend == 'react-native' %}, "index.ts"{% endif %}{% if frontend != 'none' %}, "e2e-ui"{% endif %}]
 }

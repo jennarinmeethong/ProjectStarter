@@ -193,6 +193,12 @@ export class TileComponent {
 ' npm run lint
 }
 
+frontend_seeds_react-native() {
+  seeded "react-native: framework imported in application" src/application/complete-export.ts '\nimport { Platform } from "react-native";\nexport const platform = Platform;\n' npm run arch
+  seeded_new "react-native: touchable without an accessible name" src/ui/Tap.tsx 'import type { JSX } from "react";\nimport { Pressable, Text } from "react-native";\n\nexport function Tap(): JSX.Element {\n  return (\n    <Pressable role="button" onPress={() => undefined}>\n      <Text>Go</Text>\n    </Pressable>\n  );\n}\n' npm run lint
+  seeded_new "react-native: image without alt text" src/ui/Logo.tsx 'import type { JSX } from "react";\nimport { Image } from "react-native";\n\nexport function Logo(): JSX.Element {\n  return <Image source={{ uri: "/logo.png" }} />;\n}\n' npm run lint
+}
+
 frontend_seeds_react() {
   seeded "react: framework imported in application" src/application/complete-export.ts '\nimport { useState } from "react";\nexport const hook = useState;\n' npm run arch
   seeded "react: image without alt text (jsx-a11y)" src/ui/App.tsx '\nexport function Logo(): JSX.Element {\n  return <img src="/logo.png" />;\n}\n' npm run lint
@@ -316,6 +322,7 @@ for stack in "${stacks[@]}"; do
       frontend_checks vue
       frontend_checks nextjs
       frontend_checks angular
+      frontend_checks react-native
       printf '\nimport { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";\nexport const leak = new InMemoryArtifactStore() as any;\n' >> src/domain/export-job.ts
       expect_fail "eslint: as any" npm run lint
       expect_fail "depcruise: domain -> adapters" npm run arch
