@@ -27,6 +27,7 @@ stack:
     Python: python
     C# (.NET): dotnet
     Go: go
+    Rust: rust
   default: typescript
 
 agent_tools:
@@ -71,7 +72,7 @@ datastores:
 http_api:
   type: bool
   help: >-
-    Serve the use case over HTTP (TypeScript: Hono, Python: FastAPI, .NET: ASP.NET Core, Go: net/http) with
+    Serve the use case over HTTP (TypeScript: Hono, Python: FastAPI, .NET: ASP.NET Core, Go: net/http, Rust: axum) with
     Playwright API tests and an OWASP ZAP baseline scan
   default: false
 
@@ -97,6 +98,7 @@ src_root:
   default: >-
     {%- if stack == 'python' -%}src/{{ project_name | lower | replace('-', '_') }}
     {%- elif stack == 'go' -%}internal
+    {%- elif stack == 'rust' -%}crates
     {%- else -%}src{%- endif -%}
 
 # Commands every generated file refers to (AGENTS.md, CI, hooks). One source of truth per stack.
@@ -172,6 +174,23 @@ cmd:
     {%- if http_api %}
     test_e2e: go test -tags e2e ./...
     {%- endif %}
+    {%- elif stack == 'rust' %}
+    install: cargo fetch
+    typecheck: cargo check --workspace --all-targets
+    lint: cargo clippy --workspace --all-targets -- -D warnings
+    lint_file: bash ci/lint-file.sh
+    arch: bash ci/check-layers.sh
+    test: cargo test --workspace
+    test_single: cargo test -p domain test_name
+    fast: cargo clippy --workspace --all-targets -- -D warnings && bash ci/check-layers.sh
+    verify: cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && bash ci/check-layers.sh && cargo test --workspace
+    audit: cargo deny check advisories
+    {%- if datastores %}
+    test_integration: cargo test -p adapters --features integration
+    {%- endif %}
+    {%- if http_api %}
+    test_e2e: npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test
+    {%- endif %}
     {%- endif %}
     {%- if 'postgres' in datastores %}
     sql_lint: uvx sqlfluff==4.5.0 lint migrations
@@ -222,6 +241,16 @@ stk:
     skip_regex: 't\.Skip(Now|f)?\('
     lint_exts: '*.go'
     layers: {domain: internal/domain, application: internal/application, adapters: internal/adapters, bootstrap: internal/bootstrap}
+    {%- elif stack == 'rust' %}
+    language: Rust
+    guardrail_files: [Cargo.toml, rust-toolchain.toml, clippy.toml, crates/domain/clippy.toml, crates/application/clippy.toml, deny.toml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if 'postgres' in datastores %}, .sqlfluff{% endif %}]
+    escapes_display: "`#[allow(...)]`, `#[expect(...)]`, `unsafe`, `AssertSqlSafe`, `#[ignore]`"
+    ratchet_patterns: ['#!?\[(allow|expect)\(', 'unsafe[[:space:]]*\{', 'AssertSqlSafe']
+    src_globs: ['*.rs']
+    test_globs: ['tests/*.rs']
+    skip_regex: '#\[ignore'
+    lint_exts: '*.rs'
+    layers: {domain: crates/domain, application: crates/application, adapters: crates/adapters, bootstrap: crates/bootstrap}
     {%- endif %}
 
 _message_after_copy: |

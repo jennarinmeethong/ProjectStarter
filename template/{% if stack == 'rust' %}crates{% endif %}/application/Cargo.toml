@@ -1,0 +1,13 @@
+# Application: depends on domain only (ADR 0001). ci/check-layers.sh fails on anything else.
+[package]
+name = "application"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+domain = { path = "../domain" }

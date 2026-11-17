@@ -26,7 +26,7 @@ Use an **absolute** path or a git URL so `copier update` works later.
 |---|---|---|
 | `project_name` | letters, digits, `-`, `_`; starts with a letter | — |
 | `project_description` | one sentence: who uses it to do what | — |
-| `stack` | `typescript`, `python`, `dotnet`, `go` | — |
+| `stack` | `typescript`, `python`, `dotnet`, `go`, `rust` | — |
 | `agent_tools` | any of `claude`, `codex` | both |
 | `guardrail_owner` | optional: `@user` or `@org/team` for `.github/CODEOWNERS` | empty = no CODEOWNERS |
 | `risk_paths` | tier-3 paths that always need owner review | `[auth/, payments/, migrations/, infra/]` |
@@ -40,7 +40,7 @@ Do not guess the stack or the owner; if the user does not name an owner, leave i
 ## 3. Check tools
 
 - Always: `git`, `bash`, and `uv` (Copier runs through `uvx`; install uv from https://docs.astral.sh/uv/ if missing).
-- `typescript`: Node.js ≥ 22.12 and npm. `python`: uv (Python is fetched by uv). `dotnet`: .NET SDK 10. `go`: Go ≥ 1.26.
+- `typescript`: Node.js ≥ 22.12 and npm. `python`: uv (Python is fetched by uv). `dotnet`: .NET SDK 10. `go`: Go ≥ 1.26. `rust`: rustup and `cargo install cargo-deny` (Node.js too when `http_api`).
 
 Report missing tools and stop; do not install system tools without the user's approval.
 
@@ -69,6 +69,7 @@ Run inside the destination, using the commands the generated `AGENTS.md` lists:
 | python | `uv sync` | `uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest` |
 | dotnet | `dotnet restore` | `dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build` |
 | go | `go mod tidy` | `go vet ./... && go tool golangci-lint run && go test ./...` |
+| rust | `cargo fetch` | `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && bash ci/check-layers.sh && cargo test --workspace` |
 
 If verification fails, fix the cause in the generated project (never loosen a guardrail config) and report what
 you changed. Show the final output lines as evidence.

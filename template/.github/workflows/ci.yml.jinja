@@ -32,6 +32,13 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go mod download
+{%- elif stack == 'rust' %}
+      # rust-toolchain.toml pins the compiler, clippy and rustfmt; rustup installs them on first use.
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo fetch --locked
 {%- endif %}
       - name: Verify (types, lint, architecture, tests)
         run: {{ cmd.verify }}
@@ -72,6 +79,13 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go mod download
+{%- elif stack == 'rust' %}
+      # rust-toolchain.toml pins the compiler, clippy and rustfmt; rustup installs them on first use.
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo fetch --locked
 {%- endif %}
       - name: Adapter contract tests against real datastores (Testcontainers)
         run: {{ cmd.test_integration }}
@@ -101,6 +115,18 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go mod download
+{%- elif stack == 'rust' %}
+      # rust-toolchain.toml pins the compiler, clippy and rustfmt; rustup installs them on first use.
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo fetch --locked
+{%- endif %}
+{%- if stack == 'rust' %}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
 {%- endif %}
       - name: API tests against the real server (Playwright)
         run: {{ cmd.test_e2e }}

@@ -23,6 +23,9 @@ Agent เลียนแบบสิ่งที่เห็นใน codebase �
 {%- elif stack == 'go' %}
 - `.golangci.yml` depguard (`go tool golangci-lint run`) — กฎ `domain` (stdlib เท่านั้น), `application`, `adapters`
 - `internal/` ทำให้ package อื่นนอก module import ไม่ได้ และ Go compiler ห้าม import cycle
+{%- elif stack == 'rust' %}
+- Cargo workspace: หนึ่ง crate ต่อ layer (`crates/domain`, `crates/application`, `crates/adapters`, `crates/bootstrap`) — compiler บังคับว่า crate ใช้ได้เฉพาะ dependency ที่ประกาศ
+- `ci/check-layers.sh` (`bash ci/check-layers.sh`) ตรวจ manifest: domain ไม่มี dependency, application มีแค่ domain, adapters ห้ามพึ่ง bootstrap, bootstrap ห้ามพึ่ง driver ของ datastore
 {%- else %}
 - Project references: `Domain` ไม่อ้างถึง project อื่น, `Application` อ้างถึง `Domain` เท่านั้น — compiler บังคับ
 - `tests/{{ dotnet_name }}.Tests/ArchitectureTests.cs` (NetArchTest, `Category=Architecture`) ตรวจซ้ำระดับ namespace

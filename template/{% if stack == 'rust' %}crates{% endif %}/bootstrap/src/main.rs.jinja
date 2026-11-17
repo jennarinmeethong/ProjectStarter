@@ -1,0 +1,119 @@
+//! Entry point: reads configuration, picks adapters and wires them to use cases. The only crate that does
+//! either (ADR 0001, ADR 0003).
+
+use std::io::Write as _;
+use std::process::ExitCode;
+
+{% if http_api %}use adapters::http::router;
+{% endif %}use adapters::in_memory::InMemoryArtifactStore;
+{%- if 'postgres' in datastores %}
+use adapters::postgres::PostgresArtifactStore;
+{%- endif %}
+{%- if 'redis' in datastores %}
+use adapters::redis_store::RedisArtifactStore;
+{%- endif %}
+{%- if datastores %}
+use application::{ArtifactStore, PortError};
+{%- endif %}
+{%- if not http_api %}
+use application::complete_export;
+use domain::{Queued, start};
+{%- endif %}
+
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+{%- if datastores %}
+
+/// The adapter chosen from configuration. Enum dispatch keeps `ArtifactStore` free of `dyn` and makes
+/// every adapter explicit here.
+#[derive(Clone)]
+enum AnyStore {
+    InMemory(InMemoryArtifactStore),
+{%- if 'postgres' in datastores %}
+    Postgres(PostgresArtifactStore),
+{%- endif %}
+{%- if 'redis' in datastores %}
+    Redis(RedisArtifactStore),
+{%- endif %}
+}
+
+impl ArtifactStore for AnyStore {
+    async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
+        match self {
+            Self::InMemory(store) => store.save(job_id, content).await,
+{%- if 'postgres' in datastores %}
+            Self::Postgres(store) => store.save(job_id, content).await,
+{%- endif %}
+{%- if 'redis' in datastores %}
+            Self::Redis(store) => store.save(job_id, content).await,
+{%- endif %}
+        }
+    }
+}
+
+/// Picks the adapter from configuration; in-memory when nothing is configured.
+async fn open_store() -> Result<AnyStore, BoxError> {
+{%- if 'postgres' in datastores %}
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        return Ok(AnyStore::Postgres(PostgresArtifactStore::connect(&url).await?));
+    }
+{%- endif %}
+{%- if 'redis' in datastores %}
+    if let Ok(url) = std::env::var("REDIS_URL") {
+        return Ok(AnyStore::Redis(RedisArtifactStore::connect(&url).await?));
+    }
+{%- endif %}
+    Ok(AnyStore::InMemory(InMemoryArtifactStore::default()))
+}
+{%- endif %}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+{%- if http_api %}
+
+/// Serves the HTTP API until Ctrl+C or SIGTERM, then shuts down gracefully.
+async fn run() -> Result<(), BoxError> {
+    let store = {% if datastores %}open_store().await?{% else %}InMemoryArtifactStore::default(){% endif %};
+    // Loopback by default; the container image sets HOST=0.0.0.0 explicitly.
+    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
+    let port: u16 = std::env::var("PORT").unwrap_or_else(|_| "8080".to_owned()).parse()?;
+    let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
+    writeln!(std::io::stdout(), "listening on http://{}", listener.local_addr()?)?;
+    axum::serve(listener, router(store)).with_graceful_shutdown(shutdown_signal()).await?;
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut signal) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            signal.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+}
+{%- else %}
+
+/// Completes a demo export and prints its artifact key.
+async fn run() -> Result<(), BoxError> {
+    let store = {% if datastores %}open_store().await?{% else %}InMemoryArtifactStore::default(){% endif %};
+    let ready = complete_export(&store, start(Queued::new("demo")), "id,name\n1,demo\n").await?;
+    writeln!(std::io::stdout(), "{} -> {}", ready.id(), ready.artifact_key())?;
+    Ok(())
+}
+{%- endif %}

@@ -1,0 +1,24 @@
+# Bootstrap: reads configuration and wires adapters to use cases (ADR 0001). It must not depend on
+# datastore drivers directly; adapters own them (ci/check-layers.sh).
+[package]
+name = "bootstrap"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "{{ project_name | lower }}"
+path = "src/main.rs"
+
+[dependencies]
+adapters = { path = "../adapters" }
+application = { path = "../application" }
+domain = { path = "../domain" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"{% if http_api %}, "net", "signal"{% endif %}] }
+{%- if http_api %}
+axum = "0.8"
+{%- endif %}

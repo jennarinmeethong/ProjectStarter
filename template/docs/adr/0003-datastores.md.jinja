@@ -31,6 +31,10 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 | driver อยู่ใน adapters | depguard rule `drivers` (domain, application, bootstrap, cmd → pgx/go-redis) |
 | SQL ใช้ parameter | gocritic ruleguard `sqlFromStrings` (`ci/gorules/rules.go`: `Exec`/`Query`/`QueryRow` ที่ประกอบ SQL ด้วย `+` หรือ `fmt.Sprintf` รวมถึง pgx) และ `gosec` G201/G202 |
 | contract test | `internal/adapters/storetest`; integration: `go test -tags integration ./...` |
+{%- elif stack == 'rust' %}
+| driver อยู่ใน adapters | `ci/check-layers.sh`: มีแค่ crate `adapters` ที่พึ่ง `sqlx`/`redis`; bootstrap ห้ามพึ่ง driver |
+| SQL ใช้ parameter | type system: sqlx 0.9 รับเฉพาะ SQL ที่เป็น `SqlSafeStr` (string literal) — SQL ที่ประกอบจากค่า compile ไม่ผ่าน; `AssertSqlSafe` ถูกนับโดย ratchet |
+| contract test | `crates/adapters/tests/common`; integration: `cargo test -p adapters --features integration` |
 {%- else %}
 | driver อยู่ใน adapters | project references: มีแค่ `Adapters` ที่อ้าง `Npgsql`/`StackExchange.Redis` (compiler บังคับ) |
 | SQL ใช้ parameter | `CA2100` เป็น error |

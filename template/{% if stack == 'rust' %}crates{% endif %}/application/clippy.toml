@@ -1,0 +1,27 @@
+# Guardrail config (protected). Same thresholds as the workspace clippy.toml, plus the ambient APIs this
+# layer must not touch: inject a port instead (docs/adr/0002-design-rules.md #DIP).
+too-many-arguments-threshold = 4
+cognitive-complexity-threshold = 15
+too-many-lines-threshold = 60
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "no ambient clock in application; inject a Clock port and pass the time in" },
+  { path = "std::time::Instant::now", reason = "no ambient clock in application; inject a Clock port and pass the time in" },
+  { path = "std::thread::sleep", reason = "no sleeps: model the state or inject a scheduler port" },
+  { path = "std::env::var", reason = "read configuration in bootstrap and pass typed values in" },
+  { path = "std::env::var_os", reason = "read configuration in bootstrap and pass typed values in" },
+  { path = "std::env::vars", reason = "read configuration in bootstrap and pass typed values in" },
+  { path = "std::fs::read", reason = "no I/O in application; define a port and implement it in adapters" },
+  { path = "std::fs::read_to_string", reason = "no I/O in application; define a port and implement it in adapters" },
+  { path = "std::fs::write", reason = "no I/O in application; define a port and implement it in adapters" },
+]
+disallowed-types = [
+  { path = "std::fs::File", reason = "no I/O in application; define a port and implement it in adapters" },
+  { path = "std::net::TcpStream", reason = "no I/O in application; define a port and implement it in adapters" },
+  { path = "std::net::TcpListener", reason = "no I/O in application; define a port and implement it in adapters" },
+  { path = "std::process::Command", reason = "no I/O in application; define a port and implement it in adapters" },
+]

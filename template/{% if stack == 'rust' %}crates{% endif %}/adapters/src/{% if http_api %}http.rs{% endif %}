@@ -1,0 +1,117 @@
+//! HTTP adapter (driving side): decodes and validates requests, calls the use case, maps results to HTTP.
+//! Domain and application never see HTTP types (ADR 0001, ADR 0004).
+
+use application::{ArtifactStore, complete_export};
+use axum::Router;
+use axum::body::Bytes;
+use axum::extract::{Path, Request, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use domain::{Queued, start};
+use serde::{Deserialize, Serialize};
+
+const MAX_CONTENT_LENGTH: usize = 1_000_000;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompleteRequest {
+    content: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompleteResponse {
+    id: String,
+    artifact_key: String,
+}
+
+#[derive(Serialize)]
+struct Problem {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    title: &'static str,
+    status: u16,
+}
+
+/// The API, with security headers on every response, including errors.
+pub fn router<S>(store: S) -> Router
+where
+    S: ArtifactStore + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/healthz", get(healthz))
+        .route("/exports/{id}/complete", post(complete::<S>))
+        .fallback(not_found)
+        .layer(middleware::from_fn(security_headers))
+        .with_state(store)
+}
+
+async fn healthz() -> Response {
+    json(StatusCode::OK, "application/json", &serde_json::json!({ "status": "ok" }))
+}
+
+async fn not_found() -> Response {
+    problem(StatusCode::NOT_FOUND, "Not found")
+}
+
+async fn complete<S>(State(store): State<S>, Path(id): Path<String>, body: Bytes) -> Response
+where
+    S: ArtifactStore + Clone + Send + Sync + 'static,
+{
+    if !is_valid_job_id(&id) {
+        return problem(StatusCode::BAD_REQUEST, "Invalid job id");
+    }
+    let Some(content) = decode_content(&body) else {
+        return problem(StatusCode::BAD_REQUEST, r#"Body must be {"content": "<non-empty string>"}"#);
+    };
+    match complete_export(&store, start(Queued::new(id)), &content).await {
+        Ok(ready) => {
+            let response =
+                CompleteResponse { id: ready.id().to_owned(), artifact_key: ready.artifact_key().to_owned() };
+            json(StatusCode::CREATED, "application/json", &response)
+        }
+        Err(_) => problem(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
+}
+
+/// `^[A-Za-z0-9_-]{1,64}$`
+fn is_valid_job_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Accepts exactly `{"content": "<non-empty string up to 1 MB>"}`.
+fn decode_content(body: &[u8]) -> Option<String> {
+    let request: CompleteRequest = serde_json::from_slice(body).ok()?;
+    let valid = !request.content.is_empty() && request.content.len() <= MAX_CONTENT_LENGTH;
+    valid.then_some(request.content)
+}
+
+/// RFC 9457 problem details. Never includes internal error messages.
+fn problem(status: StatusCode, title: &'static str) -> Response {
+    let body = Problem { kind: "about:blank", title, status: status.as_u16() };
+    json(status, "application/problem+json", &body)
+}
+
+fn json<T: Serialize>(status: StatusCode, content_type: &'static str, body: &T) -> Response {
+    match serde_json::to_vec(body) {
+        Ok(bytes) => (status, [(header::CONTENT_TYPE, content_type)], bytes).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
+    );
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert("cross-origin-resource-policy", HeaderValue::from_static("same-origin"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
