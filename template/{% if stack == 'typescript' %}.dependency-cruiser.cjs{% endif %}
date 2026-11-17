@@ -1,0 +1,39 @@
+// Guardrail config (protected). See docs/adr/0001-layered-architecture.md.
+/** @type {import('dependency-cruiser').IConfiguration} */
+module.exports = {
+  forbidden: [
+    {
+      name: "domain-is-pure",
+      comment: "domain must not depend on application, adapters or bootstrap. Move I/O behind a port in application (ADR 0001).",
+      severity: "error",
+      from: { path: "^src/domain/" },
+      to: { path: "^src/(application|adapters|bootstrap)/" },
+    },
+    {
+      name: "application-not-to-adapters",
+      comment: "application talks to the outside world through ports it defines; adapters implement them (ADR 0001).",
+      severity: "error",
+      from: { path: "^src/application/" },
+      to: { path: "^src/(adapters|bootstrap)/" },
+    },
+    {
+      name: "adapters-not-to-bootstrap",
+      comment: "Only bootstrap wires dependencies together (ADR 0001).",
+      severity: "error",
+      from: { path: "^src/adapters/" },
+      to: { path: "^src/bootstrap/" },
+    },
+    { name: "no-circular", severity: "error", from: {}, to: { circular: true } },
+    {
+      name: "no-dev-deps-in-src",
+      severity: "error",
+      from: { path: "^src/", pathNot: "\\.test\\.ts$" },
+      to: { dependencyTypes: ["npm-dev"], pathNot: "^node_modules/@types/" },
+    },
+  ],
+  options: {
+    doNotFollow: { path: "node_modules" },
+    tsPreCompilationDeps: true,
+    tsConfig: { fileName: "tsconfig.json" },
+  },
+};

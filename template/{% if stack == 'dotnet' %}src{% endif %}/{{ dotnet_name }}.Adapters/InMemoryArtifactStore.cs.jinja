@@ -1,0 +1,18 @@
+using System.Collections.Concurrent;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+public sealed class InMemoryArtifactStore : IArtifactStore
+{
+    private readonly ConcurrentDictionary<string, string> files = new();
+
+    public Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        files[key] = content;
+        return Task.FromResult(key);
+    }
+
+    public string? Read(string key) => files.TryGetValue(key, out var content) ? content : null;
+}

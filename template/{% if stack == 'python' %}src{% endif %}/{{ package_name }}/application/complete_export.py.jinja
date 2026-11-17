@@ -1,0 +1,14 @@
+from typing import Protocol
+
+from {{ package_name }}.domain.export_job import ReadyExport, RunningExport, complete_export
+
+
+class ArtifactStore(Protocol):
+    """Port: defined here, implemented in adapters, wired in bootstrap."""
+
+    def save(self, job_id: str, content: str) -> str: ...
+
+
+def complete_export_use_case(store: ArtifactStore, job: RunningExport, content: str) -> ReadyExport:
+    key = store.save(job.id, content)
+    return complete_export(job, key)

@@ -1,0 +1,36 @@
+namespace {{ dotnet_name }}.Domain;
+
+/// <summary>
+/// Illegal states are unrepresentable: only a running job can complete,
+/// and a ready job always has an artifact key.
+/// </summary>
+public abstract record ExportJob(string Id)
+{
+    public sealed record Queued(string Id) : ExportJob(Id);
+
+    public sealed record Running(string Id) : ExportJob(Id);
+
+    public sealed record Ready(string Id, string ArtifactKey) : ExportJob(Id);
+
+    public sealed record Failed(string Id, string Reason) : ExportJob(Id);
+}
+
+public static class ExportTransitions
+{
+    public static ExportJob.Running Start(ExportJob.Queued job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        return new ExportJob.Running(job.Id);
+    }
+
+    public static ExportJob.Ready Complete(ExportJob.Running job, string artifactKey)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        if (string.IsNullOrWhiteSpace(artifactKey))
+        {
+            throw new ArgumentException("Export completion requires an artifact key", nameof(artifactKey));
+        }
+
+        return new ExportJob.Ready(job.Id, artifactKey);
+    }
+}

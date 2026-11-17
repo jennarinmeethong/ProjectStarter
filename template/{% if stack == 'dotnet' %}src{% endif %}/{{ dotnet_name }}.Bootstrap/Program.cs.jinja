@@ -1,0 +1,8 @@
+using {{ dotnet_name }}.Adapters;
+using {{ dotnet_name }}.Application;
+using {{ dotnet_name }}.Domain;
+
+var store = new InMemoryArtifactStore();
+var job = ExportTransitions.Start(new ExportJob.Queued("demo"));
+var ready = await new CompleteExport(store).ExecuteAsync(job, "id,name\n1,demo\n", CancellationToken.None);
+Console.WriteLine($"{ready.Id} -> {ready.ArtifactKey}");

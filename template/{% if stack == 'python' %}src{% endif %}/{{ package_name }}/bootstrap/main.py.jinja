@@ -1,0 +1,14 @@
+from {{ package_name }}.adapters.in_memory_artifact_store import InMemoryArtifactStore
+from {{ package_name }}.application.complete_export import complete_export_use_case
+from {{ package_name }}.domain.export_job import QueuedExport, start_export
+
+
+def main() -> None:
+    store = InMemoryArtifactStore()
+    job = start_export(QueuedExport(id="demo"))
+    ready = complete_export_use_case(store, job, "id,name\n1,demo\n")
+    print(f"{ready.id} -> {ready.artifact_key}")
+
+
+if __name__ == "__main__":
+    main()

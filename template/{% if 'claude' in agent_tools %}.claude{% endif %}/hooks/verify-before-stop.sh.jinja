@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Stop: run the fast checks before Claude says it is done. Exit 2 makes Claude keep working.
+# Skipped when the working tree has no changes (questions, reviews, planning).
+. "$(dirname "$0")/_lib.sh"
+
+cat >/dev/null # hook input is not needed
+cd "$(project_root)" || exit 0
+
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -z "$(git status --porcelain)" ]; then
+  exit 0
+fi
+
+if ! out=$({{ cmd.fast }} 2>&1); then
+  echo "Fast checks failed ({{ cmd.fast }}). Fix the cause before finishing:" >&2
+  printf '%s\n' "$out" | tail -n 60 >&2
+  exit 2
+fi
+exit 0

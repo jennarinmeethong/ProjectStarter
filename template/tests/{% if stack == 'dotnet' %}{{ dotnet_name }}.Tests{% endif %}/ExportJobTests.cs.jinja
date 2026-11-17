@@ -1,0 +1,33 @@
+using FsCheck;
+using FsCheck.Fluent;
+using FsCheck.Xunit;
+using Xunit;
+using {{ dotnet_name }}.Domain;
+
+namespace {{ dotnet_name }}.Tests;
+
+public sealed class ExportJobTests
+{
+    [Fact]
+    public void CompletesRunningJobWithArtifactKey()
+    {
+        var running = ExportTransitions.Start(new ExportJob.Queued("job-1"));
+
+        var ready = ExportTransitions.Complete(running, "exports/job-1.csv");
+
+        Assert.Equal(new ExportJob.Ready("job-1", "exports/job-1.csv"), ready);
+    }
+
+    [Fact]
+    public void RejectsBlankArtifactKey()
+    {
+        Assert.Throws<ArgumentException>(() => ExportTransitions.Complete(new ExportJob.Running("job-1"), "  "));
+    }
+
+    [Property]
+    public Property KeepsIdAndKeyForAnyNonBlankKey(NonNull<string> id, NonWhiteSpaceString key)
+    {
+        var ready = ExportTransitions.Complete(new ExportJob.Running(id.Get), key.Get);
+        return (ready.Id == id.Get && ready.ArtifactKey == key.Get).ToProperty();
+    }
+}

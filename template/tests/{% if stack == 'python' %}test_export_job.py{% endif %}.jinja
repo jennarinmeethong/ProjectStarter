@@ -1,0 +1,30 @@
+import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+
+from {{ package_name }}.domain.export_job import (
+    QueuedExport,
+    ReadyExport,
+    RunningExport,
+    complete_export,
+    start_export,
+)
+
+
+def test_completes_running_job_with_artifact_key() -> None:
+    running = start_export(QueuedExport(id="job-1"))
+    assert complete_export(running, "exports/job-1.csv") == ReadyExport(
+        id="job-1", artifact_key="exports/job-1.csv"
+    )
+
+
+def test_rejects_blank_artifact_key() -> None:
+    with pytest.raises(ValueError, match="artifact key"):
+        complete_export(RunningExport(id="job-1"), "  ")
+
+
+@given(st.text(), st.text().filter(lambda k: k.strip() != ""))
+def test_keeps_id_and_key_for_any_non_blank_key(job_id: str, key: str) -> None:
+    ready = complete_export(RunningExport(id=job_id), key)
+    assert ready.id == job_id
+    assert ready.artifact_key == key

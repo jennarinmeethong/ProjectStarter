@@ -1,0 +1,92 @@
+---
+name: project-starter
+description: Scaffold a new agent-ready project from the ProjectStarter template (TypeScript, Python or C#/.NET; Claude Code and/or Codex) with AGENTS.md, strict type/lint/architecture guardrails, CI ratchet, optional CODEOWNERS, risk tiers and docs. Use when the user wants to start, create, bootstrap or scaffold a new project/repo, or add these guardrails to an empty folder.
+---
+
+# Project Starter
+
+Creates a project whose rules are enforced by tools (types, lint, architecture checks, CI ratchet, and CODEOWNERS when an owner is given)
+instead of prose. Files are rendered by **Copier** so the result is deterministic and can later be updated with
+`copier update`. Your job is the judgment part: ask, run the generator, fill in what only the human knows, verify.
+
+## 1. Find the template
+
+The template is the ProjectStarter repository (it contains `copier.yml`). Resolve `TEMPLATE` in this order:
+
+1. `$PROJECT_STARTER_TEMPLATE` if set (local path or git URL).
+2. The first line of `template-path.txt` next to this `SKILL.md` (written by `scripts/install-skill.sh`).
+3. The repository that contains this skill: two directories above this `SKILL.md`, if it has `copier.yml`.
+4. Otherwise ask the user for the path or git URL.
+
+Use an **absolute** path or a git URL so `copier update` works later.
+
+## 2. Ask (one short message, offer the defaults)
+
+| Answer | Values | Default |
+|---|---|---|
+| `project_name` | letters, digits, `-`, `_`; starts with a letter | — |
+| `project_description` | one sentence: who uses it to do what | — |
+| `stack` | `typescript`, `python`, `dotnet` | — |
+| `agent_tools` | any of `claude`, `codex` | both |
+| `guardrail_owner` | optional: `@user` or `@org/team` for `.github/CODEOWNERS` | empty = no CODEOWNERS |
+| `risk_paths` | tier-3 paths that always need owner review | `[auth/, payments/, migrations/, infra/]` |
+| destination | folder to create | `./<project_name>` |
+
+Do not guess the stack or the owner; if the user does not name an owner, leave it empty (no CODEOWNERS is generated). If the destination exists and is not empty, ask before writing into it.
+
+## 3. Check tools
+
+- Always: `git`, `bash`, and `uv` (Copier runs through `uvx`; install uv from https://docs.astral.sh/uv/ if missing).
+- `typescript`: Node.js ≥ 22.12 and npm. `python`: uv (Python is fetched by uv). `dotnet`: .NET SDK 10.
+
+Report missing tools and stop; do not install system tools without the user's approval.
+
+## 4. Generate
+
+```bash
+uvx copier copy --trust --defaults \
+  -d project_name=<name> -d "project_description=<sentence>" -d stack=<stack> \
+  -d 'agent_tools=["claude","codex"]' \
+  -d 'risk_paths=["auth/","payments/","migrations/","infra/"]' \
+  "$TEMPLATE" <destination>
+```
+
+Add `-d "guardrail_owner=<@user or @org/team>"` only when the user gave an owner.
+
+`--trust` is needed because the template uses computed values. Then initialise git if the folder is not a repository:
+`git init -b main`.
+
+## 5. Install and verify (evidence, not claims)
+
+Run inside the destination, using the commands the generated `AGENTS.md` lists:
+
+| Stack | Install | Verify |
+|---|---|---|
+| typescript | `npm install` | `npm run verify` |
+| python | `uv sync` | `uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest` |
+| dotnet | `dotnet restore` | `dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build` |
+
+If verification fails, fix the cause in the generated project (never loosen a guardrail config) and report what
+you changed. Show the final output lines as evidence.
+
+## 6. Fill in what only the human knows
+
+Draft these with the user — do not invent domain facts:
+
+- `docs/feature-map.md`: replace the `example` row with the real first features (ID, entry point, risk tier).
+- `docs/risk-tiers.md`: the team's definition of "revert".
+- Remove the sample `export-job` code once the first real feature exists (it is there to show the layering).
+
+Do **not** expand `AGENTS.md` with rules; new rules go to the lowest layer that can enforce them
+(`docs/engineering/where-rules-live.md`). Keep it under 60 lines.
+
+## 7. Hand over
+
+Tell the user, briefly:
+
+- what was generated and the verify result;
+- GitHub settings only they can turn on: branch protection on `main`, required status check `ci / verify`,
+  and "Require review from Code Owners" if CODEOWNERS was generated (otherwise: it can be added later by
+  running `uvx copier update --trust` and answering `guardrail_owner`);
+- next phase in `docs/roadmap.md` (phase 3: correction records when an agent repeats a mistake);
+- to pull later template improvements: `uvx copier update --trust` inside the project.

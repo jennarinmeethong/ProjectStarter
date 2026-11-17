@@ -1,0 +1,37 @@
+// Guardrail config (protected). Rule messages say what to do instead and link an ADR.
+import js from "@eslint/js";
+import tseslint from "typescript-eslint";
+
+export default tseslint.config(
+  { ignores: ["node_modules/", "dist/", "coverage/", "*.config.*", ".dependency-cruiser.cjs"] },
+  js.configs.recommended,
+  ...tseslint.configs.strictTypeChecked,
+  {
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    linterOptions: { reportUnusedDisableDirectives: "error" },
+    rules: {
+      "@typescript-eslint/ban-ts-comment": ["error", { "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true }],
+      "@typescript-eslint/no-explicit-any": "error",
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "TSAsExpression > TSAsExpression[typeAnnotation.type='TSUnknownKeyword']",
+          message: "Do not cast through `unknown`. Decode/validate the value at the boundary instead (docs/adr/0001-layered-architecture.md).",
+        },
+      ],
+    },
+  },
+  {
+    // Timers in product code usually paper over ordering bugs. Use an explicit scheduler port instead.
+    files: ["src/domain/**", "src/application/**"],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        { name: "setTimeout", message: "No timers in domain/application. Model the state or inject a scheduler port (docs/engineering/agent-principles.md #2)." },
+        { name: "setInterval", message: "No timers in domain/application. Inject a scheduler port instead." },
+      ],
+    },
+  },
+);
