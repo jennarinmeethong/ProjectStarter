@@ -3,3 +3,5 @@
 coverage.out
 *.test
 .env
+# rapid writes a failfile per failing property test; rerun with the -rapid.seed it prints instead.
+**/testdata/rapid/
