@@ -90,7 +90,7 @@ services:
 {%- endif %}
 {%- if 's3' in datastores %}
       s3:
-        condition: service_started
+        condition: service_healthy
 {%- endif %}
 {%- if 'redis' in datastores %}
       redis:
@@ -233,6 +233,11 @@ services:
     image: adobe/s3mock:4.11.0
     environment:
       COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: artifacts
+    healthcheck:
+      # The JVM starts slower than the app; wait until the S3 API answers.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/"]
+      interval: 2s
+      retries: 60
 {%- endif %}
 {%- if 'redis' in datastores %}
 
