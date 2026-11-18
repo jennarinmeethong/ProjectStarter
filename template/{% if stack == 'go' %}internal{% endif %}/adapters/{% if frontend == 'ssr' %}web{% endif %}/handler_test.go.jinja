@@ -1,0 +1,309 @@
+// Server-rendered UI (ADR 0005): form flow, CSRF protection, escaping and headers, in process.
+package web_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"regexp"
+	"strings"
+	"testing"
+
+	"{{ go_module }}/internal/adapters/inmemory"
+	"{{ go_module }}/internal/adapters/web"
+	"{{ go_module }}/internal/application"
+)
+
+const (
+	pageCSP = "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+	invalid = "Enter a job id (letters, digits, - or _) and some content."
+)
+
+var tokenField = regexp.MustCompile(`name="csrf_token" value="([A-Za-z0-9_-]{43})"`)
+
+type failingStore struct{}
+
+func (failingStore) Save(_ context.Context, jobID, content string) (string, error) {
+	return "", errors.New("disk full while saving " + jobID + " (" + content + ")")
+}
+
+// session is one browser: it keeps the CSRF cookie between requests.
+type session struct {
+	t       *testing.T
+	handler http.Handler
+	cookie  *http.Cookie
+}
+
+func newSession(t *testing.T, store application.ArtifactStore) *session {
+	t.Helper()
+	return &session{t: t, handler: web.NewHandler(store)}
+}
+
+func (s *session) do(method, path string, form url.Values, headers map[string]string) *httptest.ResponseRecorder {
+	s.t.Helper()
+	var body *strings.Reader
+	if form != nil {
+		body = strings.NewReader(form.Encode())
+	} else {
+		body = strings.NewReader("")
+	}
+	request := httptest.NewRequestWithContext(s.t.Context(), method, path, body)
+	if form != nil {
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	if s.cookie != nil {
+		request.AddCookie(s.cookie)
+	}
+	recorder := httptest.NewRecorder()
+	s.handler.ServeHTTP(recorder, request)
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == "__Host-csrf" {
+			s.cookie = cookie
+		}
+	}
+	return recorder
+}
+
+func (s *session) token() string {
+	s.t.Helper()
+	match := tokenField.FindStringSubmatch(s.do(http.MethodGet, "/", nil, nil).Body.String())
+	if match == nil {
+		s.t.Fatal("no csrf_token field in the page")
+	}
+	return match[1]
+}
+
+func (s *session) post(fields, headers map[string]string) *httptest.ResponseRecorder {
+	s.t.Helper()
+	form := url.Values{}
+	for name, value := range fields {
+		form.Set(name, value)
+	}
+	return s.do(http.MethodPost, "/", form, headers)
+}
+
+func expectStatus(t *testing.T, response *httptest.ResponseRecorder, want int) {
+	t.Helper()
+	if response.Code != want {
+		t.Fatalf("status %d, want %d; body %s", response.Code, want, response.Body.String())
+	}
+}
+
+func expectBody(t *testing.T, response *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	if !strings.Contains(response.Body.String(), want) {
+		t.Fatalf("body does not contain %q: %s", want, response.Body.String())
+	}
+}
+
+func TestFormSetsTheCSRFCookieAndTheMatchingHiddenField(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	response := s.do(http.MethodGet, "/", nil, nil)
+	expectStatus(t, response, http.StatusOK)
+	expectBody(t, response, "<h1>Complete an export</h1>")
+	cookie := s.cookie
+	if cookie == nil {
+		t.Fatal("no __Host-csrf cookie")
+	}
+	if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" || cookie.Domain != "" {
+		t.Errorf("cookie attributes: %+v", cookie)
+	}
+	if got := s.token(); got != cookie.Value {
+		t.Errorf("hidden field %q differs from the cookie %q", got, cookie.Value)
+	}
+}
+
+func TestPageSendsThePageCSPAndTheSecurityHeaders(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	for _, path := range []string{"/", "/static/app.css", "/does-not-exist"} {
+		headers := s.do(http.MethodGet, path, nil, nil).Header()
+		if got := headers.Get("Content-Security-Policy"); got != pageCSP {
+			t.Errorf("%s: content-security-policy = %q", path, got)
+		}
+		for name, want := range map[string]string{
+			"X-Content-Type-Options": "nosniff",
+			"X-Frame-Options":        "DENY",
+			"Cache-Control":          "no-store",
+		} {
+			if got := headers.Get(name); got != want {
+				t.Errorf("%s: %s = %q, want %q", path, name, got, want)
+			}
+		}
+		if got := headers.Get("Server"); got != "" {
+			t.Errorf("%s: server header leaked: %q", path, got)
+		}
+	}
+}
+
+func TestServesTheStylesheet(t *testing.T) {
+	response := newSession(t, inmemory.New()).do(http.MethodGet, "/static/app.css", nil, nil)
+	expectStatus(t, response, http.StatusOK)
+	if got := response.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/css") {
+		t.Errorf("content-type = %q", got)
+	}
+}
+
+func TestCompletesAnExport(t *testing.T) {
+	store := inmemory.New()
+	s := newSession(t, store)
+	response := s.post(map[string]string{"csrf_token": s.token(), "job_id": "ui-1", "content": "id,name"}, nil)
+	expectStatus(t, response, http.StatusOK)
+	expectBody(t, response, "Saved as exports/ui-1.csv")
+	if got, err := store.Read(t.Context(), "exports/ui-1.csv"); err != nil || got != "id,name" {
+		t.Fatalf("stored %q, err %v", got, err)
+	}
+}
+
+func TestRejectsInvalidInput(t *testing.T) {
+	for name, input := range map[string][2]string{
+		"job id with a space":  {"not valid", "x"},
+		"empty content":        {"ok", ""},
+		"job id over 64 chars": {strings.Repeat("x", 65), "x"},
+		"content over 1M":      {"ok", strings.Repeat("x", 1_000_001)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newSession(t, inmemory.New())
+			response := s.post(map[string]string{"csrf_token": s.token(), "job_id": input[0], "content": input[1]}, nil)
+			expectStatus(t, response, http.StatusBadRequest)
+			expectBody(t, response, invalid)
+		})
+	}
+}
+
+func TestAcceptsContentOfExactlyOneMillionMultibyteCharacters(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	content := strings.Repeat("€", 1_000_000)
+	response := s.post(map[string]string{"csrf_token": s.token(), "job_id": "big", "content": content}, nil)
+	expectStatus(t, response, http.StatusOK)
+}
+
+func TestRejectsABodyOverTheByteCap(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	token := s.token()
+	body := "csrf_token=" + token + "&job_id=ok&content=" + strings.Repeat("x", 13_000_000)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(s.cookie)
+	recorder := httptest.NewRecorder()
+	s.handler.ServeHTTP(recorder, request)
+	expectStatus(t, recorder, http.StatusBadRequest)
+	expectBody(t, recorder, invalid)
+}
+
+func TestRejectsRepeatedOrTooManyFields(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	token := s.token()
+	for name, body := range map[string]string{
+		"repeated field": "csrf_token=" + token + "&job_id=a&job_id=b&content=x",
+		"too many":       "csrf_token=" + token + "&job_id=a&content=x&" + strings.Repeat("f=1&", 20),
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.AddCookie(s.cookie)
+			recorder := httptest.NewRecorder()
+			s.handler.ServeHTTP(recorder, request)
+			expectStatus(t, recorder, http.StatusBadRequest)
+		})
+	}
+}
+
+func TestEscapesUserInput(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	response := s.post(map[string]string{"csrf_token": s.token(), "job_id": "<script>", "content": "</textarea><b>"}, nil)
+	expectStatus(t, response, http.StatusBadRequest)
+	body := response.Body.String()
+	for _, raw := range []string{"<script>", "<b>", "</textarea><b>"} {
+		if strings.Contains(body, raw) {
+			t.Errorf("page contains unescaped %q", raw)
+		}
+	}
+	expectBody(t, response, "&lt;script&gt;")
+}
+
+func TestRejectsAMissingOrMismatchedToken(t *testing.T) {
+	for name, fields := range map[string]map[string]string{
+		"missing":    {},
+		"empty":      {"csrf_token": ""},
+		"mismatched": {"csrf_token": strings.Repeat("x", 43)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := inmemory.New()
+			s := newSession(t, store)
+			s.token()
+			fields["job_id"], fields["content"] = "ui-2", "x"
+			expectStatus(t, s.post(fields, nil), http.StatusForbidden)
+			if _, err := store.Read(t.Context(), "exports/ui-2.csv"); err == nil {
+				t.Error("the export was stored")
+			}
+		})
+	}
+}
+
+func TestRejectsAPostWithoutTheCookie(t *testing.T) {
+	store := inmemory.New()
+	token := newSession(t, store).token()
+	fresh := newSession(t, store)
+	response := fresh.post(map[string]string{"csrf_token": token, "job_id": "ui-3", "content": "x"}, nil)
+	expectStatus(t, response, http.StatusForbidden)
+}
+
+func TestRejectsAPostFromAnotherSite(t *testing.T) {
+	for _, site := range []string{"cross-site", "same-site", "none"} {
+		t.Run(site, func(t *testing.T) {
+			s := newSession(t, inmemory.New())
+			fields := map[string]string{"csrf_token": s.token(), "job_id": "ui-4", "content": "x"}
+			expectStatus(t, s.post(fields, map[string]string{"Sec-Fetch-Site": site}), http.StatusForbidden)
+		})
+	}
+}
+
+func TestRejectsAPostWithAnotherOrigin(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	fields := map[string]string{"csrf_token": s.token(), "job_id": "ui-4", "content": "x"}
+	expectStatus(t, s.post(fields, map[string]string{"Origin": "https://evil.example"}), http.StatusForbidden)
+}
+
+func TestAcceptsASameOriginPost(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	fields := map[string]string{"csrf_token": s.token(), "job_id": "ui-5", "content": "x"}
+	expectStatus(t, s.post(fields, map[string]string{"Sec-Fetch-Site": "same-origin"}), http.StatusOK)
+}
+
+func TestKeepsTheTokenWhileValidAndAfterARefusal(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	token := s.token()
+	s.post(map[string]string{"csrf_token": token, "job_id": "ui-7", "content": "x"}, map[string]string{"Sec-Fetch-Site": "cross-site"})
+	if got := s.token(); got != token {
+		t.Errorf("token rotated from %q to %q", token, got)
+	}
+	response := s.post(map[string]string{"csrf_token": token, "job_id": "ui-7", "content": "x"}, nil)
+	expectStatus(t, response, http.StatusOK)
+}
+
+func TestReportsAStorageFailureWithoutDetails(t *testing.T) {
+	s := newSession(t, failingStore{})
+	response := s.post(map[string]string{"csrf_token": s.token(), "job_id": "ui-6", "content": "x"}, nil)
+	expectStatus(t, response, http.StatusInternalServerError)
+	expectBody(t, response, "The export could not be saved.")
+	if strings.Contains(response.Body.String(), "disk full") {
+		t.Error("the page leaks the storage error")
+	}
+}
+
+func TestHealthCheckAnswersOK(t *testing.T) {
+	response := newSession(t, inmemory.New()).do(http.MethodGet, "/healthz", nil, nil)
+	expectStatus(t, response, http.StatusOK)
+	expectBody(t, response, `"status":"ok"`)
+}
+
+func TestAnswersUnknownRoutesWith404(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	expectStatus(t, s.do(http.MethodGet, "/does-not-exist", nil, nil), http.StatusNotFound)
+	expectStatus(t, s.do(http.MethodPost, "/exports/x/complete", url.Values{"content": {"x"}}, nil), http.StatusNotFound)
+}

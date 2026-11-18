@@ -1,0 +1,64 @@
+package bootstrap
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"{{ go_module }}/internal/adapters/inmemory"
+)
+
+const pageCSP = "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+{%- if http_api %}
+
+const apiCSP = "default-src 'none'; frame-ancestors 'none'"
+{%- endif %}
+
+func serveRequest(t *testing.T, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	recorder := httptest.NewRecorder()
+	newHandler(inmemory.New()).ServeHTTP(recorder, request)
+	return recorder
+}
+
+func TestServerAnswersTheHealthCheck(t *testing.T) {
+	response := serveRequest(t, http.MethodGet, "/healthz", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status %d", response.Code)
+	}
+}
+
+func TestServerServesThePageWithThePageCSP(t *testing.T) {
+	response := serveRequest(t, http.MethodGet, "/", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status %d", response.Code)
+	}
+	if got := response.Header().Get("Content-Security-Policy"); got != pageCSP {
+		t.Errorf("content-security-policy = %q", got)
+	}
+}
+{%- if http_api %}
+
+func TestAPIKeepsItsOwnCSPNextToThePage(t *testing.T) {
+	response := serveRequest(t, http.MethodPost, "/exports/api-1/complete", `{"content":"x"}`)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Security-Policy"); got != apiCSP {
+		t.Errorf("content-security-policy = %q, want %q", got, apiCSP)
+	}
+}
+{%- else %}
+
+func TestJSONAPIIsAbsentWithoutHTTPAPI(t *testing.T) {
+	response := serveRequest(t, http.MethodPost, "/exports/x/complete", `{"content":"x"}`)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status %d", response.Code)
+	}
+}
+{%- endif %}

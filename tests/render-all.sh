@@ -402,7 +402,9 @@ ssr_checks() { # ssr_checks <stack> <install-cmd> <ui-file> <csp-sed-expression>
   else fail "ssr: zap: missing Content-Security-Policy failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'; fi
   git checkout -q -- .
   unset MSYS_NO_PATHCONV
-  seeded "ssr: template engine imported in application" "$5" "$6" bash -c "$7"
+  # <framework-import-text> starting with "package" is the content of a new file <application-file> (Go: imports go first).
+  if [[ "$6" == package* ]]; then seeded_new "ssr: template engine imported in application" "$5" "$6" bash -c "$7"
+  else seeded "ssr: template engine imported in application" "$5" "$6" bash -c "$7"; fi
   sed -i 's#</form>#  <input name="seeded">\n&#' "$3"
   if out=$(bash -c "$ssr_test_ui" 2>&1); then fail "ssr: axe: unlabeled input (should have failed)"
   elif grep -q '"id": "label"' <<<"$out"; then pass "ssr: axe: unlabeled input rejected"
@@ -783,6 +785,10 @@ for stack in "${stacks[@]}"; do
       seeded_new "depguard: driver imported in application" internal/application/driver.go 'package application\n\nimport "github.com/jackc/pgx/v5/pgxpool"\n\n// Pool leaks the driver into the application layer.\ntype Pool = pgxpool.Pool\n' go tool golangci-lint run --enable-only depguard ./internal/application/
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks go "go test -tags e2e ./..." internal/adapters/httpapi/handler.go '/headers.Set("X-Content-Type-Options", "nosniff")/d'
+      # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
+      ssr_checks go "go mod tidy" internal/adapters/web/templates/index.html '/Content-Security-Policy/d' \
+        internal/application/web_leak.go 'package application\n\nimport _ "html/template"\n' "go tool golangci-lint run --enable-only depguard ./internal/application/"
+      ssr_api_checks go "go mod tidy" "go test -tags e2e ./..."
       seeded_new "depguard: net/http imported in application" internal/application/web.go 'package application\n\nimport "net/http"\n\n// Handler leaks HTTP into the application layer.\ntype Handler = http.Handler\n' go tool golangci-lint run --enable-only depguard ./internal/application/
       # Design rules (ADR 0002), one violation at a time.
       seeded_new "forbidigo: ambient clock in domain" internal/domain/clock.go 'package domain\n\nimport "time"\n\n// Now reads the wall clock.\nfunc Now() time.Time { return time.Now() }\n' go tool golangci-lint run ./internal/domain/
