@@ -3,7 +3,7 @@
 #   1. the generated project passes its own verify command, and
 #   2. the guardrails reject a seeded violation (escape hatch, layer leak, skipped test).
 # Usage: tests/render-all.sh [stack...]      (default: typescript python dotnet go rust)
-# Needs: uv, git, bash >= 4 (associative arrays; Git Bash and Linux are fine, macOS /bin/bash 3.2 is not), Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go; rustup + cargo-deny for rust.
+# Needs: uv, git, bash >= 4 (associative arrays; Git Bash and Linux are fine, macOS /bin/bash 3.2 is not), Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go; rustup + cargo-deny + cargo-mutants for rust.
 set -uo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -396,6 +396,61 @@ default_verify() { # default_verify <stack>: the claude-only render keeps every 
   popd >/dev/null || return
 }
 
+# Mutation testing of the domain (cmd.mutation): the command, the domain file, the line an untested branch goes before,
+# that branch (an off-by-one the tests never pin down), and the output that proves the threshold, not a build error,
+# rejected it.
+declare -A mutation_cmd=(
+  [typescript]="npm run mutation"
+  [python]="uv run mutmut run && uv run mutmut export-cicd-stats && uv run python ci/mutation-gate.py"
+  [dotnet]="dotnet tool restore && dotnet stryker"
+  [go]="go run github.com/go-gremlins/gremlins/cmd/gremlins@v0.5.1 unleash ./internal/domain"
+  [rust]="cargo mutants -p domain"
+)
+declare -A mutation_file=(
+  [typescript]=src/domain/export-job.ts [python]=src/demo_app/domain/export_job.py
+  [dotnet]=src/DemoApp.Domain/ExportJob.cs [go]=internal/domain/exportjob.go [rust]=crates/domain/src/lib.rs
+)
+declare -A mutation_anchor=(
+  [typescript]='^  if (artifactKey.trim().length === 0) {'
+  [python]='^    if not artifact_key.strip():'
+  [dotnet]='^        if (string.IsNullOrWhiteSpace(artifactKey))'
+  [go]='^\tif strings.TrimSpace(artifactKey) == "" {'
+  [rust]='^    if artifact_key.trim().is_empty() {'
+)
+declare -A mutation_gap=(
+  [typescript]='  if (artifactKey.length > 1024) {\n    throw new Error("Artifact key too long");\n  }'
+  [python]='    if len(artifact_key) > 1024:\n        raise ValueError("Artifact key too long")'
+  [dotnet]='        if (artifactKey.Length > 1024)\n        {\n            throw new ArgumentException("Artifact key too long", nameof(artifactKey));\n        }'
+  [go]='\tif len(artifactKey) > 1024 {\n\t\treturn Ready{}, ErrBlankArtifactKey\n\t}'
+  [rust]='    if artifact_key.len() > 1024 {\n        return Err(CompleteError::BlankArtifactKey);\n    }'
+)
+declare -A mutation_rejected=(
+  [typescript]='under breaking threshold' [python]='surviving mutants' [dotnet]='lower than the configured break threshold'
+  [go]='below efficacy-threshold' [rust]='MISSED'
+)
+
+default_mutation() { # default_mutation <stack>: on the default render, mutation passes; an untested branch fails it
+  case "$1:$(uname -s)" in
+    python:MINGW* | python:MSYS* | dotnet:MINGW* | dotnet:MSYS* | go:MINGW* | go:MSYS*)
+      echo "  SKIP mutation ($1): mutmut, Stryker.NET and gremlins need Linux/macOS here; CI runs it"
+      return ;;
+  esac
+  pushd "$work/$1-claude" >/dev/null || return
+  local file=${mutation_file[$1]} out
+  verify "defaults: $1 mutation" "${mutation_cmd[$1]}"
+  sed -i "s|${mutation_anchor[$1]}|${mutation_gap[$1]}\n&|" "$file"
+  if out=$(bash -c "${mutation_cmd[$1]}" 2>&1); then
+    fail "mutation: untested branch in the domain (should have failed)"
+  elif grep -q "${mutation_rejected[$1]}" <<<"$out"; then
+    pass "mutation: untested branch in the domain rejected"
+  else
+    fail "mutation: untested branch failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'
+  fi
+  git checkout -q -- "$file"
+  rm -rf .stryker-tmp reports mutants StrykerOutput mutants.out mutants.out.old
+  popd >/dev/null || return
+}
+
 for stack in "${stacks[@]}"; do
   echo "== $stack"
 
@@ -459,6 +514,7 @@ for stack in "${stacks[@]}"; do
   done
 
   default_verify "$stack"
+  default_mutation "$stack"
 
   # Full verification on the both-tools render.
   d="$work/$stack-claude,codex"

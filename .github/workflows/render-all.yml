@@ -50,7 +50,7 @@ jobs:
       - if: matrix.stack == 'rust'
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny
+          tool: cargo-deny,cargo-mutants
       # System libraries for the Playwright browser checks of the frontend renders.
       - if: matrix.stack == 'typescript'
         run: npx --yes playwright@1.64 install-deps chromium # same minor as the template's @playwright/test
