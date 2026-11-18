@@ -1,0 +1,66 @@
+# Runs tests/render-all.sh for every stack in parallel (phase 5a).
+# The workflow only installs toolchains; all checks live in the script, so CI and a local run stay the same.
+name: render-all
+
+on:
+# No paths-ignore: once these checks are required, a skipped workflow would leave docs-only PRs waiting forever.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-all-${{ github.ref }}
+  # Cancel superseded PR runs only; every push to main keeps its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  render-all:
+    runs-on: ubuntu-latest
+    # TypeScript runs five frontend renders (image build + two ZAP scans each) on top of every datastore.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [typescript, python, dotnet, go, rust]
+    steps:
+      # Each job pulls every datastore image and builds several renders (Rust: one target/ per render); make room first.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - if: matrix.stack == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - if: matrix.stack == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.x
+          cache: false # no go.sum at the repo root; renders resolve their own modules
+      - if: matrix.stack == 'rust'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      # System libraries for the Playwright browser checks of the frontend renders.
+      - if: matrix.stack == 'typescript'
+        run: npx --yes playwright@1.64 install-deps chromium # same minor as the template's @playwright/test
+      - run: bash tests/render-all.sh ${{ matrix.stack }}
+
+  whitespace:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git diff --check "origin/${{ github.base_ref }}...HEAD"

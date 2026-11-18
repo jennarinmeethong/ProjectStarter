@@ -18,12 +18,13 @@ Requires `git`, `bash`, `uv`; Node.js ≥ 22.12 for TypeScript renders; .NET SDK
 - Render one project: `uvx copier copy --trust --defaults -d project_name=demo -d stack=<typescript|python|dotnet|go|rust> . <dest>` (renders the working tree, including uncommitted changes)
 - Full test (renders every stack × agent combination, runs each project's verify, then seeds violations that must be rejected): `bash tests/render-all.sh`
 - One stack: `bash tests/render-all.sh python`
+- CI (`.github/workflows/render-all.yml`) runs `tests/render-all.sh` for every stack in parallel on each PR into `main`; locally, run only the stacks you changed.
 - Validate the plugin manifests: `claude plugin validate .`
 - `git diff --check` — whitespace errors
 
 ## Rules for changing the template
 
-- Any change under `template/` or `copier.yml` must be followed by `bash tests/render-all.sh` for the affected stacks.
+- Any change under `template/` or `copier.yml` must be followed by `bash tests/render-all.sh` for the affected stacks (CI runs all stacks on the PR).
 - Keep the generated `AGENTS.md` under 60 lines (the test checks it). New rules go to the lowest layer that can enforce them (`template/docs/engineering/where-rules-live.md`), not into `AGENTS.md`.
 - Generated shell scripts must work in Git Bash on Windows without `jq` (see `template/.../.claude/hooks/_lib.sh`).
 - Pin tool versions that have known incompatibilities (TypeScript is held at `~6.0` because typescript-eslint does not support 7.x yet).
