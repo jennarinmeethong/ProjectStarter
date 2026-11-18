@@ -1,23 +1,35 @@
-"""HTTP adapter: FastAPI app for the export use case.
+"""HTTP adapter: FastAPI app for the export use case{% if frontend == 'ssr' %}{% if http_api %}: the JSON API and{% else %}, serving{% endif %} the web UI (ADR 0005){% endif %}.
 
 Requests are validated here; domain and application never see HTTP types (ADR 0001).
 Security baseline: docs/security/owasp.md.
 """
 
 from collections.abc import Awaitable, Callable
+{%- if http_api %}
 from typing import Annotated
+{%- endif %}
 
-from fastapi import FastAPI, Path, Request, Response
+from fastapi import FastAPI, {% if http_api %}Path, {% endif %}Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+{%- if http_api %}
 from pydantic import BaseModel, ConfigDict, Field
+{%- endif %}
 from starlette.exceptions import HTTPException
 
+{% if frontend == 'ssr' -%}
+from {{ package_name }}.adapters.web.routes import create_router
+{% endif -%}
+{% if http_api -%}
 from {{ package_name }}.application.complete_export import ArtifactStore, complete_export_use_case
 from {{ package_name }}.domain.export_job import QueuedExport, start_export
 
 JOB_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 MAX_CONTENT_LENGTH = 1_000_000
+{% else -%}
+from {{ package_name }}.application.complete_export import ArtifactStore
+
+{% endif -%}
 NOT_FOUND = 404
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
@@ -28,6 +40,8 @@ SECURITY_HEADERS = {
     "Cache-Control": "no-store",
 }
 
+{%- if http_api %}
+
 
 class CompleteExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -37,6 +51,7 @@ class CompleteExportRequest(BaseModel):
 class CompleteExportResponse(BaseModel):
     id: str
     artifact_key: str = Field(serialization_alias="artifactKey")
+{%- endif %}
 
 
 def problem(status: int, title: str) -> JSONResponse:
@@ -57,7 +72,13 @@ def create_app(store: ArtifactStore) -> FastAPI:
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         response = await call_next(request)
+{%- if frontend == 'ssr' %}
+        # setdefault: the web UI sets its own page headers (CSP), which must not be replaced.
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+{%- else %}
         response.headers.update(SECURITY_HEADERS)
+{%- endif %}
         return response
 
     @app.exception_handler(RequestValidationError)
@@ -72,6 +93,7 @@ def create_app(store: ArtifactStore) -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+{%- if http_api %}
 
     @app.post("/exports/{job_id}/complete", status_code=201)
     def complete(
@@ -80,5 +102,10 @@ def create_app(store: ArtifactStore) -> FastAPI:
         job = start_export(QueuedExport(id=job_id))
         ready = complete_export_use_case(store, job, body.content)
         return CompleteExportResponse(id=ready.id, artifact_key=ready.artifact_key)
+{%- endif %}
+{%- if frontend == 'ssr' %}
+
+    app.include_router(create_router(store))
+{%- endif %}
 
     return app

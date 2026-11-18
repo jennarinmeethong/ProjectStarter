@@ -375,6 +375,63 @@ frontend_seeds_react() {
   seeded "react: hook called conditionally (rules-of-hooks)" src/ui/App.tsx '\nexport function Broken({ on }: { readonly on: boolean }): JSX.Element {\n  if (on) {\n    useState(0);\n  }\n  return <p />;\n}\n' npm run lint
 }
 
+ssr_test_ui="npm --prefix e2e-ui install --no-audit --no-fund && npm --prefix e2e-ui test"
+
+ssr_checks() { # ssr_checks <stack> <install-cmd> <ui-file> <csp-sed-expression> <application-file> <framework-import-text> <arch-cmd>
+  # A separate render with the server-rendered UI (frontend=ssr, ADR 0005): verify, browser flows + axe, ZAP from /,
+  # then seeded violations: the page CSP removed (sed applied to every tracked source file), the template engine
+  # imported in application, and an unlabeled <input> added to the page template (<ui-file>).
+  local dir="$work/$1-ssr" image="project-starter-ssr-$1" out
+  render "$1" '["claude"]' "$dir" -d frontend=ssr || { fail "render frontend=ssr"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base
+  # Only the two IGNOREs every scan has (10049 no-store, 10109 modern web app): the UI adds none.
+  [ -f .zap/rules.tsv ] && grep -q '\.zap/rules\.tsv' AGENTS.md && [ "$(grep -c $'\tIGNORE\t' .zap/rules.tsv)" = 2 ] \
+    && [ "$(wc -l < AGENTS.md)" -lt 60 ] && pass "ssr: ZAP rules protected, no new IGNORE, AGENTS.md short" \
+    || fail "ssr: ZAP rules missing, unprotected or relaxed"
+  bash -c "$2" >/dev/null 2>&1
+  verify "ssr: $1 verify" "${verify_cmd[$1]}"
+  npm --prefix e2e-ui install --no-audit --no-fund >/dev/null 2>&1 && (cd e2e-ui && npx playwright install chromium >/dev/null 2>&1)
+  verify "ssr: browser flows + axe (Playwright)" "$ssr_test_ui"
+  export MSYS_NO_PATHCONV=1
+  verify "ssr: zap baseline of the UI (from /)" "docker build -q -t $image . && DAST_PATH=/ bash ci/dast.sh $image"
+  git ls-files -z -- . ':!tests' ':!docs' ':!e2e-ui' ':!ci' ':!.github' ':!*.md' | xargs -0 sed -i "$4"
+  if out=$(bash -c "docker build -q -t $image-seed . >/dev/null && DAST_PATH=/ bash ci/dast.sh $image-seed" 2>&1); then
+    fail "ssr: zap: missing Content-Security-Policy (should have failed)"
+  elif grep -q '10038' <<<"$out"; then pass "ssr: zap: missing Content-Security-Policy rejected"
+  else fail "ssr: zap: missing Content-Security-Policy failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'; fi
+  git checkout -q -- .
+  unset MSYS_NO_PATHCONV
+  # <framework-import-text> starting with "package" is the content of a new file <application-file> (Go: imports go first).
+  if [[ "$6" == package* ]]; then seeded_new "ssr: template engine imported in application" "$5" "$6" bash -c "$7"
+  else seeded "ssr: template engine imported in application" "$5" "$6" bash -c "$7"; fi
+  if [ -n "${8:-}" ]; then # optional <ui-file-checked> <driver-text> <check-cmd>: a datastore driver named in the UI is rejected by that check
+    printf '%b' "$9" >> "$8"
+    if out=$(bash -c "${10}" 2>&1); then fail "ssr: datastore driver named in the UI (should have failed)"
+    elif grep -q "must not name a datastore driver" <<<"$out"; then pass "ssr: datastore driver named in the UI rejected"
+    else fail "ssr: datastore driver in the UI failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'; fi
+    git checkout -q -- "$8"
+  fi
+  sed -i 's#</form>#  <input name="seeded">\n&#' "$3"
+  if out=$(bash -c "$ssr_test_ui" 2>&1); then fail "ssr: axe: unlabeled input (should have failed)"
+  elif grep -q '"id": "label"' <<<"$out"; then pass "ssr: axe: unlabeled input rejected"
+  else fail "ssr: axe: unlabeled input failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'; fi
+  git checkout -q -- "$3"
+  popd >/dev/null || return
+}
+
+ssr_api_checks() { # ssr_api_checks <stack> <install-cmd> <e2e-cmd>: the JSON API and the UI share one server
+  local dir="$work/$1-ssr-api"
+  render "$1" '["codex"]' "$dir" -d frontend=ssr -d http_api=true -d containerize=false || { fail "render frontend=ssr http_api=true"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base
+  bash -c "$2" >/dev/null 2>&1
+  verify "ssr + api: $1 verify" "${verify_cmd[$1]}"
+  verify "ssr + api: API tests against the shared server" "$3"
+  verify "ssr + api: browser flows + axe (Playwright)" "$ssr_test_ui"
+  popd >/dev/null || return
+}
+
 secret_checks() { # secret_checks: gitleaks is clean on the render and rejects a committed token
   local vol gitleaks="zricethezav/gitleaks:v8.30.1"
   vol=$(docker_vol)
@@ -639,6 +696,10 @@ for stack in "${stacks[@]}"; do
       seeded "import-linter: web framework imported in application" src/demo_app/application/complete_export.py '\nimport fastapi\n\nFRAMEWORK = fastapi\n' uv run lint-imports
       seeded "import-linter: driver imported in application" src/demo_app/application/complete_export.py '\nimport psycopg\n\nDRIVER = psycopg\n' uv run lint-imports
       seeded "import-linter: driver imported in bootstrap" src/demo_app/bootstrap/main.py '\nimport redis\n\nDRIVER = redis\n' uv run lint-imports
+      # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
+      ssr_checks python "uv sync" src/demo_app/adapters/web/templates/index.html '/"Content-Security-Policy":/d' \
+        src/demo_app/application/complete_export.py '\nimport jinja2\n\nENGINE = jinja2\n' "uv run lint-imports"
+      ssr_api_checks python "uv sync" "uv run pytest -q -p no:warnings -m e2e"
       seeded "ruff: SQL built with an f-string" src/demo_app/adapters/postgres_artifact_store.py '\n\ndef unsafe(connection: psycopg.Connection[TupleRow], job_id: str) -> None:\n    connection.execute(f"SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27")\n' uv run ruff check .
       # Design rules (ADR 0002), one violation at a time.
       seeded "ruff: ambient randomness in domain" src/demo_app/domain/export_job.py '\n\nimport random\n\n\ndef roll() -> float:\n    return random.random()\n' uv run ruff check .
@@ -675,6 +736,14 @@ for stack in "${stacks[@]}"; do
       verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks dotnet 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
+      # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API. The Application seed adds the
+      # framework reference too (without it the seed would only fail to compile) and must be caught by the arch test.
+      ssr_checks dotnet "dotnet restore" src/DemoApp.Adapters/Web/Pages/Index.cshtml '/headers.ContentSecurityPolicy = /d' \
+        src/DemoApp.Application/CompleteExport.cs '\npublic static class PageLeak\n{\n    public static Microsoft.AspNetCore.Html.HtmlString Render() => new("x");\n}\n' \
+        'sed -i "s#</Project>#  <ItemGroup><FrameworkReference Include=\"Microsoft.AspNetCore.App\" /></ItemGroup>\n</Project>#" src/DemoApp.Application/DemoApp.Application.csproj; out=$(dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture" 2>&1); git checkout -q -- src/DemoApp.Application/DemoApp.Application.csproj; ! grep -q "Domain/Application must not touch I/O" <<<"$out"' \
+        src/DemoApp.Adapters/Web/Pages/Index.cshtml.cs '\npublic static class DriverLeak\n{\n    public static System.Data.Common.DbConnection? Connection { get; set; }\n}\n' \
+        'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture"'
+      ssr_api_checks dotnet "dotnet restore" 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=E2E"'
       seeded "CA2100: SQL built by concatenation" src/DemoApp.Adapters/PostgresArtifactStore.cs '\npublic static class Unsafe\n{\n    public static NpgsqlCommand Query(NpgsqlConnection connection, string jobId) =>\n        new() { Connection = connection, CommandText = "SELECT body FROM export_artifacts WHERE job_id = \x27" + jobId + "\x27" };\n}\n' dotnet build
       # Design rules (ADR 0002), one violation at a time.
       seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build
@@ -731,6 +800,10 @@ for stack in "${stacks[@]}"; do
       seeded_new "depguard: driver imported in application" internal/application/driver.go 'package application\n\nimport "github.com/jackc/pgx/v5/pgxpool"\n\n// Pool leaks the driver into the application layer.\ntype Pool = pgxpool.Pool\n' go tool golangci-lint run --enable-only depguard ./internal/application/
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks go "go test -tags e2e ./..." internal/adapters/httpapi/handler.go '/headers.Set("X-Content-Type-Options", "nosniff")/d'
+      # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
+      ssr_checks go "go mod tidy" internal/adapters/web/templates/index.html '/Content-Security-Policy/d' \
+        internal/application/web_leak.go 'package application\n\nimport _ "html/template"\n' "go tool golangci-lint run --enable-only depguard ./internal/application/"
+      ssr_api_checks go "go mod tidy" "go test -tags e2e ./..."
       seeded_new "depguard: net/http imported in application" internal/application/web.go 'package application\n\nimport "net/http"\n\n// Handler leaks HTTP into the application layer.\ntype Handler = http.Handler\n' go tool golangci-lint run --enable-only depguard ./internal/application/
       # Design rules (ADR 0002), one violation at a time.
       seeded_new "forbidigo: ambient clock in domain" internal/domain/clock.go 'package domain\n\nimport "time"\n\n// Now reads the wall clock.\nfunc Now() time.Time { return time.Now() }\n' go tool golangci-lint run ./internal/domain/
@@ -774,6 +847,11 @@ for stack in "${stacks[@]}"; do
       seeded "check-layers: driver in bootstrap" crates/bootstrap/Cargo.toml 'redis = "1.8"\n' bash ci/check-layers.sh
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks rust "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test" crates/adapters/src/http.rs '/X_CONTENT_TYPE_OPTIONS/d'
+      # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
+      ssr_checks rust "cargo fetch -q" crates/adapters/templates/index.html '/CONTENT_SECURITY_POLICY, PAGE_CSP/d' \
+        crates/application/Cargo.toml 'askama = "0.16"\n' "bash ci/check-layers.sh" \
+        crates/adapters/src/web.rs '\nuse redis::Client;\n' "bash ci/check-layers.sh"
+      ssr_api_checks rust "cargo fetch -q" "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test"
       seeded "check-layers: web framework in application" crates/application/Cargo.toml 'axum = "0.8"\n' bash ci/check-layers.sh
       # Design rules (ADR 0002), one violation at a time.
       seeded "clippy: ambient clock in domain" crates/domain/src/lib.rs '\n/// Reads the wall clock.\npub fn now() -> std::time::SystemTime {\n    std::time::SystemTime::now()\n}\n' cargo clippy -p domain -- -D warnings

@@ -6,14 +6,14 @@ import (
 	"context"
 	"fmt"
 	"io"
-{%- if http_api %}
+{%- if serve_http %}
 	"net"
 	"net/http"
 {%- endif %}
-{%- if datastores or http_api %}
+{%- if datastores or serve_http %}
 	"os"
 {%- endif %}
-{%- if http_api %}
+{%- if serve_http %}
 	"time"
 {%- endif %}
 {# Exactly one blank line between the standard-library and module groups, whatever is enabled (gofumpt). #}
@@ -48,15 +48,18 @@ import (
 {%- if 'sqlserver' in datastores %}
 	"{{ go_module }}/internal/adapters/sqlserverstore"
 {%- endif %}
+{%- if frontend == 'ssr' %}
+	"{{ go_module }}/internal/adapters/web"
+{%- endif %}
 	"{{ go_module }}/internal/application"
-{%- if not http_api %}
+{%- if not serve_http %}
 	"{{ go_module }}/internal/domain"
 {%- endif %}
 )
 
-{%- if http_api %}
+{%- if serve_http %}
 
-// Run serves the HTTP API until ctx is cancelled, then shuts down gracefully.
+// Run serves {% if http_api and frontend != 'ssr' %}the HTTP API{% elif http_api %}the HTTP API and the UI{% else %}the UI{% endif %} until ctx is cancelled, then shuts down gracefully.
 {%- else %}
 
 // Run completes a demo export and prints its artifact key.
@@ -71,7 +74,7 @@ func Run(ctx context.Context, stdout io.Writer) error {
 {%- else %}
 	store := inmemory.New()
 {%- endif %}
-{%- if http_api %}
+{%- if serve_http %}
 
 	return serve(ctx, store, stdout)
 {%- else %}
@@ -175,13 +178,27 @@ func openStore(ctx context.Context) (application.ArtifactStore, func(), error) {
 	return inmemory.New(), func() {}, nil
 }
 {%- endif %}
+{%- if frontend == 'ssr' %}
+
+// newHandler mounts what is enabled on one server: the JSON API under /exports/, the UI on everything else.
+func newHandler(store application.ArtifactStore) http.Handler {
 {%- if http_api %}
+	mux := http.NewServeMux()
+	mux.Handle("/exports/", httpapi.NewHandler(store))
+	mux.Handle("/", web.NewHandler(store))
+	return mux
+{%- else %}
+	return web.NewHandler(store)
+{%- endif %}
+}
+{%- endif %}
+{%- if serve_http %}
 
 func serve(ctx context.Context, store application.ArtifactStore, stdout io.Writer) error {
 	// Loopback by default; the container image sets HOST=0.0.0.0 explicitly.
 	server := &http.Server{
 		Addr:              net.JoinHostPort(envOr("HOST", "127.0.0.1"), envOr("PORT", "8080")),
-		Handler:           httpapi.NewHandler(store),
+		Handler:           {% if frontend == 'ssr' %}newHandler{% else %}httpapi.NewHandler{% endif %}(store),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errs := make(chan error, 1)

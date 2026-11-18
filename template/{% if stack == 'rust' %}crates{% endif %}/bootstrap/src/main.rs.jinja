@@ -29,13 +29,18 @@ use adapters::s3::S3ArtifactStore;
 {%- if 'sqlserver' in datastores %}
 use adapters::sqlserver::SqlServerArtifactStore;
 {%- endif %}
-{%- if not http_api %}
+{%- if frontend == 'ssr' %}
+use adapters::web::web_router;
+{%- endif %}
+{%- if not serve_http %}
 use application::complete_export;
 {%- endif %}
 {%- if datastores %}
 use application::{ArtifactStore, PortError};
+{%- elif frontend == 'ssr' %}
+use application::ArtifactStore;
 {%- endif %}
-{%- if not http_api %}
+{%- if not serve_http %}
 use domain::{Queued, start};
 {%- endif %}
 
@@ -181,9 +186,24 @@ async fn main() -> ExitCode {
         }
     }
 }
-{%- if http_api %}
+{%- if serve_http %}
+{%- if frontend == 'ssr' %}
 
-/// Serves the HTTP API until Ctrl+C or SIGTERM, then shuts down gracefully.
+/// The server-rendered UI{% if http_api %}, with the JSON API behind it: the UI owns `/`, `/static` and `/healthz`, the API
+/// everything else (its `/exports/...` routes and its own 404){% endif %}.
+fn app<S>(store: S) -> axum::Router
+where
+    S: ArtifactStore + Clone + Send + Sync + 'static,
+{
+{%- if http_api %}
+    web_router(store.clone()).fallback_service(router(store))
+{%- else %}
+    web_router(store)
+{%- endif %}
+}
+{%- endif %}
+
+/// Serves the {% if http_api and frontend == 'ssr' %}JSON API and the UI{% elif frontend == 'ssr' %}UI{% else %}HTTP API{% endif %} until Ctrl+C or SIGTERM, then shuts down gracefully.
 async fn run() -> Result<(), BoxError> {
     let store = {% if datastores %}open_store().await?{% else %}InMemoryArtifactStore::default(){% endif %};
     // Loopback by default; the container image sets HOST=0.0.0.0 explicitly.
@@ -191,7 +211,7 @@ async fn run() -> Result<(), BoxError> {
     let port: u16 = std::env::var("PORT").unwrap_or_else(|_| "8080".to_owned()).parse()?;
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     writeln!(std::io::stdout(), "listening on http://{}", listener.local_addr()?)?;
-    axum::serve(listener, router(store)).with_graceful_shutdown(shutdown_signal()).await?;
+    axum::serve(listener, {% if frontend == 'ssr' %}app(store){% else %}router(store){% endif %}).with_graceful_shutdown(shutdown_signal()).await?;
     Ok(())
 }
 
@@ -220,5 +240,63 @@ async fn run() -> Result<(), BoxError> {
     let ready = complete_export(&store, start(Queued::new("demo")), "id,name\n1,demo\n").await?;
     writeln!(std::io::stdout(), "{} -> {}", ready.id(), ready.artifact_key())?;
     Ok(())
+}
+{%- endif %}
+{%- if frontend == 'ssr' and http_api %}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+
+    use super::*;
+
+    const PAGE_CSP: &str =
+        "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+    const API_CSP: &str = "default-src 'none'; frame-ancestors 'none'";
+
+    async fn send(request: Request<Body>) -> (StatusCode, axum::http::HeaderMap, String) {
+        let response = app(InMemoryArtifactStore::default()).oneshot(request).await.unwrap();
+        let (parts, body) = response.into_parts();
+        let bytes = body.collect().await.unwrap().to_bytes();
+        (parts.status, parts.headers, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    fn header<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> &'a str {
+        headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn the_page_is_served_with_the_page_policy() {
+        let (status, headers, body) = send(Request::get("/").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(header(&headers, "content-security-policy"), PAGE_CSP);
+        assert!(body.contains("<h1>Complete an export</h1>"));
+    }
+
+    #[tokio::test]
+    async fn the_api_shares_the_server_and_keeps_its_own_policy() {
+        let request = Request::post("/exports/job-1/complete")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"content":"id,1"}"#))
+            .unwrap();
+        let (status, headers, body) = send(request).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(header(&headers, "content-security-policy"), API_CSP);
+        assert!(body.contains("exports/job-1.csv"));
+    }
+
+    #[tokio::test]
+    async fn health_and_unknown_routes_keep_the_api_policy() {
+        let (status, headers, _) = send(Request::get("/healthz").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(header(&headers, "content-security-policy"), API_CSP);
+        let (status, headers, _) = send(Request::get("/does-not-exist").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(header(&headers, "content-type"), "application/problem+json");
+        assert_eq!(header(&headers, "content-security-policy"), API_CSP);
+    }
 }
 {%- endif %}

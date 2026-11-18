@@ -27,10 +27,13 @@
 | A05 Security Misconfiguration (HTTP) | security header ทุก response, ไม่ส่ง `Server`/`X-Powered-By`, problem details ไม่มี stack trace — ตรวจด้วย Playwright{% if containerize %} และ OWASP ZAP baseline (`ci/dast.sh`, `.zap/rules.tsv`){% endif %} | [ADR 0004](../adr/0004-http-api.md) |
 | A03 Injection (HTTP) | validate path และ body ที่ adapter ก่อนเรียก use case | [ADR 0004](../adr/0004-http-api.md) |
 {%- endif %}
-{%- if frontend != 'none' %}
+{%- if frontend == 'ssr' %}
+| A05 / A03 (web UI: XSS, clickjacking) | template escape ทุกค่าที่แสดง, CSP เข้มไม่มี script และไม่มี `'unsafe-inline'`, `X-Frame-Options: DENY`, COOP/COEP/CORP, Permissions-Policy — ตรวจด้วย Playwright{% if containerize %} และ ZAP baseline ที่สแกนจาก `/`{% endif %} | [ADR 0005](../adr/0005-frontend.md) |
+| A01 (web UI: CSRF) | {% if stack == 'dotnet' %}antiforgery ของ ASP.NET Core (cookie `__Host-csrf` + hidden field `csrf_token`) และปฏิเสธ `Sec-Fetch-Site` ที่ไม่ใช่ `same-origin`{% else %}token สุ่มใน cookie `__Host-csrf` + hidden field `csrf_token` เทียบแบบ constant-time และปฏิเสธ `Sec-Fetch-Site` ที่ไม่ใช่ `same-origin`{% endif %} — ตรวจด้วย unit test และ Playwright | [ADR 0005](../adr/0005-frontend.md) |
+{%- elif frontend != 'none' %}
 | A05 / A03 (web UI: XSS, clickjacking) | CSP เข้มไม่มี `'unsafe-inline'`, `X-Frame-Options: DENY`, COOP/COEP/CORP, Permissions-Policy{% if containerize %} — ตรวจด้วย ZAP baseline ที่สแกนจาก `/`{% endif %}; ไม่มี inline script ใน build | [ADR 0005](../adr/0005-frontend.md){% if containerize %}, `nginx.conf`{% endif %} |
 {%- endif %}
-{%- if http_api or frontend != 'none' %}
+{%- if serve_http or frontend != 'none' %}
 
 ## ยังไม่ครอบคลุม
 - Authentication/authorization, rate limiting, CORS (ปิดอยู่), HTTPS termination

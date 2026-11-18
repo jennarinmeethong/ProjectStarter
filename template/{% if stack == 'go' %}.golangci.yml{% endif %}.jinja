@@ -117,7 +117,7 @@ linters:
             - pkg: "{{ go_module }}/internal/bootstrap"
               desc: "only bootstrap wires dependencies (ADR 0001)"
         drivers:
-          files: ["**/internal/domain/**", "**/internal/application/**", "**/internal/bootstrap/**", "**/cmd/**"]
+          files: ["**/internal/domain/**", "**/internal/application/**", "**/internal/bootstrap/**", "**/cmd/**"{% if frontend == 'ssr' %}, "**/internal/adapters/web/**"{% endif %}]
           deny:
             - pkg: github.com/jackc/pgx
               desc: "datastore drivers live in adapters; bootstrap passes connection settings (docs/adr/0003-datastores.md)"
@@ -144,6 +144,10 @@ linters:
           deny:
             - pkg: net/http
               desc: "HTTP is a driving adapter: decode requests in internal/adapters/httpapi (ADR 0001)"
+{%- if frontend == 'ssr' %}
+            - pkg: html/template
+              desc: "templates are a driving adapter concern: render pages in internal/adapters/web (ADR 0005)"
+{%- endif %}
             - pkg: github.com/gin-gonic/gin
               desc: "HTTP is a driving adapter (ADR 0001)"
             - pkg: github.com/labstack/echo

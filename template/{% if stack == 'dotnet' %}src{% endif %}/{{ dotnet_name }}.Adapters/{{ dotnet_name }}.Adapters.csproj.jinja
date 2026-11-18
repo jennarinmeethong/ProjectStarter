@@ -1,12 +1,21 @@
 <!-- Adapters: implement Application ports (ADR 0001). The only project that references datastore drivers (ADR 0003). -->
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk{% if frontend == 'ssr' %}.Razor{% endif %}">
   <ItemGroup>
     <ProjectReference Include="..\{{ dotnet_name }}.Application\{{ dotnet_name }}.Application.csproj" />
   </ItemGroup>
-{%- if http_api %}
+{%- if frontend == 'ssr' %}
+  <PropertyGroup>
+    <!-- Razor Pages (Web/Pages) compile into this assembly; Bootstrap registers it as an application part. -->
+    <AddRazorSupportForMvc>true</AddRazorSupportForMvc>
+  </PropertyGroup>
+{%- endif %}
+{%- if serve_http %}
   <ItemGroup>
     <!-- HTTP is a driving adapter: endpoint mapping lives here, hosting lives in Bootstrap. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+{%- if frontend == 'ssr' %}
+    <EmbeddedResource Include="Web/static/app.css" LogicalName="static/app.css" />
+{%- endif %}
   </ItemGroup>
 {%- endif %}
 {%- if datastores %}

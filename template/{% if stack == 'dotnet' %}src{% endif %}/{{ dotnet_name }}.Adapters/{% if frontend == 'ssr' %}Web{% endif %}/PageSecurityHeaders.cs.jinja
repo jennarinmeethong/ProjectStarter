@@ -1,0 +1,52 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Primitives;
+
+namespace {{ dotnet_name }}.Adapters.Web;
+
+/// <summary>Security headers on every response, including errors (docs/security/owasp.md): the page CSP for the UI,
+/// the API CSP for <c>/healthz</c>{% if http_api %} and the JSON API under <c>/exports</c>{% endif %}.</summary>
+internal static class PageSecurityHeaders
+{
+    public const string PageCsp = "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+    public const string ApiCsp = "default-src 'none'; frame-ancestors 'none'";
+
+    public static IApplicationBuilder UsePageSecurityHeaders(this IApplicationBuilder app) =>
+        app.Use(async (context, next) =>
+        {
+            // OnStarting runs after the exception handler may have cleared the headers.
+            context.Response.OnStarting(() =>
+            {
+                Apply(context.Response.Headers, !IsApiPath(context.Request.Path));
+                return Task.CompletedTask;
+            });
+            await next(context).ConfigureAwait(false);
+        });
+
+    private static bool IsApiPath(PathString path) =>
+        path.StartsWithSegments("/healthz", StringComparison.Ordinal) || path.StartsWithSegments("/exports", StringComparison.Ordinal);
+
+    private static void Apply(IHeaderDictionary headers, bool page)
+    {
+        headers.ContentSecurityPolicy = page ? PageCsp : ApiCsp;
+        headers.XContentTypeOptions = "nosniff";
+        headers.XFrameOptions = "DENY";
+        headers["Referrer-Policy"] = "no-referrer";
+        headers["Cross-Origin-Resource-Policy"] = "same-origin";
+        headers.CacheControl = "no-store";
+        headers.SetCookie = SecureCookies(headers.SetCookie);
+        if (page)
+        {
+            headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()";
+            headers["Cross-Origin-Opener-Policy"] = "same-origin";
+            headers["Cross-Origin-Embedder-Policy"] = "require-corp";
+        }
+    }
+
+    /// <summary>Every cookie this server sets is Secure, as the <c>__Host-</c> prefix requires. Browsers keep Secure
+    /// cookies on https and on http://127.0.0.1 / localhost (a secure context), so local runs still work.</summary>
+    private static StringValues SecureCookies(StringValues cookies) =>
+        cookies.Count == 0
+            ? cookies
+            : new StringValues([.. cookies.Select(cookie => cookie is null || cookie.Contains("; secure", StringComparison.OrdinalIgnoreCase) ? cookie : $"{cookie}; secure")]);
+}

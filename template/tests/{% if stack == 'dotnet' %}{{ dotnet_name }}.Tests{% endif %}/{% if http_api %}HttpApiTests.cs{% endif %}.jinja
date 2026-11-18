@@ -74,10 +74,12 @@ public sealed class HttpApiTests(HttpApiFixture fixture) : IClassFixture<HttpApi
         Assert.Equal("exports/e2e-1.csv", json?.GetProperty("artifactKey").GetString());
     }
 
-    [Fact]
-    public async Task RejectsAnInvalidJobIdWithProblemDetails()
+    [Theory]
+    [InlineData("not%20valid")]
+    [InlineData("ok%0A")]
+    public async Task RejectsAnInvalidJobIdWithProblemDetails(string jobId)
     {
-        var response = await fixture.Api.PostAsync("/exports/not%20valid/complete", new() { DataObject = new { content = "x" } });
+        var response = await fixture.Api.PostAsync($"/exports/{jobId}/complete", new() { DataObject = new { content = "x" } });
 
         Assert.Equal(400, response.Status);
         Assert.Contains("application/problem+json", response.Headers["content-type"], StringComparison.Ordinal);

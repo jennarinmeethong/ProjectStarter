@@ -60,8 +60,17 @@ aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", 
 {%- if 'mongodb' in datastores %}
 mongodb = "3"
 {%- endif %}
-{%- if http_api %}
+{%- if serve_http %}
 axum = "0.8"
+{%- endif %}
+{%- if frontend == 'ssr' %}
+# Server-rendered UI (ADR 0005): askama compiles templates and escapes every value; the CSRF token is random
+# (getrandom), base64url and compared in constant time (subtle); form_urlencoded reads the form body.
+askama = { version = "0.16", default-features = false, features = ["derive", "std"] }
+base64 = "0.22"
+form_urlencoded = "1"
+getrandom = "0.4"
+subtle = "2"
 {%- endif %}
 {%- if http_api or 'mongodb' in datastores or 'cosmosdb' in datastores %}
 serde = { version = "1", features = ["derive"] }
@@ -72,6 +81,10 @@ serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+{%- if frontend == 'ssr' %}
+http-body-util = "0.1"
+tower = { version = "0.5", default-features = false, features = ["util"] }
+{%- endif %}
 {%- if datastores %}
 {%- set modules = [] %}
 {%- if mysql_engine %}{% set _ = modules.append('"' ~ mysql_engine ~ '"') %}{% endif %}

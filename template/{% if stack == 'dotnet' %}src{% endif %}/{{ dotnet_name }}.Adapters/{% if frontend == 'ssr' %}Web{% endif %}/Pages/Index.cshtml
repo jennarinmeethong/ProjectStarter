@@ -1,0 +1,28 @@
+@page
+@model IndexModel
+@* Server-rendered form (ADR 0005). Razor encodes every @ value; no script, no inline style (the page CSP forbids both). *@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Complete an export</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main>
+      <h1>Complete an export</h1>
+      <form method="post" action="/" novalidate>
+        @Html.AntiForgeryToken()
+        <label for="job-id">Job id</label>
+        <input id="job-id" name="job_id" value="@Model.JobId" autocomplete="off">
+        <label for="content">Content</label>
+        @* The newline after <textarea> is dropped by the HTML parser, so content keeps a leading newline. *@
+        <textarea id="content" name="content" rows="4">
+@Model.ExportContent</textarea>
+        <button type="submit">Complete export</button>
+      </form>
+      <p role="status">@Model.Status</p>
+    </main>
+  </body>
+</html>

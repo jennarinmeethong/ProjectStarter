@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+dist/
+.env
+mutants/
+{%- if frontend == 'ssr' %}
+e2e-ui/node_modules/
+e2e-ui/playwright-report/
+e2e-ui/test-results/
+{%- endif %}

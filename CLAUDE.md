@@ -13,7 +13,7 @@ A Copier template that scaffolds agent-ready projects (TypeScript, Python, C#/.N
 
 ## Commands
 
-Requires `git`, `bash` ≥ 4, `uv`; Node.js ≥ 22.12 for TypeScript renders; .NET SDK 10 for .NET renders; Go ≥ 1.26 for Go renders; rustup, cargo-deny and cargo-mutants for Rust renders; a running Docker engine for the container and secret-scan checks in `tests/render-all.sh`.
+Requires `git`, `bash` ≥ 4, `uv`; Node.js ≥ 22.12 for TypeScript renders and for any `frontend` UI render (`e2e-ui/`, every stack); .NET SDK 10 for .NET renders; Go ≥ 1.26 for Go renders; rustup, cargo-deny and cargo-mutants for Rust renders; a running Docker engine for the container and secret-scan checks in `tests/render-all.sh`.
 
 - Render one project: `uvx copier copy --trust --defaults -d project_name=demo -d stack=<typescript|python|dotnet|go|rust> . <dest>` (renders the working tree, including uncommitted changes)
 - Full test (renders every stack × agent combination, runs each project's verify, then seeds violations that must be rejected): `bash tests/render-all.sh`

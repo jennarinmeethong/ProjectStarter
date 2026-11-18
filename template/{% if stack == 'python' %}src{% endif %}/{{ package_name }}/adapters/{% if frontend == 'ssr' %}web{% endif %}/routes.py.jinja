@@ -1,0 +1,124 @@
+"""Web UI routes: the export form (`GET /`, `POST /`) and its stylesheet.
+
+Jinja2 autoescapes everything the page echoes back. The page CSP allows only this server's
+stylesheet and form target: no scripts, no inline styles (ADR 0005).
+"""
+
+import logging
+import re
+from http import HTTPStatus
+from pathlib import Path
+from urllib.parse import parse_qs
+
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import HTMLResponse
+from jinja2 import Environment, FileSystemLoader
+
+from {{ package_name }}.adapters.web.csrf import (
+    COOKIE_NAME,
+    FIELD_NAME,
+    is_same_origin,
+    is_token,
+    new_token,
+    tokens_match,
+)
+from {{ package_name }}.application.complete_export import ArtifactStore, complete_export_use_case
+from {{ package_name }}.domain.export_job import QueuedExport, start_export
+
+HERE = Path(__file__).parent
+JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+MAX_CONTENT_LENGTH = 1_000_000
+# Worst case for the form body: every character is 4 UTF-8 bytes, each percent-encoded as 3.
+MAX_FORM_BYTES = 12 * MAX_CONTENT_LENGTH + 1024
+MAX_FORM_FIELDS = 10
+INVALID = "Enter a job id (letters, digits, - or _) and some content."
+EXPIRED = "The form has expired. Reload the page and try again."
+SAVE_FAILED = "The export could not be saved."
+PAGE_CSP = (
+    "default-src 'none'; style-src 'self'; form-action 'self'; "
+    "frame-ancestors 'none'; base-uri 'none'"
+)
+PAGE_HEADERS = {
+    "Content-Security-Policy": PAGE_CSP,
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+}
+
+logger = logging.getLogger(__name__)
+templates = Environment(loader=FileSystemLoader(HERE / "templates"), autoescape=True)
+stylesheet = (HERE / "static" / "app.css").read_text(encoding="utf-8")
+
+
+def render(token: str, status: HTTPStatus, form: dict[str, str], message: str = "") -> Response:
+    html = templates.get_template("index.html").render(
+        csrf_token=token,
+        job_id=form.get("job_id", ""),
+        content=form.get("content", ""),
+        message=message,
+    )
+    response = HTMLResponse(html, status_code=status, headers=PAGE_HEADERS)
+    response.set_cookie(COOKIE_NAME, token, path="/", secure=True, httponly=True, samesite="strict")
+    return response
+
+
+async def read_form(request: Request) -> dict[str, str] | None:
+    """The urlencoded body as single-valued fields, or None when it is too large or malformed."""
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_FORM_BYTES:
+            return None
+    try:
+        fields = parse_qs(body.decode(), keep_blank_values=True, max_num_fields=MAX_FORM_FIELDS)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if any(len(values) != 1 for values in fields.values()):
+        return None
+    return {name: values[0] for name, values in fields.items()}
+
+
+def is_valid(form: dict[str, str]) -> bool:
+    job_id, content = form.get("job_id", ""), form.get("content", "")
+    return JOB_ID.fullmatch(job_id) is not None and 0 < len(content) <= MAX_CONTENT_LENGTH
+
+
+def session_token(request: Request) -> str:
+    """The token already in the cookie, else a new one: open tabs keep working after a refusal."""
+    cookie = request.cookies.get(COOKIE_NAME)
+    return cookie if cookie is not None and is_token(cookie) else new_token()
+
+
+def create_router(store: ArtifactStore) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/")
+    def show(request: Request) -> Response:
+        return render(session_token(request), HTTPStatus.OK, {})
+
+    @router.post("/")
+    async def submit(request: Request) -> Response:
+        token = session_token(request)
+        if not is_same_origin(request.headers.get("sec-fetch-site")):
+            return render(token, HTTPStatus.FORBIDDEN, {}, EXPIRED)
+        form = await read_form(request)
+        if form is None:
+            return render(token, HTTPStatus.BAD_REQUEST, {}, INVALID)
+        if not tokens_match(request.cookies.get(COOKIE_NAME), form.get(FIELD_NAME)):
+            return render(token, HTTPStatus.FORBIDDEN, {}, EXPIRED)
+        if not is_valid(form):
+            return render(token, HTTPStatus.BAD_REQUEST, form, INVALID)
+        try:
+            ready = complete_export_use_case(
+                store, start_export(QueuedExport(id=form["job_id"])), form["content"]
+            )
+        except Exception:
+            logger.exception("Saving export %s failed", form["job_id"])
+            return render(token, HTTPStatus.INTERNAL_SERVER_ERROR, form, SAVE_FAILED)
+        return render(token, HTTPStatus.OK, form, f"Saved as {ready.artifact_key}")
+
+    @router.get("/static/app.css")
+    def styles() -> Response:
+        return Response(stylesheet, media_type="text/css", headers=PAGE_HEADERS)
+
+    return router

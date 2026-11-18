@@ -11,7 +11,7 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     tmpfs: [/tmp]
-{%- if http_api %}
+{%- if serve_http %}
     # Published on the host's loopback only.
     ports: ["127.0.0.1:8080:8080"]
 {%- endif %}
@@ -289,7 +289,7 @@ services:
       interval: 2s
       retries: 30
 {%- endif %}
-{%- if frontend != 'none' %}
+{%- if frontend not in ['none', 'ssr'] %}
 
   web:
     build:

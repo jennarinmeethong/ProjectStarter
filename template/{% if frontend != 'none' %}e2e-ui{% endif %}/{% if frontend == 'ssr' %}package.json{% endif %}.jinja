@@ -1,0 +1,13 @@
+{
+  "name": "{{ project_name | lower }}-e2e-ui",
+  "private": true,
+  "description": "Browser tests of the server-rendered UI (Playwright + axe). Playwright's browser runner is Node, so these run on Node.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.11.0",
+    "@playwright/test": "^1.64.0"
+  }
+}

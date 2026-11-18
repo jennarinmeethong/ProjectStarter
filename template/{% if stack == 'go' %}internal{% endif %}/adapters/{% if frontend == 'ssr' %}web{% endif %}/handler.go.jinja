@@ -1,0 +1,175 @@
+// Package web is the server-rendered UI, a driving adapter like httpapi: it decodes the form, calls the use
+// case and renders the result. Domain and application never see HTTP or templates (ADR 0001, ADR 0005).
+package web
+
+import (
+	"context"
+	_ "embed" // the page and its stylesheet ship inside the binary
+	"html/template"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"unicode/utf8"
+
+	"{{ go_module }}/internal/application"
+	"{{ go_module }}/internal/domain"
+)
+
+const (
+	maxContentLength = 1_000_000
+	// Worst case for the form body: every character is 4 UTF-8 bytes, each percent-encoded as 3.
+	maxFormBytes  = 12*maxContentLength + 1024
+	maxFormFields = 10
+
+	invalidMessage    = "Enter a job id (letters, digits, - or _) and some content."
+	expiredMessage    = "The form has expired. Reload the page and try again."
+	saveFailedMessage = "The export could not be saved."
+
+	pageCSP = "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+	apiCSP  = "default-src 'none'; frame-ancestors 'none'"
+)
+
+var jobID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+//go:embed templates/index.html
+var indexHTML string
+
+//go:embed static/app.css
+var stylesheet []byte
+
+// view is what the page template shows. html/template escapes every field.
+type view struct {
+	Token   string
+	JobID   string
+	Content string
+	Message string
+}
+
+type server struct {
+	store application.ArtifactStore
+	page  *template.Template
+	guard *http.CrossOriginProtection
+}
+
+// NewHandler returns the form page, its stylesheet and /healthz, with security headers on every response.
+func NewHandler(store application.ArtifactStore) http.Handler {
+	s := &server{
+		store: store,
+		page:  template.Must(template.New("index").Parse(indexHTML)),
+		guard: http.NewCrossOriginProtection(),
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", s.show)
+	mux.HandleFunc("POST /{$}", s.submit)
+	mux.HandleFunc("GET /static/app.css", styles)
+	mux.HandleFunc("GET /healthz", health)
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "Not found", http.StatusNotFound) })
+	return securityHeaders(mux)
+}
+
+func (s *server) show(w http.ResponseWriter, r *http.Request) {
+	s.render(w, http.StatusOK, view{Token: sessionToken(r)})
+}
+
+// submit checks, in order: where the request came from, the form body, the CSRF token, the input; then saves.
+func (s *server) submit(w http.ResponseWriter, r *http.Request) {
+	token := sessionToken(r)
+	if !sameOrigin(r) || s.guard.Check(r) != nil {
+		s.render(w, http.StatusForbidden, view{Token: token, Message: expiredMessage})
+		return
+	}
+	form, ok := readForm(w, r)
+	if !ok {
+		s.render(w, http.StatusBadRequest, view{Token: token, Message: invalidMessage})
+		return
+	}
+	cookie, err := r.Cookie(cookieName)
+	if err != nil || !tokensMatch(cookie.Value, form.Get(fieldName)) {
+		s.render(w, http.StatusForbidden, view{Token: token, Message: expiredMessage})
+		return
+	}
+	id, content := form.Get("job_id"), form.Get("content")
+	shown := view{Token: token, JobID: id, Content: content}
+	if !jobID.MatchString(id) || content == "" || utf8.RuneCountInString(content) > maxContentLength {
+		shown.Message = invalidMessage
+		s.render(w, http.StatusBadRequest, shown)
+		return
+	}
+	status := http.StatusOK
+	shown.Message = s.save(r.Context(), id, content)
+	if shown.Message == saveFailedMessage {
+		status = http.StatusInternalServerError
+	}
+	s.render(w, status, shown)
+}
+
+// save completes the export and returns the message to show. Failure details go to the log, not the page.
+func (s *server) save(ctx context.Context, id, content string) string {
+	job := domain.Start(domain.NewQueued(id))
+	ready, err := application.CompleteExport(ctx, s.store, job, content)
+	if err != nil {
+		slog.ErrorContext(ctx, "saving export failed", "job", id, "error", err)
+		return saveFailedMessage
+	}
+	return "Saved as " + ready.ArtifactKey()
+}
+
+func (s *server) render(w http.ResponseWriter, status int, data view) {
+	var page strings.Builder
+	if err := s.page.Execute(&page, data); err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, csrfCookie(data.Token))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, page.String())
+}
+
+func styles(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	_, _ = w.Write(stylesheet)
+}
+
+func health(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Security-Policy", apiCSP)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"status":"ok"}`+"\n")
+}
+
+// readForm reads the urlencoded body (capped) as single-valued fields; false when it is too large or malformed.
+func readForm(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxFormBytes))
+	if err != nil || strings.Count(string(body), "&") >= maxFormFields {
+		return nil, false
+	}
+	form, err := url.ParseQuery(string(body))
+	if err != nil {
+		return nil, false
+	}
+	for _, values := range form {
+		if len(values) != 1 {
+			return nil, false
+		}
+	}
+	return form, true
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers := w.Header()
+		headers.Set("Content-Security-Policy", pageCSP)
+		headers.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+		headers.Set("Cross-Origin-Opener-Policy", "same-origin")
+		headers.Set("Cross-Origin-Embedder-Policy", "require-corp")
+		headers.Set("X-Content-Type-Options", "nosniff")
+		headers.Set("X-Frame-Options", "DENY")
+		headers.Set("Referrer-Policy", "no-referrer")
+		headers.Set("Cross-Origin-Resource-Policy", "same-origin")
+		headers.Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}

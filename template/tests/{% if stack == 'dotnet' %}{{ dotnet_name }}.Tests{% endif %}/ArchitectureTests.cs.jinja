@@ -53,6 +53,25 @@ public sealed class ArchitectureTests
         Assert.True(result.IsSuccessful, Explain("Domain/Application must not touch I/O. Define a port in Application and implement it in Adapters (ADR 0001, ADR 0002 #DIP).", result));
     }
 
+{%- if frontend == 'ssr' %}
+
+    [Fact]
+    public void WebUiDoesNotNameADatastoreDriver()
+    {
+        // The page model and the compiled Razor views (in Web.Pages via @namespace in _ViewImports.cshtml, or
+        // AspNetCoreGeneratedDocument without it) call the use case, never a driver.
+        var result = Types.InAssembly(typeof(InMemoryArtifactStore).Assembly)
+            .That().ResideInNamespace($"{Ns}.Adapters.Web").Or().ResideInNamespace("AspNetCoreGeneratedDocument")
+            .ShouldNot().HaveDependencyOnAny(
+                "System.Data", "Npgsql", "MySqlConnector", "StackExchange.Redis", "MongoDB", "Oracle",
+                "Microsoft.Data.SqlClient", "Microsoft.Azure.Cosmos", "Amazon")
+            .GetResult();
+
+        Assert.True(result.IsSuccessful, Explain("The web UI must not name a datastore driver: call the use case and let Bootstrap choose the store (ADR 0005).", result));
+    }
+
+{%- endif %}
+
     [Fact]
     public void ConcreteClassesAreSealed()
     {

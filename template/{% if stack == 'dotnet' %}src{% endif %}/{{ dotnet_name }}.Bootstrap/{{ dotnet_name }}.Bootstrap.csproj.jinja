@@ -1,5 +1,5 @@
 <!-- Bootstrap: wires everything together; the only project that references every layer (ADR 0001). -->
-<Project Sdk="Microsoft.NET.Sdk{% if http_api %}.Web{% endif %}">
+<Project Sdk="Microsoft.NET.Sdk{% if serve_http %}.Web{% endif %}">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
   </PropertyGroup>
