@@ -91,6 +91,8 @@ bash tests/render-all.sh
 bash tests/render-all.sh python
 ```
 
+CI (`.github/workflows/render-all.yml`) รัน `tests/render-all.sh` ทุก stack ขนานกันในทุก PR เข้า `main` จึงไม่จำเป็นต้องรันครบทุก stack ในเครื่อง ระหว่างพัฒนาให้รันเฉพาะ stack ที่แก้
+
 ## เพิ่ม stack ใหม่
 
 1. เพิ่ม choice ใน `stack` และเพิ่มสาขาใน `cmd` กับ `stk` ของ `copier.yml` (คำสั่ง, ไฟล์ guardrail, รูปแบบทางหนีสำหรับ ratchet, path ของแต่ละ layer)
