@@ -1,0 +1,80 @@
+//! Integration test: needs Docker. Run with `cargo test -p adapters --features integration`.
+#![cfg(feature = "integration")]
+
+mod common;
+
+use std::future::Future;
+use std::path::Path;
+
+use adapters::sqlserver::SqlServerArtifactStore;
+use application::PortError;
+use testcontainers_modules::mssql_server::MssqlServer;
+use testcontainers_modules::testcontainers::core::ExecCommand;
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+use testcontainers_modules::testcontainers::{ContainerAsync, ImageExt};
+
+const PASSWORD: &str = "Test-only-Passw0rd";
+
+impl common::ReadBack for SqlServerArtifactStore {
+    fn read_back(&self, key: &str) -> impl Future<Output = Result<Option<String>, PortError>> + Send {
+        self.read(key)
+    }
+}
+
+/// Runs a script with the image's sqlcmd, as the compose migrate job does.
+async fn sqlcmd(container: &ContainerAsync<MssqlServer>, script: &str) -> Result<(), PortError> {
+    let command = ExecCommand::new([
+        "/opt/mssql-tools18/bin/sqlcmd",
+        "-S",
+        "localhost",
+        "-U",
+        "sa",
+        "-P",
+        PASSWORD,
+        "-C",
+        "-b",
+        "-Q",
+        script,
+    ]);
+    let mut result = container.exec(command).await?;
+    // Reading the output waits for the command to finish; only then is the exit code known.
+    let output = String::from_utf8_lossy(&result.stdout_to_vec().await?).into_owned();
+    match result.exit_code().await? {
+        Some(0) => Ok(()),
+        code => Err(format!("sqlcmd exited with {code:?}: {output}").into()),
+    }
+}
+
+/// Creates the app database and applies migrations/sqlserver/*.sql in file-name order.
+async fn migrate(container: &ContainerAsync<MssqlServer>) -> Result<(), PortError> {
+    sqlcmd(container, "IF DB_ID(N'app') IS NULL CREATE DATABASE app").await?;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations/sqlserver");
+    let mut files = std::fs::read_dir(dir)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "sql"))
+        .collect::<Vec<_>>();
+    files.sort();
+    for file in files {
+        sqlcmd(container, &format!("USE app;\n{}", std::fs::read_to_string(file)?)).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlserver_store_satisfies_the_contract() -> Result<(), PortError> {
+    let container = MssqlServer::default()
+        .with_accept_eula()
+        .with_sa_password(PASSWORD)
+        .with_tag("2022-CU27-ubuntu-22.04")
+        .start()
+        .await?;
+    migrate(&container).await?;
+    let host = container.get_host().await?;
+    let port = container.get_host_port_ipv4(1433).await?;
+    let url = format!("sqlserver://sa:{PASSWORD}@{host}:{port}/app?trustServerCertificate=true");
+    let store = SqlServerArtifactStore::connect(&url).await?;
+
+    common::check_contract(&store).await
+}

@@ -2,6 +2,7 @@
 {%- if http_api %}{% set _ = deps.append('"@hono/node-server": "^2.1.0"') %}{% set _ = deps.append('"hono": "^4.13.0"') %}{% endif -%}
 {%- if 'postgres' in datastores %}{% set _ = deps.append('"pg": "^8.20.0"') %}{% endif -%}
 {%- if mysql_engine %}{% set _ = deps.append('"mysql2": "^3.20.0"') %}{% endif -%}
+{%- if 'sqlserver' in datastores %}{% set _ = deps.append('"mssql": "^12.7.0"') %}{% endif -%}
 {%- if frontend == 'nextjs' %}{% set _ = deps.append('"next": "^16.2.0"') %}{% endif -%}
 {%- if frontend == 'react-native' %}{% set _ = deps.append('"@expo/metro-runtime": "^58.0.0"') %}{% set _ = deps.append('"expo": "^58.0.0"') %}{% endif -%}
 {%- if frontend in ['react', 'nextjs', 'react-native'] %}{% set _ = deps.append('"react": "^19.3.0"') %}{% set _ = deps.append('"react-dom": "^19.3.0"') %}{% endif -%}
@@ -78,6 +79,9 @@
 {%- if http_api or frontend != 'none' %}
     "@playwright/test": "^1.64.0",
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+    "@testcontainers/mssqlserver": "^12.2.0",
+{%- endif %}
 {%- if mysql_engine %}
     "@testcontainers/mysql": "^12.0.1",
 {%- endif %}
@@ -90,6 +94,9 @@
 {%- if frontend in ['react', 'nextjs', 'react-native'] %}
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.0",
+{%- endif %}
+{%- if 'sqlserver' in datastores %}
+    "@types/mssql": "^12.3.0",
 {%- endif %}
     "@types/node": "^24.0.0",
 {%- if 'postgres' in datastores %}

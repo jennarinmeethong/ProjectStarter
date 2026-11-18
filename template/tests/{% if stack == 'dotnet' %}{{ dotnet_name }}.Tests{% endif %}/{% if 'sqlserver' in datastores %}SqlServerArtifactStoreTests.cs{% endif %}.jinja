@@ -1,0 +1,62 @@
+using Microsoft.Data.SqlClient;
+using Testcontainers.MsSql;
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Starts SQL Server once per test class, creates the app database and applies migrations/sqlserver.</summary>
+public sealed class SqlServerFixture : IAsyncLifetime
+{
+    private readonly MsSqlContainer container = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04").Build();
+
+    private SqlServerArtifactStore? store;
+
+    public SqlServerArtifactStore Store => store ?? throw new InvalidOperationException("Fixture not initialised.");
+
+    public async ValueTask InitializeAsync()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await container.StartAsync(cancellationToken);
+
+        // Same steps as the compose migrate job: create the database, then apply files in name order with sqlcmd.
+        await RunScriptAsync("IF DB_ID(N'app') IS NULL CREATE DATABASE app", cancellationToken);
+        var migrations = Directory.GetFiles(Path.Combine(RepoPaths.Migrations, "sqlserver"), "*.sql");
+        Array.Sort(migrations, StringComparer.Ordinal);
+        foreach (var migration in migrations)
+        {
+            var script = await File.ReadAllTextAsync(migration, cancellationToken);
+            await RunScriptAsync("USE app;\n" + script, cancellationToken);
+        }
+
+        var connection = new SqlConnectionStringBuilder(container.GetConnectionString()) { InitialCatalog = "app" };
+        store = SqlServerArtifactStore.Create(connection.ConnectionString);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (store is not null)
+        {
+            await store.DisposeAsync();
+        }
+
+        await container.DisposeAsync();
+    }
+
+    private async Task RunScriptAsync(string script, CancellationToken cancellationToken)
+    {
+        var result = await container.ExecScriptAsync(script, cancellationToken);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException("Migration failed: " + result.Stdout + result.Stderr);
+        }
+    }
+}
+
+/// <summary>Integration test: needs Docker. Run with the Category=Integration filter (excluded from verify).</summary>
+[Trait("Category", "Integration")]
+public sealed class SqlServerArtifactStoreTests(SqlServerFixture fixture) : ArtifactStoreContract, IClassFixture<SqlServerFixture>
+{
+    protected override StoreUnderTest Subject =>
+        new(fixture.Store, key => fixture.Store.ReadAsync(key, TestContext.Current.CancellationToken));
+}

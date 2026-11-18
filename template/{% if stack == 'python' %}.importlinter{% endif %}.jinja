@@ -23,6 +23,9 @@ source_modules =
     {{ package_name }}.application
     {{ package_name }}.bootstrap
 forbidden_modules =
+{%- if 'sqlserver' in datastores %}
+    mssql_python
+{%- endif %}
 {%- if mysql_engine %}
     pymysql
 {%- endif %}

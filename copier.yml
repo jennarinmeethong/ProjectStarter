@@ -278,7 +278,7 @@ stk:
     layers: {domain: internal/domain, application: internal/application, adapters: internal/adapters, bootstrap: internal/bootstrap}
     {%- elif stack == 'rust' %}
     language: Rust
-    guardrail_files: [Cargo.toml, rust-toolchain.toml, clippy.toml, crates/domain/clippy.toml, crates/application/clippy.toml, deny.toml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff{% endif %}{% endif %}]
+    guardrail_files: [Cargo.toml, rust-toolchain.toml, clippy.toml, crates/domain/clippy.toml, crates/application/clippy.toml, deny.toml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff, crates/adapters/clippy.toml{% endif %}{% endif %}]
     escapes_display: "`#[allow(...)]`, `#[expect(...)]`, `unsafe`, `AssertSqlSafe`, `#[ignore]`"
     ratchet_patterns: ['#!?\[(allow|expect)\(', 'unsafe[[:space:]]*\{', 'AssertSqlSafe']
     src_globs: ['*.rs']

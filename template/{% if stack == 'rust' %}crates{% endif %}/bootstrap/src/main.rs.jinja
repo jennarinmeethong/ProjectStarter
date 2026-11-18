@@ -15,6 +15,9 @@ use adapters::postgres::PostgresArtifactStore;
 {%- if 'redis' in datastores %}
 use adapters::redis_store::RedisArtifactStore;
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+use adapters::sqlserver::SqlServerArtifactStore;
+{%- endif %}
 {%- if not http_api %}
 use application::complete_export;
 {%- endif %}
@@ -42,6 +45,9 @@ enum AnyStore {
 {%- if 'redis' in datastores %}
     Redis(RedisArtifactStore),
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+    SqlServer(SqlServerArtifactStore),
+{%- endif %}
 }
 
 impl ArtifactStore for AnyStore {
@@ -57,6 +63,9 @@ impl ArtifactStore for AnyStore {
 {%- if 'redis' in datastores %}
             Self::Redis(store) => store.save(job_id, content).await,
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+            Self::SqlServer(store) => store.save(job_id, content).await,
+{%- endif %}
         }
     }
 }
@@ -71,6 +80,11 @@ async fn open_store() -> Result<AnyStore, BoxError> {
 {%- if mysql_engine %}
     if let Ok(url) = std::env::var("MYSQL_URL") {
         return Ok(AnyStore::MySql(MySqlArtifactStore::connect(&url).await?));
+    }
+{%- endif %}
+{%- if 'sqlserver' in datastores %}
+    if let Ok(url) = std::env::var("SQLSERVER_URL") {
+        return Ok(AnyStore::SqlServer(SqlServerArtifactStore::connect(&url).await?));
     }
 {%- endif %}
 {%- if 'redis' in datastores %}

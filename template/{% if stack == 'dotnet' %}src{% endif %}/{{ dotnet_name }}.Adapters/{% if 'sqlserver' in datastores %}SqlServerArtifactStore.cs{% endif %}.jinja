@@ -1,0 +1,96 @@
+using System.Data;
+using System.Web;
+using Microsoft.Data.SqlClient;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+/// <summary>
+/// IArtifactStore on SQL Server. Schema: migrations/sqlserver/.
+/// Queries are always parameterised, never built from strings (ADR 0003).
+/// </summary>
+public sealed class SqlServerArtifactStore : IArtifactStore, IAsyncDisposable
+{
+    // HOLDLOCK makes MERGE an atomic upsert under concurrency.
+    private const string UpsertSql =
+        "MERGE export_artifacts WITH (HOLDLOCK) AS target " +
+        "USING (SELECT @key AS artifact_key, @job AS job_id, @body AS body) AS source " +
+        "ON target.artifact_key = source.artifact_key " +
+        "WHEN MATCHED THEN UPDATE SET body = source.body " +
+        "WHEN NOT MATCHED THEN INSERT (artifact_key, job_id, body) " +
+        "VALUES (source.artifact_key, source.job_id, source.body);";
+
+    private const string ReadSql = "SELECT body FROM export_artifacts WHERE artifact_key = @key";
+
+    private readonly string connectionString;
+
+    private SqlServerArtifactStore(string connectionString) => this.connectionString = connectionString;
+
+    /// <summary>Accepts a URL (sqlserver://user:pass@host:port/db) or a SqlClient connection string.</summary>
+    public static SqlServerArtifactStore Create(string connection) => new(ToConnectionString(connection));
+
+    public async Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        var connection = new SqlConnection(connectionString);
+        await using (connection.ConfigureAwait(false))
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            var command = new SqlCommand(UpsertSql, connection);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.Add("@key", SqlDbType.NVarChar, 255).Value = key;
+                command.Parameters.Add("@job", SqlDbType.NVarChar, 64).Value = jobId;
+                command.Parameters.Add("@body", SqlDbType.NVarChar, -1).Value = content;
+                await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return key;
+    }
+
+    public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        var connection = new SqlConnection(connectionString);
+        await using (connection.ConfigureAwait(false))
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            var command = new SqlCommand(ReadSql, connection);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.Add("@key", SqlDbType.NVarChar, 255).Value = key;
+                return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+            }
+        }
+    }
+
+    /// <summary>Releases the pooled connections opened for this store.</summary>
+    public ValueTask DisposeAsync()
+    {
+        using var connection = new SqlConnection(connectionString);
+        SqlConnection.ClearPool(connection);
+        return ValueTask.CompletedTask;
+    }
+
+    private static string ToConnectionString(string connection)
+    {
+        if (!Uri.TryCreate(connection, UriKind.Absolute, out var uri) || !uri.Scheme.Equals("sqlserver", StringComparison.Ordinal))
+        {
+            return connection;
+        }
+
+        var credentials = uri.UserInfo.Split(':', 2);
+        var database = uri.AbsolutePath.TrimStart('/');
+        var builder = new SqlConnectionStringBuilder
+        {
+            DataSource = $"{uri.Host},{(uri.Port > 0 ? uri.Port : 1433)}",
+            InitialCatalog = database.Length > 0 ? database : "master",
+            UserID = Uri.UnescapeDataString(credentials[0]),
+            Password = credentials.Length > 1 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
+            Encrypt = SqlConnectionEncryptOption.Mandatory,
+            TrustServerCertificate = string.Equals(
+                HttpUtility.ParseQueryString(uri.Query)["trustServerCertificate"], "true", StringComparison.OrdinalIgnoreCase),
+        };
+        return builder.ConnectionString;
+    }
+}

@@ -7,6 +7,10 @@
 {%- endif %}
     <PackageVersion Include="NetArchTest.Rules" Version="1.3.2" />
     <PackageVersion Include="xunit.v3" Version="4.0.3" />
+{%- if 'sqlserver' in datastores %}
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.2" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.16.0" />
+{%- endif %}
 {%- if mysql_engine %}
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
     <PackageVersion Include="Testcontainers.{{ 'MySql' if mysql_engine == 'mysql' else 'MariaDb' }}" Version="4.16.0" />

@@ -1,0 +1,90 @@
+"""ArtifactStore on SQL Server.
+
+Schema: migrations/sqlserver/. Queries are always parameterised (?), never formatted.
+"""
+
+from __future__ import annotations
+
+from typing import Protocol, Self
+from urllib.parse import parse_qs, unquote, urlparse
+
+import mssql_python
+from mssql_python.connection import Connection
+
+# HOLDLOCK makes MERGE an atomic upsert under concurrency.
+UPSERT_SQL = (
+    "MERGE export_artifacts WITH (HOLDLOCK) AS target "
+    "USING (SELECT ? AS artifact_key, ? AS job_id, ? AS body) AS source "
+    "ON target.artifact_key = source.artifact_key "
+    "WHEN MATCHED THEN UPDATE SET body = source.body "
+    "WHEN NOT MATCHED THEN INSERT (artifact_key, job_id, body) "
+    "VALUES (source.artifact_key, source.job_id, source.body);"
+)
+READ_SQL = "SELECT body FROM export_artifacts WHERE artifact_key = ?"
+
+
+class Row(Protocol):
+    def __getitem__(self, index: int, /) -> object: ...
+
+
+class Cursor(Protocol):
+    """The typed subset of the driver cursor in use (the driver leaves parameters untyped)."""
+
+    def execute(self, operation: str, *parameters: str) -> object: ...
+    def fetchone(self) -> Row | None: ...
+    def close(self) -> None: ...
+
+
+def open_cursor(connection: Connection) -> Cursor:
+    return connection.cursor()
+
+
+def _quote(value: str) -> str:
+    """Braces a connection-string value so ; and = in passwords stay literal."""
+    return "{" + value.replace("}", "}}") + "}"
+
+
+def to_connection_string(url: str) -> str:
+    """Converts sqlserver://user:pass@host:port/db[?trustServerCertificate=true] to ODBC form."""
+    parts = urlparse(url)
+    trust = parse_qs(parts.query).get("trustServerCertificate", ["false"])[0] == "true"
+    return ";".join(
+        [
+            f"Server={parts.hostname or 'localhost'},{parts.port or 1433}",
+            f"Database={_quote(parts.path.lstrip('/') or 'master')}",
+            f"UID={_quote(unquote(parts.username or ''))}",
+            f"PWD={_quote(unquote(parts.password or ''))}",
+            "Encrypt=yes",
+            f"TrustServerCertificate={'yes' if trust else 'no'}",
+        ]
+    )
+
+
+class SqlServerArtifactStore:
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    @classmethod
+    def from_url(cls, url: str) -> Self:
+        return cls(mssql_python.connect(to_connection_string(url), autocommit=True))
+
+    def save(self, job_id: str, content: str) -> str:
+        key = f"exports/{job_id}.csv"
+        cursor = open_cursor(self._connection)
+        try:
+            cursor.execute(UPSERT_SQL, key, job_id, content)
+        finally:
+            cursor.close()
+        return key
+
+    def read(self, key: str) -> str | None:
+        cursor = open_cursor(self._connection)
+        try:
+            cursor.execute(READ_SQL, key)
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+        return None if row is None else str(row[0])
+
+    def close(self) -> None:
+        self._connection.close()

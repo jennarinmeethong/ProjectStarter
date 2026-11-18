@@ -5,6 +5,9 @@ import { PostgresArtifactStore } from "../adapters/postgres-artifact-store.ts";
 {%- if mysql_engine %}
 import { MySqlArtifactStore } from "../adapters/mysql-artifact-store.ts";
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+import { SqlServerArtifactStore } from "../adapters/sqlserver-artifact-store.ts";
+{%- endif %}
 {%- if 'redis' in datastores %}
 import { RedisArtifactStore } from "../adapters/redis-artifact-store.ts";
 {%- endif %}
@@ -36,6 +39,12 @@ function openStore(): Promise<OpenStore> {
   if (mysqlUrl) {
     const store = MySqlArtifactStore.fromUrl(mysqlUrl);
     return Promise.resolve({ store, close: () => store.close() });
+  }
+{%- endif %}
+{%- if 'sqlserver' in datastores %}
+  const sqlServerUrl = process.env.SQLSERVER_URL;
+  if (sqlServerUrl) {
+    return SqlServerArtifactStore.connect(sqlServerUrl).then((store) => ({ store, close: () => store.close() }));
   }
 {%- endif %}
 {%- if 'redis' in datastores %}
