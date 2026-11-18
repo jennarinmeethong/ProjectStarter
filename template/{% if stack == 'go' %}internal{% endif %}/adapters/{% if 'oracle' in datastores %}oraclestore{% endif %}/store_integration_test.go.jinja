@@ -1,0 +1,72 @@
+//go:build integration
+
+// Integration test: needs Docker. Run with `go test -tags integration ./...`.
+package oraclestore_test
+
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
+
+	"{{ go_module }}/internal/adapters/oraclestore"
+	"{{ go_module }}/internal/adapters/storetest"
+)
+
+func TestOracleStoreSatisfiesTheContract(t *testing.T) {
+	ctx := t.Context()
+	container, err := testcontainers.Run(ctx, "gvenzl/oracle-free:23-slim-faststart",
+		testcontainers.WithEnv(map[string]string{ //nolint:gosec // throwaway credentials for a test container
+			"ORACLE_PASSWORD": "sys-test-only", "APP_USER": "app", "APP_USER_PASSWORD": "app-test-only",
+		}),
+		testcontainers.WithExposedPorts("1521/tcp"),
+		testcontainers.WithWaitStrategy(wait.ForLog("DATABASE IS READY TO USE!")))
+	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		t.Fatalf("start oracle: %v", err)
+	}
+	endpoint, err := container.PortEndpoint(ctx, "1521/tcp", "")
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	// Same steps as the compose migrate job: sqlplus applies migrations/oracle in file-name order.
+	for _, script := range migrations(t) {
+		cmd := []string{"bash", "-c", "{ echo 'WHENEVER SQLERROR EXIT FAILURE'; cat; echo EXIT; } <<'SQL' | " +
+			"sqlplus -s -L app/app-test-only@//localhost:1521/FREEPDB1\n" + script + "\nSQL"}
+		code, _, err := container.Exec(ctx, cmd)
+		if err != nil || code != 0 {
+			t.Fatalf("migration failed (exit %d): %v", code, err)
+		}
+	}
+	store, err := oraclestore.Open(ctx, "oracle://app:app-test-only@"+endpoint+"/FREEPDB1")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	storetest.Run(t, func(*testing.T) storetest.Subject {
+		return storetest.Subject{Store: store, Read: store.Read}
+	})
+}
+
+func migrations(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join("..", "..", "..", "migrations", "oracle", "*.sql"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no migrations found: %v", err)
+	}
+	sort.Strings(files)
+	scripts := make([]string, 0, len(files))
+	for _, path := range files {
+		content, err := os.ReadFile(path) //nolint:gosec // test reads the repository's own migrations
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		scripts = append(scripts, strings.TrimSpace(string(content)))
+	}
+	return scripts
+}

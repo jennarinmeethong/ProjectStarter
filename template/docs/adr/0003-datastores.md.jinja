@@ -37,6 +37,9 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 {%- if 'sqlserver' in datastores %}
 | SQL Server (tiberius) ใช้ parameter | tiberius รับ SQL จาก string ใดก็ได้ จึงใช้ `crates/adapters/clippy.toml` ห้าม `Client::query`/`execute`/`simple_query` และ `Query::new` ยกเว้น gateway ใน `src/sqlserver.rs` ที่รับเฉพาะ `&'static str` (ห้าม `String::leak`/`Box::leak` ด้วย) |
 {%- endif %}
+{%- if 'oracle' in datastores %}
+| Oracle (oracle-rs) ใช้ parameter | oracle-rs รับ SQL จาก string ใดก็ได้ จึงใช้ `crates/adapters/clippy.toml` ห้าม `Connection::query`/`execute`/`execute_dml_sql`/`execute_plsql`/`open_scrollable_cursor` ยกเว้น gateway ใน `src/oracle.rs` ที่รับเฉพาะ `&'static str` |
+{%- endif %}
 | contract test | `crates/adapters/tests/common`; integration: `cargo test -p adapters --features integration` |
 {%- else %}
 | driver อยู่ใน adapters | project references: มีแค่ `Adapters` ที่อ้าง `Npgsql`/`StackExchange.Redis` (compiler บังคับ) |
@@ -44,7 +47,7 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 | contract test | `tests/{{ dotnet_name }}.Tests/ArtifactStoreContract.cs`; integration: `dotnet test --filter-trait "Category=Integration"` |
 {%- endif %}
 | migration append-only | `ci/guardrail-ratchet.sh` (fail เมื่อไฟล์ใน `migrations/` ถูกแก้/ย้าย/ลบ) และ `migrations/` เป็น tier 3 ([risk-tiers](../risk-tiers.md)) |
-| SQL style และคำสงวน | sqlfluff (`.sqlfluff` dialect postgres{% if mysql_engine %}; `migrations/mysql/.sqlfluff` dialect mysql{% endif %}{% if 'sqlserver' in datastores %}; `migrations/sqlserver/.sqlfluff` dialect tsql{% endif %}) — `uvx sqlfluff==4.5.0 lint migrations` |
+| SQL style และคำสงวน | sqlfluff (`.sqlfluff` dialect postgres{% if mysql_engine %}; `migrations/mysql/.sqlfluff` dialect mysql{% endif %}{% if 'sqlserver' in datastores %}; `migrations/sqlserver/.sqlfluff` dialect tsql{% endif %}{% if 'oracle' in datastores %}; `migrations/oracle/.sqlfluff` dialect oracle{% endif %}) — `uvx sqlfluff==4.5.0 lint migrations` |
 | integration test ใน CI | job `integration` (ต้องมี Docker; ไม่อยู่ใน verify เพื่อให้ inner loop เร็ว) |
 
 {% if 'mongodb' in datastores %}## MongoDB
@@ -78,6 +81,10 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 - bucket ของระบบจริงสร้างด้วย IaC พร้อม policy (block public access, encryption, lifecycle)
 
 {% endif %}## การ apply migration
+{%- if 'oracle' in datastores %}
+- Oracle ใช้ `migrations/oracle/` (Oracle SQL) ใน schema ของ user `app` บน `FREEPDB1`: compose job `oracle-migrate` (sqlplus ใน image เดียวกัน) apply ไฟล์ตามลำดับชื่อ และ integration test ทำขั้นตอนเดียวกัน; upsert ใช้ `MERGE ... USING (SELECT ... FROM dual)` และ `body` เป็น CLOB
+- URL รูปแบบ `oracle://user:pass@host:1521/SERVICE` (`ORACLE_URL`); driver ทุกภาษาเป็นแบบ thin ไม่ต้องติดตั้ง Oracle Client
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
 - SQL Server ใช้ `migrations/sqlserver/` (T-SQL) และไม่มี init hook: `compose.yaml` จึงมี job `sqlserver-migrate` (one-shot, `sqlcmd`) ที่สร้าง database `app` แล้ว apply ไฟล์ตามลำดับชื่อ ส่วน integration test ทำขั้นตอนเดียวกันก่อนรัน contract; upsert ใช้ `MERGE ... WITH (HOLDLOCK)` เพื่อให้ atomic
 - URL รูปแบบ `sqlserver://user:pass@host:port/db` (`SQLSERVER_URL`); `?trustServerCertificate=true` ใช้เฉพาะ local/test ที่ certificate เป็น self-signed — production ต้องใช้ certificate ที่ตรวจสอบได้
@@ -105,6 +112,15 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 {%- endif %}
 {%- if 'mongodb' in datastores %}
 - MongoDB Community Server (image `mongo`) ใช้ SSPL: รันแบบไม่แก้ไขเป็น database ของระบบเราได้ แต่ห้ามให้บริการ MongoDB เองเป็น service แก่ผู้อื่นโดยไม่เปิด source ของ stack นั้น ถ้านโยบายองค์กรไม่รับ SSPL ให้ใช้ MongoDB Atlas (managed) แทน; driver ทั้งหมดเป็น Apache-2.0
+{%- endif %}
+{%- if 'oracle' in datastores %}
+- Oracle Database Free (image `gvenzl/oracle-free` ซึ่ง Testcontainers ทุกภาษาใช้) อยู่ภายใต้ Oracle Free Use Terms and Conditions: ใช้พัฒนา ทดสอบ และ production ได้ภายในขีดจำกัดของ Free edition
+{%- if stack == 'dotnet' %}
+- `Oracle.ManagedDataAccess.Core` ใช้ Oracle Free Use Terms (ไม่ใช่ OSI license) ใช้และแจกจ่ายร่วมกับแอปได้ ให้ตรวจกับนโยบายองค์กรก่อนใช้
+{%- endif %}
+{%- if stack == 'rust' %}
+- `oracle-rs` (MIT/Apache-2.0) เป็น thin driver ภาษา Rust ล้วนที่ยังอายุน้อย (0.1.x) จึง pin version แบบ `=` และควรประเมินก่อนใช้ใน production; ทางเลือกที่โตกว่าคือ crate `oracle` ซึ่งต้องติดตั้ง Oracle Instant Client
+{%- endif %}
 {%- endif %}
 {%- if 'sqlserver' in datastores %}
 - SQL Server image ใน `compose.yaml` และ test เป็น **Developer edition**: ใช้ฟรีเฉพาะ development/test ตาม EULA ของ Microsoft (`ACCEPT_EULA=Y` คือการยอมรับ EULA นั้น) production ต้องใช้ edition ที่มี license (หรือ Express ที่มีข้อจำกัดขนาด) หรือ Azure SQL

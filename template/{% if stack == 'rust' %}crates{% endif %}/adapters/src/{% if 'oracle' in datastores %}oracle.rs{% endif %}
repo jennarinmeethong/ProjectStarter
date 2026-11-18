@@ -1,0 +1,91 @@
+//! `ArtifactStore` on Oracle Database (`oracle-rs`, pure Rust thin driver). Schema: `migrations/oracle/`.
+//!
+//! The driver accepts SQL from any string, so `crates/adapters/clippy.toml` bans its query methods everywhere
+//! except the gateways below, which only take `&'static str` constants (ADR 0003).
+
+use std::sync::Arc;
+
+use application::{ArtifactStore, PortError};
+use oracle_rs::{Config, Connection, LobValue, QueryResult, Value};
+use percent_encoding::percent_decode_str;
+use url::Url;
+
+const UPSERT_SQL: &str = "MERGE INTO export_artifacts t \
+     USING (SELECT :1 AS artifact_key, :2 AS job_id, :3 AS body FROM dual) s \
+     ON (t.artifact_key = s.artifact_key) \
+     WHEN MATCHED THEN UPDATE SET t.body = s.body \
+     WHEN NOT MATCHED THEN INSERT (artifact_key, job_id, body) VALUES (s.artifact_key, s.job_id, s.body)";
+const READ_SQL: &str = "SELECT body FROM export_artifacts WHERE artifact_key = :1";
+
+/// Keeps artifacts in the `export_artifacts` table over one shared connection.
+#[derive(Clone)]
+pub struct OracleArtifactStore {
+    connection: Arc<Connection>,
+}
+
+impl OracleArtifactStore {
+    /// Connects to `url` (oracle://user:password@host:port/service).
+    pub async fn connect(url: &str) -> Result<Self, PortError> {
+        let connection = Box::pin(Connection::connect_with_config(to_config(url)?)).await?;
+        Ok(Self { connection: Arc::new(connection) })
+    }
+
+    /// Returns the content stored under `key`, if any.
+    pub async fn read(&self, key: &str) -> Result<Option<String>, PortError> {
+        let result = query(&self.connection, READ_SQL, &[Value::from(key)]).await?;
+        let Some(value) = result.rows.first().and_then(|row| row.get(0)) else {
+            return Ok(None);
+        };
+        // CLOBs arrive as a locator (read separately) or inline; short values may come back as plain strings.
+        if let Value::Lob(LobValue::Locator(locator)) = value {
+            return Ok(Some(self.connection.read_clob(locator).await?));
+        }
+        if let Value::Lob(LobValue::Inline(bytes)) = value {
+            return Ok(Some(String::from_utf8(bytes.to_vec())?));
+        }
+        Ok(value.as_str().map(str::to_owned))
+    }
+}
+
+impl ArtifactStore for OracleArtifactStore {
+    async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
+        let key = format!("exports/{job_id}.csv");
+        let params = [Value::from(key.as_str()), Value::from(job_id), Value::from(content)];
+        execute(&self.connection, UPSERT_SQL, &params).await?;
+        self.connection.commit().await?;
+        Ok(key)
+    }
+}
+
+/// The only place that runs a query. `&'static str` keeps SQL a compile-time constant.
+#[expect(clippy::disallowed_methods, reason = "audited gateway: SQL is a &'static str constant")]
+async fn query(
+    connection: &Connection,
+    sql: &'static str,
+    params: &[Value],
+) -> oracle_rs::Result<QueryResult> {
+    connection.query(sql, params).await
+}
+
+/// The only place that runs a statement. `&'static str` keeps SQL a compile-time constant.
+#[expect(clippy::disallowed_methods, reason = "audited gateway: SQL is a &'static str constant")]
+async fn execute(
+    connection: &Connection,
+    sql: &'static str,
+    params: &[Value],
+) -> oracle_rs::Result<QueryResult> {
+    connection.execute(sql, params).await
+}
+
+fn to_config(url: &str) -> Result<Config, PortError> {
+    let parsed = Url::parse(url)?;
+    let user = percent_decode_str(parsed.username()).decode_utf8()?;
+    let password = percent_decode_str(parsed.password().unwrap_or_default()).decode_utf8()?;
+    Ok(Config::new(
+        parsed.host_str().unwrap_or("localhost"),
+        parsed.port().unwrap_or(1521),
+        parsed.path().trim_start_matches('/'),
+        user.into_owned(),
+        password.into_owned(),
+    ))
+}

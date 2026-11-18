@@ -3,6 +3,7 @@
 {%- if 'postgres' in datastores %}{% set _ = deps.append('"psycopg[binary]>=3.2"') %}{% endif -%}
 {%- if mysql_engine %}{% set _ = deps.append('"PyMySQL>=1.1"') %}{% endif -%}
 {%- if 'sqlserver' in datastores %}{% set _ = deps.append('"mssql-python>=1.10"') %}{% endif -%}
+{%- if 'oracle' in datastores %}{% set _ = deps.append('"oracledb>=3.0"') %}{% endif -%}
 {%- if 'mongodb' in datastores %}{% set _ = deps.append('"pymongo>=4.10"') %}{% endif -%}
 {%- if 'dynamodb' in datastores or 's3' in datastores %}{% set _ = deps.append('"boto3>=1.40"') %}{% endif -%}
 {%- if 'cosmosdb' in datastores %}{% set _ = deps.append('"azure-cosmos>=4.9"') %}{% endif -%}

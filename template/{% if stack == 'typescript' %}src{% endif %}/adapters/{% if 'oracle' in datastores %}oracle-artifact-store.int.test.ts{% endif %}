@@ -1,0 +1,54 @@
+// Integration test: needs Docker. Run with `npm run test:integration` (excluded from `npm test`).
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { OracleDbContainer, type StartedOracleDbContainer } from "@testcontainers/oraclefree";
+import oracledb from "oracledb";
+import { afterAll, beforeAll } from "vitest";
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { OracleArtifactStore, toConnectionAttributes } from "./oracle-artifact-store.ts";
+
+const MIGRATIONS = "migrations/oracle";
+
+let container: StartedOracleDbContainer;
+let store: OracleArtifactStore;
+
+/** Splits a migration into statements: Oracle drivers run one statement per call, without the ";". */
+function statements(sql: string): string[] {
+  const code = sql
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n");
+  return code
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+/** Applies migrations/oracle in file-name order, like the compose migrate job. */
+async function migrate(url: string): Promise<void> {
+  const connection = await oracledb.getConnection(toConnectionAttributes(url));
+  try {
+    for (const name of (await readdir(MIGRATIONS)).filter((file) => file.endsWith(".sql")).sort()) {
+      for (const statement of statements(await readFile(join(MIGRATIONS, name), "utf8"))) {
+        await connection.execute(statement);
+      }
+    }
+  } finally {
+    await connection.close();
+  }
+}
+
+beforeAll(async () => {
+  container = await new OracleDbContainer("gvenzl/oracle-free:23-slim-faststart").start();
+  const credentials = `${encodeURIComponent(container.getUsername())}:${encodeURIComponent(container.getPassword())}`;
+  const url = `oracle://${credentials}@${container.getHost()}:${String(container.getPort())}/${container.getDatabase()}`;
+  await migrate(url);
+  store = await OracleArtifactStore.connect(url);
+}, 300_000);
+
+afterAll(async () => {
+  await store.close();
+  await container.stop();
+});
+
+describeArtifactStoreContract("OracleArtifactStore", () => ({ store, read: (key) => store.read(key) }));

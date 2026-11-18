@@ -13,6 +13,9 @@ tool (
 )
 
 require (
+{%- if 'oracle' in datastores %}
+	github.com/sijms/go-ora/v2 v2.8.24
+{%- endif %}
 {%- if 'cosmosdb' in datastores %}
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.0
 	github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos v1.5.0

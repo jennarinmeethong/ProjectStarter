@@ -14,6 +14,9 @@ use adapters::mongo::MongoArtifactStore;
 {%- if mysql_engine %}
 use adapters::mysql::MySqlArtifactStore;
 {%- endif %}
+{%- if 'oracle' in datastores %}
+use adapters::oracle::OracleArtifactStore;
+{%- endif %}
 {%- if 'postgres' in datastores %}
 use adapters::postgres::PostgresArtifactStore;
 {%- endif %}
@@ -56,6 +59,9 @@ enum AnyStore {
 {%- if mysql_engine %}
     MySql(MySqlArtifactStore),
 {%- endif %}
+{%- if 'oracle' in datastores %}
+    Oracle(OracleArtifactStore),
+{%- endif %}
 {%- if 'postgres' in datastores %}
     Postgres(PostgresArtifactStore),
 {%- endif %}
@@ -85,6 +91,9 @@ impl ArtifactStore for AnyStore {
 {%- endif %}
 {%- if mysql_engine %}
             Self::MySql(store) => store.save(job_id, content).await,
+{%- endif %}
+{%- if 'oracle' in datastores %}
+            Self::Oracle(store) => store.save(job_id, content).await,
 {%- endif %}
 {%- if 'postgres' in datastores %}
             Self::Postgres(store) => store.save(job_id, content).await,
@@ -135,6 +144,11 @@ async fn open_store() -> Result<AnyStore, BoxError> {
 {%- if 'mongodb' in datastores %}
     if let Ok(url) = std::env::var("MONGODB_URL") {
         return Ok(AnyStore::Mongo(MongoArtifactStore::connect(&url).await?));
+    }
+{%- endif %}
+{%- if 'oracle' in datastores %}
+    if let Ok(url) = std::env::var("ORACLE_URL") {
+        return Ok(AnyStore::Oracle(OracleArtifactStore::connect(&url).await?));
     }
 {%- endif %}
 {%- if 'sqlserver' in datastores %}

@@ -1,0 +1,3 @@
+# Guardrail config (protected). Oracle dialect for migrations/oracle (overrides the root .sqlfluff).
+[sqlfluff]
+dialect = oracle

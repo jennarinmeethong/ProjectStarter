@@ -1,0 +1,81 @@
+using Oracle.ManagedDataAccess.Client;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+/// <summary>
+/// IArtifactStore on Oracle Database (managed ODP.NET, no client install). Schema: migrations/oracle/.
+/// Values are always bound by name, never built into SQL (ADR 0003).
+/// </summary>
+public sealed class OracleArtifactStore : IArtifactStore, IAsyncDisposable
+{
+    private const string UpsertSql =
+        "MERGE INTO export_artifacts t " +
+        "USING (SELECT :artifact_key AS artifact_key, :job_id AS job_id, :body AS body FROM dual) s " +
+        "ON (t.artifact_key = s.artifact_key) " +
+        "WHEN MATCHED THEN UPDATE SET t.body = s.body " +
+        "WHEN NOT MATCHED THEN INSERT (artifact_key, job_id, body) VALUES (s.artifact_key, s.job_id, s.body)";
+
+    private const string ReadSql = "SELECT body FROM export_artifacts WHERE artifact_key = :artifact_key";
+
+    private readonly string connectionString;
+
+    private OracleArtifactStore(string connectionString) => this.connectionString = connectionString;
+
+    /// <summary>Accepts a URL (oracle://user:pass@host:port/service) or an ODP.NET connection string.</summary>
+    public static OracleArtifactStore Create(string connection) => new(ToConnectionString(connection));
+
+    public async Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        var connection = new OracleConnection(connectionString);
+        await using (connection.ConfigureAwait(false))
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var command = new OracleCommand(UpsertSql, connection) { BindByName = true };
+            command.Parameters.Add("artifact_key", OracleDbType.Varchar2).Value = key;
+            command.Parameters.Add("job_id", OracleDbType.Varchar2).Value = jobId;
+            command.Parameters.Add("body", OracleDbType.Clob).Value = content;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return key;
+    }
+
+    public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        var connection = new OracleConnection(connectionString);
+        await using (connection.ConfigureAwait(false))
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var command = new OracleCommand(ReadSql, connection) { BindByName = true };
+            command.Parameters.Add("artifact_key", OracleDbType.Varchar2).Value = key;
+            return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        }
+    }
+
+    /// <summary>Releases the pooled connections opened for this store.</summary>
+    public ValueTask DisposeAsync()
+    {
+        using var connection = new OracleConnection(connectionString);
+        OracleConnection.ClearPool(connection);
+        return ValueTask.CompletedTask;
+    }
+
+    private static string ToConnectionString(string connection)
+    {
+        if (!Uri.TryCreate(connection, UriKind.Absolute, out var uri) || !uri.Scheme.Equals("oracle", StringComparison.Ordinal))
+        {
+            return connection;
+        }
+
+        var credentials = uri.UserInfo.Split(':', 2);
+        var builder = new OracleConnectionStringBuilder
+        {
+            UserID = Uri.UnescapeDataString(credentials[0]),
+            Password = credentials.Length > 1 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
+            DataSource = $"{uri.Host}:{(uri.Port > 0 ? uri.Port : 1521)}{uri.AbsolutePath}",
+        };
+        return builder.ConnectionString;
+    }
+}

@@ -232,6 +232,30 @@ s3_checks() { # s3_checks <stack> <install> <integration-command> [seeded|seeded
   popd >/dev/null || return
 }
 
+oracle_checks() { # oracle_checks <stack> <install> <integration-command> [seeded|seeded_new label file text command...]
+  local dir="$work/$1-oracle"
+  render "$1" '["codex"]' "$dir" -d 'datastores=["oracle"]' || { fail "render oracle"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm init
+  bash -c "$2" >/dev/null 2>&1
+  verify "oracle: adapter contract on Oracle Database Free" "$3"
+  if [ "$#" -gt 3 ]; then "$4" "${@:5}"; fi
+  if [ "$1" = typescript ]; then
+    # Stack-independent parts, checked once: Oracle SQL lint and the compose migrate job.
+    local sqlfluff="uvx -q sqlfluff==4.5.0"
+    verify "sqlfluff: Oracle migrations" "$sqlfluff lint migrations"
+    seeded "sqlfluff: lower-case Oracle keywords" migrations/oracle/0001_create_export_artifacts.sql \
+      '\nselect body from export_artifacts;\n' $sqlfluff lint migrations
+    local compose="docker compose -p ps-oracle"
+    $compose down -v >/dev/null 2>&1
+    verify "compose: Oracle migrate job creates the schema" \
+      "$compose up -d --wait oracle && $compose run --rm oracle-migrate \
+       && [ \"\$(printf 'SET HEADING OFF FEEDBACK OFF\nSELECT COUNT(*) FROM export_artifacts;\n' | $compose exec -T oracle sqlplus -s app/local-dev-only@//localhost:1521/FREEPDB1 | tr -d '[:space:]')\" = 0 ]"
+    $compose down -v >/dev/null 2>&1
+  fi
+  popd >/dev/null || return
+}
+
 http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: rendered with http_api=true
   local image="project-starter-$1"
   verify "playwright: API tests against the real server" "$2"
@@ -437,6 +461,7 @@ for stack in "${stacks[@]}"; do
       datastore_checks typescript
       mariadb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       sqlserver_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
+      oracle_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       cosmosdb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       s3_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
         seeded_new "dependency-cruiser: S3 SDK in application" src/application/s3-leak.ts \
@@ -490,6 +515,9 @@ for stack in "${stacks[@]}"; do
       datastore_checks python
       mariadb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
       sqlserver_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
+      oracle_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
+        seeded_new "import-linter: Oracle driver in application" src/demo_app/application/oracle_leak.py \
+        'import oracledb\n' uv run lint-imports
       s3_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
       cosmosdb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
         seeded_new "import-linter: Cosmos DB SDK in application" src/demo_app/application/cosmos_leak.py \
@@ -533,6 +561,7 @@ for stack in "${stacks[@]}"; do
       datastore_checks dotnet
       mariadb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       sqlserver_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
+      oracle_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       mongodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       dynamodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       cosmosdb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
@@ -578,6 +607,9 @@ for stack in "${stacks[@]}"; do
         seeded_new "ruleguard: MongoDB \$where" internal/adapters/mongostore/seeded.go \
         'package mongostore\n\nimport "go.mongodb.org/mongo-driver/v2/bson"\n\nvar seeded = bson.M{"$where": "this.a == 1"}\n' \
         go tool golangci-lint run
+      oracle_checks go "go mod tidy" "go test -tags integration ./..." \
+        seeded_new "depguard: Oracle driver outside adapters" internal/application/oracle_leak.go \
+        'package application\n\nimport _ "github.com/sijms/go-ora/v2"\n' go tool golangci-lint run
       sqlserver_checks go "go mod tidy" "go test -tags integration ./..." \
         seeded_new "depguard: SQL Server driver outside adapters" internal/application/sqlserver_driver.go \
         'package application\n\nimport _ "github.com/microsoft/go-mssqldb"\n' go tool golangci-lint run
@@ -615,6 +647,10 @@ for stack in "${stacks[@]}"; do
       cosmosdb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
       s3_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
         seeded "check-layers: S3 SDK in bootstrap" crates/bootstrap/Cargo.toml 'aws-sdk-s3 = "1"\n' bash ci/check-layers.sh
+      oracle_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
+        seeded "clippy: oracle-rs query outside the static-SQL gateway" crates/adapters/src/oracle.rs \
+        '\n/// Builds SQL from a value.\npub async fn unsafe_delete(connection: &Connection, table: &str) -> oracle_rs::Result<QueryResult> {\n    connection.execute(&format!("DELETE FROM {table}"), &[]).await\n}\n' \
+        cargo clippy -p adapters -- -D warnings
       sqlserver_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
         seeded "clippy: tiberius query outside the static-SQL gateway" crates/adapters/src/sqlserver.rs \
         '\n/// Builds SQL from a value.\npub async fn unsafe_delete(client: &mut Connection, table: &str) -> tiberius::Result<u64> {\n    Ok(client.execute(format!("DELETE FROM {table}"), &[]).await?.total())\n}\n' \

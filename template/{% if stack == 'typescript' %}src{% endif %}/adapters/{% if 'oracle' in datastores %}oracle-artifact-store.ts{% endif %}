@@ -1,0 +1,63 @@
+import oracledb, { type Pool } from "oracledb";
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+// Same bind name twice is fine: values are bound by name, never inlined.
+const UPSERT_SQL = `MERGE INTO export_artifacts t
+USING (SELECT :artifactKey AS artifact_key, :jobId AS job_id FROM dual) s
+ON (t.artifact_key = s.artifact_key)
+WHEN MATCHED THEN UPDATE SET t.body = :body
+WHEN NOT MATCHED THEN INSERT (artifact_key, job_id, body) VALUES (s.artifact_key, s.job_id, :body)`;
+const READ_SQL = "SELECT body FROM export_artifacts WHERE artifact_key = :artifactKey";
+
+/** Parses `oracle://user:password@host:port/service`. */
+export function toConnectionAttributes(uri: string): oracledb.ConnectionAttributes {
+  const url = new URL(uri);
+  return {
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    connectString: `${url.hostname}:${url.port || "1521"}${url.pathname}`,
+  };
+}
+
+/** ArtifactStore on Oracle Database (thin mode, no client libraries). Schema: migrations/oracle/ (ADR 0003). */
+export class OracleArtifactStore implements ArtifactStore {
+  readonly #pool: Pool;
+
+  private constructor(pool: Pool) {
+    this.#pool = pool;
+  }
+
+  static async connect(uri: string): Promise<OracleArtifactStore> {
+    return new OracleArtifactStore(await oracledb.createPool({ ...toConnectionAttributes(uri), poolMax: 5 }));
+  }
+
+  async save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    const connection = await this.#pool.getConnection();
+    try {
+      const binds = { artifactKey: key, jobId, body: { val: content, type: oracledb.DB_TYPE_CLOB } };
+      await connection.execute(UPSERT_SQL, binds, { autoCommit: true });
+    } finally {
+      await connection.close();
+    }
+    return key;
+  }
+
+  async read(key: string): Promise<string | undefined> {
+    const connection = await this.#pool.getConnection();
+    try {
+      const result = await connection.execute<{ BODY: string }>(
+        READ_SQL,
+        { artifactKey: key },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT, fetchInfo: { BODY: { type: oracledb.STRING } } },
+      );
+      return result.rows?.[0]?.BODY;
+    } finally {
+      await connection.close();
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.#pool.close(0);
+  }
+}
