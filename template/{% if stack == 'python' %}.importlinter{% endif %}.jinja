@@ -23,6 +23,10 @@ source_modules =
     {{ package_name }}.application
     {{ package_name }}.bootstrap
 forbidden_modules =
+{%- if 'dynamodb' in datastores %}
+    boto3
+    botocore
+{%- endif %}
 {%- if 'mongodb' in datastores %}
     pymongo
     bson

@@ -1,0 +1,80 @@
+//go:build integration
+
+// Integration test: needs Docker. Run with `go test -tags integration ./...`.
+package dynamostore_test
+
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
+
+	"{{ go_module }}/internal/adapters/dynamostore"
+	"{{ go_module }}/internal/adapters/storetest"
+)
+
+func TestDynamoStoreSatisfiesTheContract(t *testing.T) {
+	ctx := t.Context()
+	// DynamoDB Local accepts any credentials.
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_ACCESS_KEY_ID", "local")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "local")
+
+	container, err := testcontainers.Run(ctx, "amazon/dynamodb-local:2.6.1",
+		testcontainers.WithCmd("-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"),
+		testcontainers.WithExposedPorts("8000/tcp"),
+		// Any HTTP answer means DynamoDB Local is serving (GET / returns 400).
+		testcontainers.WithWaitStrategy(wait.ForHTTP("/").WithPort("8000/tcp").
+			WithStatusCodeMatcher(func(status int) bool { return status == http.StatusBadRequest })))
+	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		t.Fatalf("start dynamodb-local: %v", err)
+	}
+	endpoint, err := container.PortEndpoint(ctx, "8000/tcp", "http")
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	createTables(t, endpoint)
+
+	store, err := dynamostore.Open(ctx, "export_artifacts", endpoint)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	storetest.Run(t, func(*testing.T) storetest.Subject {
+		return storetest.Subject{Store: store, Read: store.Read}
+	})
+}
+
+// createTables applies infra/dynamodb/*.json (create-table input), as the compose migrate job does.
+func createTables(t *testing.T, endpoint string) {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(t.Context())
+	if err != nil {
+		t.Fatalf("aws config: %v", err)
+	}
+	admin := dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) { o.BaseEndpoint = aws.String(endpoint) })
+	files, err := filepath.Glob(filepath.Join("..", "..", "..", "infra", "dynamodb", "*.json"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no table definitions found: %v", err)
+	}
+	for _, path := range files {
+		content, err := os.ReadFile(path) //nolint:gosec // test reads the repository's own table definitions
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var input dynamodb.CreateTableInput
+		if err := json.Unmarshal(content, &input); err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		if _, err := admin.CreateTable(t.Context(), &input); err != nil {
+			t.Fatalf("create table from %s: %v", path, err)
+		}
+	}
+}

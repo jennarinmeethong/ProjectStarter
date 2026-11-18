@@ -59,6 +59,11 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
   — key เป็น type `str`/`string` เสมอ (type checker บังคับ) จึงส่ง operator object เข้า filter ไม่ได้; review ต้องปฏิเสธ `$where`/`$function`/`$accumulator`
 {%- endif %}
 
+{% endif %}{% if 'dynamodb' in datastores %}## DynamoDB
+- นิยาม table อยู่ใน `infra/dynamodb/*.json` (รูปแบบ input ของ `aws dynamodb create-table`) เป็น source of truth: compose job `dynamodb-migrate` สร้าง table ที่ยังไม่มีใน DynamoDB Local และ integration test สร้างจากนิยามเดียวกัน; production ให้ IaC (CloudFormation/CDK/Terraform) สร้างตามไฟล์นี้
+- เลือก adapter ด้วย `DYNAMODB_TABLE`; `DYNAMODB_ENDPOINT` ใช้เฉพาะ DynamoDB Local บน AWS ไม่ต้องตั้ง (SDK ใช้ region และ credential chain มาตรฐาน: IAM role, `AWS_PROFILE`, env) ห้ามใส่ access key จริงใน repo
+- adapter เข้าถึง item ด้วย key (`GetItem`/`PutItem`) เท่านั้น เมื่อจำเป็นต้องใช้ expression หรือ PartiQL ให้ส่งค่าผ่าน `:placeholder` + `ExpressionAttributeValues`/parameters เสมอ{% if stack == 'typescript' %} (ESLint ห้ามประกอบ property `*Expression`/`Statement` ด้วย template หรือ `+`){% endif %}
+
 {% endif %}## การ apply migration
 {%- if 'sqlserver' in datastores %}
 - SQL Server ใช้ `migrations/sqlserver/` (T-SQL) และไม่มี init hook: `compose.yaml` จึงมี job `sqlserver-migrate` (one-shot, `sqlcmd`) ที่สร้าง database `app` แล้ว apply ไฟล์ตามลำดับชื่อ ส่วน integration test ทำขั้นตอนเดียวกันก่อนรัน contract; upsert ใช้ `MERGE ... WITH (HOLDLOCK)` เพื่อให้ atomic
@@ -76,6 +81,9 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 - `psycopg` ใช้ LGPL-3.0 ใช้เป็น dependency แบบไม่แก้ไขได้ตามปกติ
 {%- endif %}
 - Redis server ตั้งแต่ 7.4 ไม่ใช่ BSD แล้ว (8.x มีตัวเลือก AGPLv3) การรัน image แบบไม่แก้ไขเป็น service ใช้ได้ ถ้านโยบายองค์กรไม่รับ ให้ใช้ [Valkey](https://valkey.io/) (BSD) ซึ่งใช้ client เดิมได้
+{%- if 'dynamodb' in datastores %}
+- DynamoDB Local (image `amazon/dynamodb-local`) ใช้ได้ฟรีเพื่อพัฒนาและทดสอบตาม license ของ AWS ไม่ใช่สำหรับ production; AWS SDK ทุกภาษาเป็น Apache-2.0
+{%- endif %}
 {%- if 'mongodb' in datastores %}
 - MongoDB Community Server (image `mongo`) ใช้ SSPL: รันแบบไม่แก้ไขเป็น database ของระบบเราได้ แต่ห้ามให้บริการ MongoDB เองเป็น service แก่ผู้อื่นโดยไม่เปิด source ของ stack นั้น ถ้านโยบายองค์กรไม่รับ SSPL ให้ใช้ MongoDB Atlas (managed) แทน; driver ทั้งหมดเป็น Apache-2.0
 {%- endif %}

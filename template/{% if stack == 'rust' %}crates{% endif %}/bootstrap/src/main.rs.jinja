@@ -4,7 +4,8 @@
 use std::io::Write as _;
 use std::process::ExitCode;
 
-{% if http_api %}use adapters::http::router;
+{% if 'dynamodb' in datastores %}use adapters::dynamo::DynamoArtifactStore;
+{% endif %}{% if http_api %}use adapters::http::router;
 {% endif %}use adapters::in_memory::InMemoryArtifactStore;
 {%- if 'mongodb' in datastores %}
 use adapters::mongo::MongoArtifactStore;
@@ -38,6 +39,9 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// every adapter explicit here.
 #[derive(Clone)]
 enum AnyStore {
+{%- if 'dynamodb' in datastores %}
+    Dynamo(DynamoArtifactStore),
+{%- endif %}
     InMemory(InMemoryArtifactStore),
 {%- if 'mongodb' in datastores %}
     Mongo(MongoArtifactStore),
@@ -59,6 +63,9 @@ enum AnyStore {
 impl ArtifactStore for AnyStore {
     async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
         match self {
+{%- if 'dynamodb' in datastores %}
+            Self::Dynamo(store) => store.save(job_id, content).await,
+{%- endif %}
             Self::InMemory(store) => store.save(job_id, content).await,
 {%- if 'mongodb' in datastores %}
             Self::Mongo(store) => store.save(job_id, content).await,
@@ -89,6 +96,12 @@ async fn open_store() -> Result<AnyStore, BoxError> {
 {%- if mysql_engine %}
     if let Ok(url) = std::env::var("MYSQL_URL") {
         return Ok(AnyStore::MySql(MySqlArtifactStore::connect(&url).await?));
+    }
+{%- endif %}
+{%- if 'dynamodb' in datastores %}
+    if let Ok(table) = std::env::var("DYNAMODB_TABLE") {
+        let endpoint = std::env::var("DYNAMODB_ENDPOINT").ok();
+        return Ok(AnyStore::Dynamo(DynamoArtifactStore::connect(&table, endpoint.as_deref()).await?));
     }
 {%- endif %}
 {%- if 'mongodb' in datastores %}

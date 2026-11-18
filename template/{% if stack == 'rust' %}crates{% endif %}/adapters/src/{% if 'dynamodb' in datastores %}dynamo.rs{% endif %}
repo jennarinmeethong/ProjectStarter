@@ -1,0 +1,60 @@
+//! `ArtifactStore` on `DynamoDB`. Table definition: `infra/dynamodb/`.
+//!
+//! Items are addressed by key only; values never go into expression strings (ADR 0003).
+
+use application::{ArtifactStore, PortError};
+use aws_sdk_dynamodb::Client;
+use aws_sdk_dynamodb::types::AttributeValue;
+
+/// Keeps artifacts in one `DynamoDB` table.
+#[derive(Debug, Clone)]
+pub struct DynamoArtifactStore {
+    client: Client,
+    table: String,
+}
+
+impl DynamoArtifactStore {
+    /// Set `endpoint` for `DynamoDB` Local; on AWS the SDK's default region and credential chain apply.
+    pub async fn connect(table: &str, endpoint: Option<&str>) -> Result<Self, PortError> {
+        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+        if let Some(url) = endpoint {
+            loader = loader.endpoint_url(url);
+        }
+        let config = loader.load().await;
+        Ok(Self::from_client(Client::new(&config), table))
+    }
+
+    /// Uses a client configured elsewhere (tests, or a shared `SdkConfig`).
+    #[must_use]
+    pub fn from_client(client: Client, table: &str) -> Self {
+        Self { client, table: table.to_owned() }
+    }
+
+    /// Returns the content stored under `key`, if any.
+    pub async fn read(&self, key: &str) -> Result<Option<String>, PortError> {
+        let output = self
+            .client
+            .get_item()
+            .table_name(&self.table)
+            .key("artifact_key", AttributeValue::S(key.to_owned()))
+            .consistent_read(true)
+            .send()
+            .await?;
+        Ok(output.item.and_then(|mut item| item.remove("body")).and_then(|body| body.as_s().ok().cloned()))
+    }
+}
+
+impl ArtifactStore for DynamoArtifactStore {
+    async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
+        let key = format!("exports/{job_id}.csv");
+        self.client
+            .put_item()
+            .table_name(&self.table)
+            .item("artifact_key", AttributeValue::S(key.clone()))
+            .item("job_id", AttributeValue::S(job_id.to_owned()))
+            .item("body", AttributeValue::S(content.to_owned()))
+            .send()
+            .await?;
+        Ok(key)
+    }
+}

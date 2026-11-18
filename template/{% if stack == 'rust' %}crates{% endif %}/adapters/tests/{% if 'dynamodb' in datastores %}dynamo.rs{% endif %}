@@ -1,0 +1,65 @@
+//! Integration test: needs Docker. Run with `cargo test -p adapters --features integration`.
+#![cfg(feature = "integration")]
+
+mod common;
+
+use std::future::Future;
+
+use adapters::dynamo::DynamoArtifactStore;
+use application::PortError;
+use aws_sdk_dynamodb::Client;
+use aws_sdk_dynamodb::config::{BehaviorVersion, Config, Credentials, Region};
+use aws_sdk_dynamodb::types::{
+    AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
+};
+use testcontainers_modules::dynamodb_local::DynamoDb;
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+
+impl common::ReadBack for DynamoArtifactStore {
+    fn read_back(&self, key: &str) -> impl Future<Output = Result<Option<String>, PortError>> + Send {
+        self.read(key)
+    }
+}
+
+/// A client for `DynamoDB` Local, which accepts any credentials.
+fn local_client(endpoint: &str) -> Client {
+    let config = Config::builder()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new("us-east-1"))
+        .credentials_provider(Credentials::new("local", "local", None, None, "dynamodb-local"))
+        .endpoint_url(endpoint)
+        .build();
+    Client::from_conf(config)
+}
+
+/// Mirrors `infra/dynamodb/export_artifacts.json`, which the compose migrate job applies.
+async fn create_table(client: &Client) -> Result<(), PortError> {
+    client
+        .create_table()
+        .table_name("export_artifacts")
+        .attribute_definitions(
+            AttributeDefinition::builder()
+                .attribute_name("artifact_key")
+                .attribute_type(ScalarAttributeType::S)
+                .build()?,
+        )
+        .key_schema(
+            KeySchemaElement::builder().attribute_name("artifact_key").key_type(KeyType::Hash).build()?,
+        )
+        .billing_mode(BillingMode::PayPerRequest)
+        .send()
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn dynamo_store_satisfies_the_contract() -> Result<(), PortError> {
+    let container = DynamoDb::default().start().await?;
+    let host = container.get_host().await?;
+    let port = container.get_host_port_ipv4(8000).await?;
+    let client = local_client(&format!("http://{host}:{port}"));
+    create_table(&client).await?;
+    let store = DynamoArtifactStore::from_client(client, "export_artifacts");
+
+    common::check_contract(&store).await
+}

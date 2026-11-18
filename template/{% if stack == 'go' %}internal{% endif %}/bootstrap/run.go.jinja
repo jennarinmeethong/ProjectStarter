@@ -18,7 +18,10 @@ import (
 {%- endif %}
 
 {% if http_api %}	"{{ go_module }}/internal/adapters/httpapi"
-{% endif %}	"{{ go_module }}/internal/adapters/inmemory"
+{% endif %}{%- if 'dynamodb' in datastores %}
+	"{{ go_module }}/internal/adapters/dynamostore"
+{%- endif %}
+	"{{ go_module }}/internal/adapters/inmemory"
 {%- if 'mongodb' in datastores %}
 	"{{ go_module }}/internal/adapters/mongostore"
 {%- endif %}
@@ -93,6 +96,15 @@ func openStore(ctx context.Context) (application.ArtifactStore, func(), error) {
 			return nil, nil, fmt.Errorf("open mysql: %w", err)
 		}
 		return store, func() { _ = store.Close() }, nil
+	}
+{%- endif %}
+{%- if 'dynamodb' in datastores %}
+	if table := os.Getenv("DYNAMODB_TABLE"); table != "" {
+		store, err := dynamostore.Open(ctx, table, os.Getenv("DYNAMODB_ENDPOINT"))
+		if err != nil {
+			return nil, nil, fmt.Errorf("open dynamodb: %w", err)
+		}
+		return store, func() {}, nil
 	}
 {%- endif %}
 {%- if 'mongodb' in datastores %}

@@ -1,0 +1,51 @@
+"""Integration test: needs Docker.
+
+Run with `uv run pytest -m integration` (deselected by default).
+"""
+
+import json
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.wait_strategies import HttpWaitStrategy
+from tests.artifact_store_contract import ArtifactStoreContract, StoreUnderTest
+
+from {{ package_name }}.adapters.dynamo_artifact_store import DynamoArtifactStore, open_client
+
+pytestmark = pytest.mark.integration
+
+TABLES = Path(__file__).resolve().parent.parent / "infra" / "dynamodb"
+
+
+@pytest.fixture(scope="module")
+def endpoint() -> Iterator[str]:
+    container = (
+        DockerContainer("amazon/dynamodb-local:2.6.1")
+        .with_command("-jar DynamoDBLocal.jar -sharedDb -inMemory")
+        .with_exposed_ports(8000)
+        # Any HTTP answer from the mapped port means DynamoDB Local is serving (GET / returns 400).
+        .waiting_for(HttpWaitStrategy(8000).for_status_code(400))
+    )
+    with pytest.MonkeyPatch.context() as env, container:
+        # DynamoDB Local accepts any credentials.
+        env.setenv("AWS_REGION", "us-east-1")
+        env.setenv("AWS_DEFAULT_REGION", "us-east-1")
+        env.setenv("AWS_ACCESS_KEY_ID", "local")
+        env.setenv("AWS_SECRET_ACCESS_KEY", "local")
+        url = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(8000)}"
+        # Same table definitions the compose migrate job applies.
+        admin = open_client(url)
+        for table in sorted(TABLES.glob("*.json")):
+            admin.create_table(**json.loads(table.read_text(encoding="utf-8")))
+        admin.close()
+        yield url
+
+
+class TestDynamoArtifactStore(ArtifactStoreContract):
+    @pytest.fixture
+    def subject(self, endpoint: str) -> Iterator[StoreUnderTest]:
+        store = DynamoArtifactStore.create("export_artifacts", endpoint)
+        yield StoreUnderTest(store=store, read=store.read)
+        store.close()

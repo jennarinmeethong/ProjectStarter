@@ -30,6 +30,15 @@ services:
 {%- if 'mongodb' in datastores %}
       MONGODB_URL: mongodb://app:${MONGO_PASSWORD:-local-dev-only}@mongodb:27017/app?authSource=admin
 {%- endif %}
+{%- if 'dynamodb' in datastores %}
+      DYNAMODB_TABLE: export_artifacts
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      # DynamoDB Local accepts any credentials; real AWS uses the SDK's default credential chain.
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+{%- endif %}
 {%- if 'redis' in datastores %}
       REDIS_URL: redis://redis:6379/0
 {%- endif %}
@@ -49,6 +58,10 @@ services:
 {%- if 'mongodb' in datastores %}
       mongodb:
         condition: service_healthy
+{%- endif %}
+{%- if 'dynamodb' in datastores %}
+      dynamodb-migrate:
+        condition: service_completed_successfully
 {%- endif %}
 {%- if 'redis' in datastores %}
       redis:
@@ -141,6 +154,36 @@ services:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
       interval: 2s
       retries: 30
+{%- endif %}
+{%- if 'dynamodb' in datastores %}
+
+  dynamodb:
+    # DynamoDB Local: free for development and testing under AWS's DynamoDB Local license (ADR 0003).
+    # In memory: tables and data reset when the container restarts.
+    image: amazon/dynamodb-local:2.6.1
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+
+  # Creates every table in infra/dynamodb (create-table input JSON) that does not exist yet.
+  dynamodb-migrate:
+    image: amazon/aws-cli:2.27.0
+    depends_on:
+      dynamodb:
+        condition: service_started
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+    volumes:
+      - ./infra/dynamodb:/tables:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        ddb() { aws dynamodb --endpoint-url http://dynamodb:8000 "$$@"; } &&
+        for _ in $$(seq 1 60); do ddb list-tables >/dev/null 2>&1 && break; sleep 1; done &&
+        for f in /tables/*.json; do
+        ddb describe-table --table-name "$$(basename "$$f" .json)" >/dev/null 2>&1 ||
+        ddb create-table --cli-input-json "file://$$f" >/dev/null || exit 1;
+        done
 {%- endif %}
 {%- if 'redis' in datastores %}
 

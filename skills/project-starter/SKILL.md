@@ -30,7 +30,7 @@ Use an **absolute** path or a git URL so `copier update` works later.
 | `agent_tools` | any of `claude`, `codex` | both |
 | `guardrail_owner` | optional: `@user` or `@org/team` for `.github/CODEOWNERS` | empty = no CODEOWNERS |
 | `risk_paths` | tier-3 paths that always need owner review | `[auth/, payments/, migrations/, infra/]` |
-| `datastores` | any of `postgres`, `mysql` or `mariadb` (not both), `sqlserver` (Developer edition for dev/test), `mongodb` (also Atlas via mongodb+srv), `redis`: adapters behind the existing port, migrations, Testcontainers integration tests | `[]`; add only what the user asked for, e.g. `-d 'datastores=["postgres"]'` |
+| `datastores` | any of `postgres`, `mysql` or `mariadb` (not both), `sqlserver` (Developer edition for dev/test), `mongodb` (also Atlas via mongodb+srv), `dynamodb` (DynamoDB Local for dev/test), `redis`: adapters behind the existing port, migrations, Testcontainers integration tests | `[]`; add only what the user asked for, e.g. `-d 'datastores=["postgres"]'` |
 | `http_api` | serve the use case over HTTP (Hono / FastAPI / ASP.NET Core) with Playwright API tests and, with `containerize`, an OWASP ZAP baseline scan | `false`; `true` when the user builds a web service or API |
 | `frontend` | TypeScript only: `none`, `react`, `vue` (Vite), `nextjs`, `angular` or `react-native` (Expo; checks run on its web build): UI as a driving adapter, Playwright + axe browser tests, nginx image with a strict CSP | `none` |
 | `containerize` | Dockerfile (multi-stage, non-root), `compose.yaml`, hadolint and a container CI job | `true`; pass `false` for libraries or when the user does not deploy containers |

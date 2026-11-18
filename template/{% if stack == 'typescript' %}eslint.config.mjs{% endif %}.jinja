@@ -54,6 +54,19 @@ const noServerSideJs = [
   },
 ];
 
+// DynamoDB expressions and PartiQL statements carry values as placeholders (:value), never inline (ADR 0003).
+const EXPRESSION_KEY = "/(Expression|Statement)$/";
+const noExpressionsFromStrings = [
+  {
+    selector: `Property[key.name=${EXPRESSION_KEY}] > TemplateLiteral[expressions.length>0]`,
+    message: `Do not interpolate values into DynamoDB expressions. Use :placeholders and ExpressionAttributeValues (${ADR_DATA}).`,
+  },
+  {
+    selector: `Property[key.name=${EXPRESSION_KEY}] > BinaryExpression[operator='+']`,
+    message: `Do not concatenate DynamoDB expressions. Use :placeholders and ExpressionAttributeValues (${ADR_DATA}).`,
+  },
+];
+
 // Hidden inputs make domain/application code non-deterministic and untestable (DIP: inject them as ports).
 const noHiddenInputs = [
   {
@@ -87,7 +100,7 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/ban-ts-comment": ["error", { "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true }],
       "@typescript-eslint/no-explicit-any": "error",
-      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings, ...noServerSideJs],
+      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings, ...noServerSideJs, ...noExpressionsFromStrings],
 
       // Single responsibility: when a unit outgrows these limits, split it by reason to change (ADR 0002 #SRP).
       // Cognitive complexity (how hard a function is to read) replaces cyclomatic `complexity`.
@@ -151,7 +164,7 @@ export default tseslint.config(
         { name: "process", message: `No environment/process access in domain/application. Read config in bootstrap and pass it in (${ADR_DESIGN} #DIP).` },
         { name: "fetch", message: `No I/O in domain/application. Define a port in application and implement it in adapters (${ADR_LAYERS}).` },
       ],
-      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings, ...noServerSideJs, ...noHiddenInputs],
+      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings, ...noServerSideJs, ...noExpressionsFromStrings, ...noHiddenInputs],
       "no-console": ["error"],
     },
   },

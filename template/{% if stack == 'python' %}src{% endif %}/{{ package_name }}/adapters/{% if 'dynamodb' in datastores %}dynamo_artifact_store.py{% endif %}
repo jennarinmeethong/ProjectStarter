@@ -1,0 +1,48 @@
+"""ArtifactStore on DynamoDB.
+
+Table definition: infra/dynamodb/. Items are addressed by key only;
+values never go into expression strings (ADR 0003).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Self, cast
+
+import boto3
+
+if TYPE_CHECKING:
+    from types_boto3_dynamodb.client import DynamoDBClient
+
+
+def open_client(endpoint: str | None = None) -> DynamoDBClient:
+    # The stubs are the "lite" flavour (no per-service overloads), so name the client type here.
+    return cast("DynamoDBClient", boto3.client("dynamodb", endpoint_url=endpoint))
+
+
+class DynamoArtifactStore:
+    def __init__(self, client: DynamoDBClient, table: str) -> None:
+        self._client = client
+        self._table = table
+
+    @classmethod
+    def create(cls, table: str, endpoint: str | None = None) -> Self:
+        """Set endpoint for DynamoDB Local; on AWS the default region and credentials apply."""
+        return cls(open_client(endpoint), table)
+
+    def save(self, job_id: str, content: str) -> str:
+        key = f"exports/{job_id}.csv"
+        self._client.put_item(
+            TableName=self._table,
+            Item={"artifact_key": {"S": key}, "job_id": {"S": job_id}, "body": {"S": content}},
+        )
+        return key
+
+    def read(self, key: str) -> str | None:
+        response = self._client.get_item(
+            TableName=self._table, Key={"artifact_key": {"S": key}}, ConsistentRead=True
+        )
+        item = response.get("Item")
+        return None if item is None else item["body"].get("S")
+
+    def close(self) -> None:
+        self._client.close()

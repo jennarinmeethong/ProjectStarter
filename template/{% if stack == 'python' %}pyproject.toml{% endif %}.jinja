@@ -4,6 +4,7 @@
 {%- if mysql_engine %}{% set _ = deps.append('"PyMySQL>=1.1"') %}{% endif -%}
 {%- if 'sqlserver' in datastores %}{% set _ = deps.append('"mssql-python>=1.10"') %}{% endif -%}
 {%- if 'mongodb' in datastores %}{% set _ = deps.append('"pymongo>=4.10"') %}{% endif -%}
+{%- if 'dynamodb' in datastores %}{% set _ = deps.append('"boto3>=1.40"') %}{% endif -%}
 {%- if 'redis' in datastores %}{% set _ = deps.append('"redis>=6.0"') %}{% endif -%}
 {%- set markers = [] -%}
 {%- if datastores %}{% set _ = markers.append('integration') %}{% endif -%}
@@ -38,6 +39,9 @@ dev = [
     "ruff>=0.12",
 {%- if datastores %}
     "testcontainers>=4.10",
+{%- endif %}
+{%- if 'dynamodb' in datastores %}
+    "types-boto3-lite[dynamodb]>=1.40",
 {%- endif %}
 {%- if mysql_engine %}
     "types-PyMySQL>=1.1",

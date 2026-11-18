@@ -1,0 +1,65 @@
+using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2.Model;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+/// <summary>
+/// IArtifactStore on DynamoDB. Table definition: infra/dynamodb/. Items are addressed by key only;
+/// values never go into expression strings (ADR 0003).
+/// </summary>
+public sealed class DynamoArtifactStore : IArtifactStore, IAsyncDisposable
+{
+    private readonly AmazonDynamoDBClient client;
+    private readonly string table;
+
+    private DynamoArtifactStore(AmazonDynamoDBClient client, string table)
+    {
+        this.client = client;
+        this.table = table;
+    }
+
+    /// <summary>Set endpoint for DynamoDB Local; on AWS the SDK's default region and credential chain apply.</summary>
+    public static DynamoArtifactStore Create(string table, string? endpoint)
+    {
+        var client = string.IsNullOrEmpty(endpoint)
+            ? new AmazonDynamoDBClient()
+            : new AmazonDynamoDBClient(new AmazonDynamoDBConfig { ServiceURL = endpoint });
+        return new DynamoArtifactStore(client, table);
+    }
+
+    public async Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        var request = new PutItemRequest
+        {
+            TableName = table,
+            Item = new Dictionary<string, AttributeValue>(StringComparer.Ordinal)
+            {
+                ["artifact_key"] = new() { S = key },
+                ["job_id"] = new() { S = jobId },
+                ["body"] = new() { S = content },
+            },
+        };
+        await client.PutItemAsync(request, cancellationToken).ConfigureAwait(false);
+        return key;
+    }
+
+    public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        var request = new GetItemRequest
+        {
+            TableName = table,
+            Key = new Dictionary<string, AttributeValue>(StringComparer.Ordinal) { ["artifact_key"] = new() { S = key } },
+            ConsistentRead = true,
+        };
+        var response = await client.GetItemAsync(request, cancellationToken).ConfigureAwait(false);
+        return response.Item is { } item && item.TryGetValue("body", out var body) ? body.S : null;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        client.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

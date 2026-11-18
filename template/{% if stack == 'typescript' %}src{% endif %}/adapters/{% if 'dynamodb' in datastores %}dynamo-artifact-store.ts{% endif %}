@@ -1,0 +1,50 @@
+import { DynamoDBClient, GetItemCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+export interface DynamoSettings {
+  readonly table: string;
+  /** Set for DynamoDB Local; omit for AWS, where the SDK's default region and credential chain apply. */
+  readonly endpoint?: string | undefined;
+}
+
+/**
+ * ArtifactStore on DynamoDB. Table definition: infra/dynamodb/. Items are addressed by key only; values never
+ * go into expression strings (ADR 0003).
+ */
+export class DynamoArtifactStore implements ArtifactStore {
+  readonly #client: DynamoDBClient;
+  readonly #table: string;
+
+  constructor(client: DynamoDBClient, table: string) {
+    this.#client = client;
+    this.#table = table;
+  }
+
+  static create(settings: DynamoSettings): DynamoArtifactStore {
+    const client = new DynamoDBClient(settings.endpoint ? { endpoint: settings.endpoint } : {});
+    return new DynamoArtifactStore(client, settings.table);
+  }
+
+  async save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    await this.#client.send(
+      new PutItemCommand({
+        TableName: this.#table,
+        Item: { artifact_key: { S: key }, job_id: { S: jobId }, body: { S: content } },
+      }),
+    );
+    return key;
+  }
+
+  async read(key: string): Promise<string | undefined> {
+    const result = await this.#client.send(
+      new GetItemCommand({ TableName: this.#table, Key: { artifact_key: { S: key } }, ConsistentRead: true }),
+    );
+    return result.Item?.["body"]?.S;
+  }
+
+  close(): Promise<void> {
+    this.#client.destroy();
+    return Promise.resolve();
+  }
+}
