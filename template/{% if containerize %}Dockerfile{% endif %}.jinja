@@ -15,7 +15,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
-{%- if http_api %}
+{%- if serve_http %}
 # The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
 ENV HOST=0.0.0.0 PORT=8080
 EXPOSE 8080
@@ -41,7 +41,7 @@ RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid 1000
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
-{%- if http_api %}
+{%- if serve_http %}
 # The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
 ENV HOST=0.0.0.0 PORT=8080
 EXPOSE 8080
@@ -61,7 +61,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 COPY --from=build /out/app /app
-{%- if http_api %}
+{%- if serve_http %}
 # The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
 ENV HOST=0.0.0.0 PORT=8080
 EXPOSE 8080
@@ -79,7 +79,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,targe
 
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 COPY --from=build /app /app
-{%- if http_api %}
+{%- if serve_http %}
 # The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
 ENV HOST=0.0.0.0 PORT=8080
 EXPOSE 8080
@@ -95,10 +95,10 @@ COPY global.json Directory.Build.props Directory.Packages.props .editorconfig Ba
 COPY src ./src
 RUN dotnet publish src/{{ dotnet_name }}.Bootstrap/{{ dotnet_name }}.Bootstrap.csproj -c Release -o /app
 
-FROM mcr.microsoft.com/dotnet/{% if http_api %}aspnet{% else %}runtime{% endif %}:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/{% if serve_http %}aspnet{% else %}runtime{% endif %}:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app .
-{%- if http_api %}
+{%- if serve_http %}
 # The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
 ENV HOST=0.0.0.0 PORT=8080
 EXPOSE 8080

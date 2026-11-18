@@ -375,6 +375,54 @@ frontend_seeds_react() {
   seeded "react: hook called conditionally (rules-of-hooks)" src/ui/App.tsx '\nexport function Broken({ on }: { readonly on: boolean }): JSX.Element {\n  if (on) {\n    useState(0);\n  }\n  return <p />;\n}\n' npm run lint
 }
 
+ssr_test_ui="npm --prefix e2e-ui install --no-audit --no-fund && npm --prefix e2e-ui test"
+
+ssr_checks() { # ssr_checks <stack> <install-cmd> <ui-file> <csp-sed-expression> <application-file> <framework-import-text> <arch-cmd>
+  # A separate render with the server-rendered UI (frontend=ssr, ADR 0005): verify, browser flows + axe, ZAP from /,
+  # then seeded violations: the page CSP removed (sed applied to every tracked source file), the template engine
+  # imported in application, and an unlabeled <input> added to the page template (<ui-file>).
+  local dir="$work/$1-ssr" image="project-starter-ssr-$1" out
+  render "$1" '["claude"]' "$dir" -d frontend=ssr || { fail "render frontend=ssr"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base
+  # Only the two IGNOREs every scan has (10049 no-store, 10109 modern web app): the UI adds none.
+  [ -f .zap/rules.tsv ] && grep -q '\.zap/rules\.tsv' AGENTS.md && [ "$(grep -c $'\tIGNORE\t' .zap/rules.tsv)" = 2 ] \
+    && [ "$(wc -l < AGENTS.md)" -lt 60 ] && pass "ssr: ZAP rules protected, no new IGNORE, AGENTS.md short" \
+    || fail "ssr: ZAP rules missing, unprotected or relaxed"
+  bash -c "$2" >/dev/null 2>&1
+  verify "ssr: $1 verify" "${verify_cmd[$1]}"
+  npm --prefix e2e-ui install --no-audit --no-fund >/dev/null 2>&1 && (cd e2e-ui && npx playwright install chromium >/dev/null 2>&1)
+  verify "ssr: browser flows + axe (Playwright)" "$ssr_test_ui"
+  export MSYS_NO_PATHCONV=1
+  verify "ssr: zap baseline of the UI (from /)" "docker build -q -t $image . && DAST_PATH=/ bash ci/dast.sh $image"
+  git ls-files -z -- . ':!tests' ':!docs' ':!e2e-ui' ':!ci' ':!.github' ':!*.md' | xargs -0 sed -i "$4"
+  if out=$(bash -c "docker build -q -t $image-seed . >/dev/null && DAST_PATH=/ bash ci/dast.sh $image-seed" 2>&1); then
+    fail "ssr: zap: missing Content-Security-Policy (should have failed)"
+  elif grep -q '10038' <<<"$out"; then pass "ssr: zap: missing Content-Security-Policy rejected"
+  else fail "ssr: zap: missing Content-Security-Policy failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'; fi
+  git checkout -q -- .
+  unset MSYS_NO_PATHCONV
+  seeded "ssr: template engine imported in application" "$5" "$6" bash -c "$7"
+  sed -i 's#</form>#  <input name="seeded">\n&#' "$3"
+  if out=$(bash -c "$ssr_test_ui" 2>&1); then fail "ssr: axe: unlabeled input (should have failed)"
+  elif grep -q '"id": "label"' <<<"$out"; then pass "ssr: axe: unlabeled input rejected"
+  else fail "ssr: axe: unlabeled input failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'; fi
+  git checkout -q -- "$3"
+  popd >/dev/null || return
+}
+
+ssr_api_checks() { # ssr_api_checks <stack> <install-cmd> <e2e-cmd>: the JSON API and the UI share one server
+  local dir="$work/$1-ssr-api"
+  render "$1" '["codex"]' "$dir" -d frontend=ssr -d http_api=true -d containerize=false || { fail "render frontend=ssr http_api=true"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base
+  bash -c "$2" >/dev/null 2>&1
+  verify "ssr + api: $1 verify" "${verify_cmd[$1]}"
+  verify "ssr + api: API tests against the shared server" "$3"
+  verify "ssr + api: browser flows + axe (Playwright)" "$ssr_test_ui"
+  popd >/dev/null || return
+}
+
 secret_checks() { # secret_checks: gitleaks is clean on the render and rejects a committed token
   local vol gitleaks="zricethezav/gitleaks:v8.30.1"
   vol=$(docker_vol)
@@ -639,6 +687,10 @@ for stack in "${stacks[@]}"; do
       seeded "import-linter: web framework imported in application" src/demo_app/application/complete_export.py '\nimport fastapi\n\nFRAMEWORK = fastapi\n' uv run lint-imports
       seeded "import-linter: driver imported in application" src/demo_app/application/complete_export.py '\nimport psycopg\n\nDRIVER = psycopg\n' uv run lint-imports
       seeded "import-linter: driver imported in bootstrap" src/demo_app/bootstrap/main.py '\nimport redis\n\nDRIVER = redis\n' uv run lint-imports
+      # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
+      ssr_checks python "uv sync" src/demo_app/adapters/web/templates/index.html '/"Content-Security-Policy":/d' \
+        src/demo_app/application/complete_export.py '\nimport jinja2\n\nENGINE = jinja2\n' "uv run lint-imports"
+      ssr_api_checks python "uv sync" "uv run pytest -q -p no:warnings -m e2e"
       seeded "ruff: SQL built with an f-string" src/demo_app/adapters/postgres_artifact_store.py '\n\ndef unsafe(connection: psycopg.Connection[TupleRow], job_id: str) -> None:\n    connection.execute(f"SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27")\n' uv run ruff check .
       # Design rules (ADR 0002), one violation at a time.
       seeded "ruff: ambient randomness in domain" src/demo_app/domain/export_job.py '\n\nimport random\n\n\ndef roll() -> float:\n    return random.random()\n' uv run ruff check .

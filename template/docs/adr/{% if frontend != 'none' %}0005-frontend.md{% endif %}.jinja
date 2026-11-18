@@ -8,17 +8,36 @@
 UI เป็นจุดที่ logic ทางธุรกิจรั่วเข้ามาง่ายที่สุด (validation ซ้ำ, การคำนวณใน component, เรียก storage ตรง ๆ) และเป็นที่ที่ agent มักแก้ให้ "ดูผ่าน" โดยไม่มีใครเห็นปัญหาการเข้าถึง (accessibility) หรือ header ด้านความปลอดภัย
 
 ## การตัดสินใจ
+{%- if frontend == 'ssr' %}
+1. **UI เป็น driving adapter:** handler ของหน้าเว็บรับ form แล้วเรียก use case เดียวกับที่ CLI/HTTP API ใช้ domain และ application ห้าม import web framework หรือ template engine
+2. **Composition root มีที่เดียว:** {% if stack == 'python' %}`{{ stk.layers.bootstrap }}/main.py` สร้าง store แล้วส่งให้ `create_app` (`adapters/http/app.py`) ซึ่ง mount route ของ UI จาก `adapters/web` (`create_router(store)`){% endif %}; {% if http_api %}JSON API และ UI ใช้ server เดียวกัน{% else %}server เดียวกันตอบ `/healthz`{% endif %} โดยข้อมูลอยู่ฝั่ง server ใน store ที่ bootstrap เลือก ไม่ใช้ storage ของเบราว์เซอร์
+3. **Render ที่ server ไม่มี JavaScript:** HTML form ธรรมดา (`POST /` แล้ว render หน้าเดิมพร้อมผลลัพธ์) template escape ทุกค่าอัตโนมัติ ({% if stack == 'python' %}Jinja2 `autoescape=True`{% endif %}) และ CSS เป็นไฟล์เดียว `/static/app.css`
+4. **CSRF:** {% if stack == 'dotnet' %}antiforgery ของ ASP.NET Core{% else %}token สุ่ม 32 byte (base64url) อยู่ทั้งใน cookie `__Host-csrf` (`Secure`, `HttpOnly`, `SameSite=Strict`) และ hidden field `csrf_token` เทียบแบบ constant-time ตอน POST และปฏิเสธเมื่อมี `Sec-Fetch-Site` ที่ไม่ใช่ `same-origin`{% endif %} — ไม่ผ่านได้ 403 ชื่อ field เป็นชื่อที่ ZAP รู้จัก จึงไม่ต้อง `IGNORE` กฎ 10202
+5. **CSP ของหน้า:** `default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'` บวก header ชุดเดียวกับ HTTP adapter และ COOP/COEP, Permissions-Policy ไม่มี inline script/style จึงไม่ต้องมี `'unsafe-inline'`{% if http_api %} — path ของ API ยังได้ CSP ของ API (`default-src 'none'; frame-ancestors 'none'`){% endif %}
+6. **Accessibility เป็นเกณฑ์ ไม่ใช่ข้อแนะนำ:** label ทุก control, `role="status"` สำหรับผลลัพธ์ และ axe (WCAG 2.1 AA) ในเบราว์เซอร์จริงทุก PR
+{%- else %}
 1. **UI เป็น driving adapter:** component รับ input แล้วเรียก use case เดียวกับที่ CLI/HTTP ใช้ domain และ application ห้าม import framework ของ UI
 2. **Composition root ของเบราว์เซอร์มีที่เดียว:** {% if frontend == 'react' %}`src/ui/main.tsx`{% elif frontend == 'vue' %}`src/ui/main.ts`{% elif frontend == 'nextjs' %}`src/app/page.tsx` (client component){% elif frontend == 'angular' %}`src/ui/main.ts` (provider ของ `ARTIFACT_STORE`){% elif frontend == 'react-native' %}`src/ui/Root.tsx` (ใช้ทั้ง web และ native){% endif %} เป็นไฟล์เดียวที่เลือก adapter (เช่น `LocalStorageArtifactStore`) แล้ว inject เข้า component
 3. **Adapter ฝั่งเบราว์เซอร์ผ่าน contract test เดียวกัน** กับ adapter อื่นของ port (`tests/contracts/artifact-store.ts`)
 4. **Accessibility เป็นเกณฑ์ ไม่ใช่ข้อแนะนำ:** lint ({% if frontend == 'vue' %}`vuejs-accessibility`{% elif frontend == 'angular' %}angular-eslint `templateAccessibility`{% elif frontend == 'react-native' %}กฎ `no-restricted-syntax` ที่บังคับ role/aria-label บน touchable และ alt บน Image{% else %}`jsx-a11y` strict{% endif %}) ตอนเขียน และ axe (WCAG 2.1 AA) ในเบราว์เซอร์จริงทุก PR
 5. **ไม่มี inline script/style:** build ไม่ใส่ inline script ทำให้ CSP เข้มได้โดยไม่ต้องมี `'unsafe-inline'`
+{%- endif %}
 
 ## การบังคับใช้
 | กฎ | เครื่องมือ |
 |---|---|
+{%- if frontend == 'ssr' %}
+{%- if stack == 'python' %}
+| web framework และ template engine อยู่นอก domain/application | import-linter contract `web` (`fastapi`, `starlette`, `uvicorn`, `jinja2`) — `{{ cmd.arch }}` |
+{%- if datastores %}
+| UI ไม่เรียก datastore ตรง | import-linter contract `drivers` (`adapters.web` เป็น source) |
+{%- endif %}
+| form, CSRF, escaping, header ของหน้า | `tests/test_web.py` (FastAPI `TestClient`) ใน `{{ cmd.test }}` |
+{%- endif %}
+{%- else %}
 | framework อยู่นอก domain/application | dependency-cruiser `web-frameworks-only-in-adapters` |
 | UI ไม่เรียก datastore ตรง | dependency-cruiser `ui-not-to-datastore-drivers` |
+{%- endif %}
 {%- if frontend in ['react', 'nextjs'] %}
 | React ถูกต้อง, hooks, accessibility | ESLint `@eslint-react` (recommended-type-checked), `react-hooks` (rules-of-hooks, exhaustive-deps), `jsx-a11y-x` strict |
 | พฤติกรรมของ component | Vitest + Testing Library (`src/ui/*.test.tsx`, jsdom) |
@@ -34,7 +53,9 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 | พฤติกรรมของ component | Vitest + Vue Test Utils (`src/ui/*.test.ts`, jsdom) |
 {%- endif %}
 | flow ของผู้ใช้และ accessibility ในเบราว์เซอร์ | Playwright (Chromium) + axe ใน `e2e-ui/` — `{{ cmd.test_ui }}`, job `ui` |
-{%- if containerize %}
+{%- if containerize and frontend == 'ssr' %}
+| header ของหน้าเว็บที่ deploy จริง (CSP, X-Frame-Options, COOP/COEP, Permissions-Policy) | OWASP ZAP baseline ที่เริ่มสแกนจาก `/` บน image เดียวกับ server (`DAST_PATH=/ bash ci/dast.sh <image>`), job `dast` |
+{%- elif containerize %}
 | header ของหน้าเว็บที่ deploy จริง (CSP, X-Frame-Options, COOP/COEP, Permissions-Policy) | {% if frontend == 'nextjs' %}`src/proxy.ts` + `next.config.ts`{% else %}`nginx.conf`{% endif %} + OWASP ZAP baseline ที่เริ่มสแกนจาก `/` (`DAST_PATH=/ bash ci/dast.sh <image>`), job `dast` |
 | image ของเว็บไม่รันเป็น root | `Dockerfile.web` ({% if frontend == 'nextjs' %}Next.js standalone บน `node:24-slim`, UID 1000{% else %}nginx-unprivileged, UID 101{% endif %}) + hadolint + `ci/check-dockerfile.sh` |
 {%- endif %}
@@ -44,8 +65,8 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 - Build และทดสอบบนอุปกรณ์จริง (iOS/Android): Playwright, axe และ ZAP ตรวจเฉพาะ web build — เพิ่ม EAS Build และ Maestro หรือ Detox เมื่อเริ่มส่งแอปมือถือ
 - Native storage adapter: บนมือถือ `Root.tsx` ใช้ in-memory จนกว่าจะเพิ่ม adapter (เช่น expo-sqlite) หลัง port เดียวกันพร้อม contract test
 {%- endif %}
-- Visual regression (screenshot diff) และการทดสอบบนหลายเบราว์เซอร์ (เพิ่ม project ใน `playwright.ui.config.ts`)
+- Visual regression (screenshot diff) และการทดสอบบนหลายเบราว์เซอร์ (เพิ่ม project ใน `{% if frontend == 'ssr' %}e2e-ui/playwright.config.ts{% else %}playwright.ui.config.ts{% endif %}`)
 - Authentication ของผู้ใช้และการเก็บ token (ห้ามเก็บ secret ใน Web Storage)
 
 ## ผลที่ตามมา
-หน้าจอใหม่ต้องมี component test และ Playwright flow ที่ผ่าน axe ก่อน merge
+หน้าจอใหม่ต้องมี {% if frontend == 'ssr' %}test ของ handler{% else %}component test{% endif %} และ Playwright flow ที่ผ่าน axe ก่อน merge

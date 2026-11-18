@@ -1,5 +1,6 @@
 {%- set deps = [] -%}
-{%- if http_api %}{% set _ = deps.append('"fastapi>=0.120"') %}{% set _ = deps.append('"uvicorn>=0.38"') %}{% endif -%}
+{%- if serve_http %}{% set _ = deps.append('"fastapi>=0.120"') %}{% set _ = deps.append('"uvicorn>=0.38"') %}{% endif -%}
+{%- if frontend == 'ssr' %}{% set _ = deps.append('"jinja2>=3.1.6"') %}{% endif -%}
 {%- if 'postgres' in datastores %}{% set _ = deps.append('"psycopg[binary]>=3.2"') %}{% endif -%}
 {%- if mysql_engine %}{% set _ = deps.append('"PyMySQL>=1.1"') %}{% endif -%}
 {%- if 'sqlserver' in datastores %}{% set _ = deps.append('"mssql-python>=1.10"') %}{% endif -%}
@@ -32,6 +33,9 @@ dependencies = []
 [dependency-groups]
 dev = [
     "hypothesis>=6.100",
+{%- if frontend == 'ssr' %}
+    "httpx2>=2.16",
+{%- endif %}
     "import-linter>=2.1",
     "mutmut>=3.8,<4",
 {%- if http_api %}

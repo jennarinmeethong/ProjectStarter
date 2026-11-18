@@ -10,6 +10,11 @@
 10049	IGNORE	(Non-Storable Content)
 # Informational only: suggests the Ajax spider for JavaScript apps; the UI flows are covered by Playwright.
 10109	IGNORE	(Modern Web Application)
+{%- if frontend == 'ssr' %}
+# Server-rendered UI only: an informational alert (not a finding) that the CSRF cookie looks like session handling.
+# Reported, not ignored; the cookie's flags are checked by the cookie rules (10010, 10011, 10054) and by tests.
+10112	INFO	(Session Management Response Identified)
+{%- endif %}
 {%- if frontend == 'react-native' %}
 # React Native web bundle only: minified library code contains large numbers that look like Unix timestamps.
 10096	IGNORE	(Timestamp Disclosure - Unix)

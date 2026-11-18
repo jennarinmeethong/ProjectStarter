@@ -1,0 +1,51 @@
+// User flows in a real browser, plus an axe accessibility scan (WCAG 2.1 AA) of every screen.
+import AxeBuilder from "@axe-core/playwright";
+import { expect, test } from "@playwright/test";
+
+test("completes an export from the form", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Job id").fill("ui-1");
+  await page.getByLabel("Content").fill("id,name");
+  await page.getByRole("button", { name: "Complete export" }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved as exports/ui-1.csv");
+});
+
+test("explains an invalid job id", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Job id").fill("not valid");
+  await page.getByLabel("Content").fill("x");
+  await page.getByRole("button", { name: "Complete export" }).click();
+  await expect(page.getByRole("status")).toContainText("Enter a job id");
+});
+
+test("has no accessibility violations", async ({ page }) => {
+  await page.goto("/");
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(results.violations).toEqual([]);
+});
+{%- if frontend == 'ssr' %}
+
+// Server-rendered UI only: user input is escaped, and the form is protected against cross-site requests.
+test("shows user input as text, never as markup", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Job id").fill("<script>x</script>");
+  await page.getByLabel("Content").fill("<b>x</b>");
+  await page.getByRole("button", { name: "Complete export" }).click();
+  await expect(page.getByRole("status")).toHaveText("Enter a job id (letters, digits, - or _) and some content.");
+  await expect(page.getByLabel("Job id")).toHaveValue("<script>x</script>");
+  await expect(page.getByLabel("Content")).toHaveValue("<b>x</b>");
+  await expect(page.locator("script, b")).toHaveCount(0);
+});
+
+test("rejects a cross-site post and a mismatched token", async ({ page }) => {
+  await page.goto("/");
+  const token = await page.locator('input[name="csrf_token"]').inputValue();
+  const form = { csrf_token: token, job_id: "ui-csrf", content: "x" };
+  const crossSite = await page.request.post("/", { headers: { "Sec-Fetch-Site": "cross-site" }, form });
+  expect(crossSite.status()).toBe(403);
+  const mismatched = await page.request.post("/", { form: { ...form, csrf_token: `${token}x` } });
+  expect(mismatched.status()).toBe(403);
+  const sameOrigin = await page.request.post("/", { headers: { "Sec-Fetch-Site": "same-origin" }, form });
+  expect(sameOrigin.status()).toBe(200);
+});
+{%- endif %}

@@ -1,0 +1,154 @@
+"""Server-rendered UI (ADR 0005): form flow, CSRF protection, escaping and headers, in process."""
+
+import re
+
+import pytest
+from fastapi.testclient import TestClient
+
+from {{ package_name }}.adapters.http.app import create_app
+from {{ package_name }}.adapters.in_memory_artifact_store import InMemoryArtifactStore
+
+PAGE_CSP = (
+    "default-src 'none'; style-src 'self'; form-action 'self'; "
+    "frame-ancestors 'none'; base-uri 'none'"
+)
+INVALID = "Enter a job id (letters, digits, - or _) and some content."
+TOKEN_FIELD = re.compile(r'name="csrf_token" value="([A-Za-z0-9_-]{43})"')
+
+
+class FailingStore:
+    def save(self, job_id: str, content: str) -> str:
+        raise OSError(f"disk full while saving {job_id} ({len(content)} chars)")
+
+
+@pytest.fixture
+def store() -> InMemoryArtifactStore:
+    return InMemoryArtifactStore()
+
+
+@pytest.fixture
+def client(store: InMemoryArtifactStore) -> TestClient:
+    # HTTPS so the client sends the Secure `__Host-csrf` cookie back, as a browser does.
+    return TestClient(create_app(store), base_url="https://testserver")
+
+
+def token_from(client: TestClient) -> str:
+    match = TOKEN_FIELD.search(client.get("/").text)
+    assert match is not None
+    return match.group(1)
+
+
+def test_form_sets_the_csrf_cookie_and_the_matching_hidden_field(client: TestClient) -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "<h1>Complete an export</h1>" in response.text
+    cookie = response.headers["set-cookie"]
+    assert cookie.startswith("__Host-csrf=")
+    for attribute in ("Path=/", "Secure", "HttpOnly", "SameSite=strict"):
+        assert attribute.lower() in cookie.lower()
+    assert client.cookies["__Host-csrf"] == token_from(client)
+
+
+def test_page_sends_the_page_csp_and_the_security_headers(client: TestClient) -> None:
+    for path in ("/", "/static/app.css"):
+        headers = client.get(path).headers
+        assert headers["content-security-policy"] == PAGE_CSP
+        assert headers["x-content-type-options"] == "nosniff"
+        assert headers["x-frame-options"] == "DENY"
+        assert "server" not in headers
+
+
+def test_completes_an_export(client: TestClient, store: InMemoryArtifactStore) -> None:
+    response = client.post(
+        "/", data={"csrf_token": token_from(client), "job_id": "ui-1", "content": "id,name"}
+    )
+    assert response.status_code == 200
+    assert "Saved as exports/ui-1.csv" in response.text
+    assert store.read("exports/ui-1.csv") == "id,name"
+
+
+@pytest.mark.parametrize(
+    ("job_id", "content"),
+    [("not valid", "x"), ("ok", ""), ("x" * 65, "x"), ("ok", "x" * 1_000_001)],
+)
+def test_rejects_invalid_input(client: TestClient, job_id: str, content: str) -> None:
+    response = client.post(
+        "/", data={"csrf_token": token_from(client), "job_id": job_id, "content": content}
+    )
+    assert response.status_code == 400
+    assert INVALID in response.text
+
+
+def test_escapes_user_input(client: TestClient) -> None:
+    response = client.post(
+        "/", data={"csrf_token": token_from(client), "job_id": "<script>", "content": "x"}
+    )
+    assert response.status_code == 400
+    assert "<script>" not in response.text
+    assert "&lt;script&gt;" in response.text
+
+
+@pytest.mark.parametrize("token", [None, "", "x" * 43])
+def test_rejects_a_missing_or_mismatched_token(
+    client: TestClient, store: InMemoryArtifactStore, token: str | None
+) -> None:
+    token_from(client)
+    data = {"job_id": "ui-2", "content": "x"} | ({} if token is None else {"csrf_token": token})
+    assert client.post("/", data=data).status_code == 403
+    assert store.read("exports/ui-2.csv") is None
+
+
+def test_rejects_a_post_without_the_cookie(store: InMemoryArtifactStore) -> None:
+    token = token_from(TestClient(create_app(store), base_url="https://testserver"))
+    fresh = TestClient(create_app(store), base_url="https://testserver")
+    response = fresh.post("/", data={"csrf_token": token, "job_id": "ui-3", "content": "x"})
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("site", ["cross-site", "same-site", "none"])
+def test_rejects_a_post_from_another_site(client: TestClient, site: str) -> None:
+    response = client.post(
+        "/",
+        data={"csrf_token": token_from(client), "job_id": "ui-4", "content": "x"},
+        headers={"Sec-Fetch-Site": site},
+    )
+    assert response.status_code == 403
+
+
+def test_accepts_a_same_origin_post(client: TestClient) -> None:
+    response = client.post(
+        "/",
+        data={"csrf_token": token_from(client), "job_id": "ui-5", "content": "x"},
+        headers={"Sec-Fetch-Site": "same-origin"},
+    )
+    assert response.status_code == 200
+
+
+def test_reports_a_storage_failure_without_details() -> None:
+    client = TestClient(create_app(FailingStore()), base_url="https://testserver")
+    response = client.post(
+        "/", data={"csrf_token": token_from(client), "job_id": "ui-6", "content": "x"}
+    )
+    assert response.status_code == 500
+    assert "The export could not be saved." in response.text
+    assert "disk full" not in response.text
+
+
+def test_health_check_answers_ok(client: TestClient) -> None:
+    assert client.get("/healthz").json() == {"status": "ok"}
+{%- if http_api %}
+
+
+def test_api_keeps_its_own_csp_next_to_the_page(client: TestClient) -> None:
+    response = client.post("/exports/api-1/complete", json={"content": "x"})
+    assert response.status_code == 201
+    api_csp = "default-src 'none'; frame-ancestors 'none'"
+    assert response.headers["content-security-policy"] == api_csp
+    assert client.get("/").headers["content-security-policy"] == PAGE_CSP
+{%- else %}
+
+
+def test_json_api_is_absent_without_http_api(client: TestClient) -> None:
+    response = client.post("/exports/x/complete", json={"content": "x"})
+    assert response.status_code == 404
+{%- endif %}

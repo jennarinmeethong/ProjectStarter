@@ -1,10 +1,10 @@
-{%- if datastores or http_api -%}
+{%- if datastores or serve_http -%}
 import os
 {%- if datastores %}
 from collections.abc import Generator
 from contextlib import contextmanager
 {%- endif %}
-{%- if http_api %}
+{%- if serve_http %}
 
 import uvicorn
 {%- endif %}
@@ -16,7 +16,7 @@ from {{ package_name }}.adapters.cosmos_artifact_store import CosmosArtifactStor
 {%- if 'dynamodb' in datastores -%}
 from {{ package_name }}.adapters.dynamo_artifact_store import DynamoArtifactStore
 {% endif -%}
-{%- if http_api -%}
+{%- if serve_http -%}
 from {{ package_name }}.adapters.http.app import create_app
 {% endif -%}
 from {{ package_name }}.adapters.in_memory_artifact_store import InMemoryArtifactStore
@@ -41,7 +41,7 @@ from {{ package_name }}.adapters.s3_artifact_store import S3ArtifactStore
 {%- if 'sqlserver' in datastores %}
 from {{ package_name }}.adapters.sqlserver_artifact_store import SqlServerArtifactStore
 {%- endif %}
-{%- if http_api %}
+{%- if serve_http %}
 {%- if datastores %}
 from {{ package_name }}.application.complete_export import ArtifactStore
 {%- endif %}
@@ -152,7 +152,7 @@ def open_store() -> Generator[ArtifactStore, None, None]:
 {%- endif %}
     yield InMemoryArtifactStore()
 {%- endif %}
-{%- if http_api %}
+{%- if serve_http %}
 
 
 def main() -> None:
