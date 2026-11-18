@@ -21,7 +21,17 @@ public sealed class ExportJobTests
     [Fact]
     public void RejectsBlankArtifactKey()
     {
-        Assert.Throws<ArgumentException>(() => ExportTransitions.Complete(new ExportJob.Running("job-1"), "  "));
+        var error = Assert.Throws<ArgumentException>(() => ExportTransitions.Complete(new ExportJob.Running("job-1"), "  "));
+
+        Assert.Equal("artifactKey", error.ParamName);
+        Assert.Contains("artifact key", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RejectsMissingJob()
+    {
+        Assert.Throws<ArgumentNullException>(() => ExportTransitions.Start(null!));
+        Assert.Throws<ArgumentNullException>(() => ExportTransitions.Complete(null!, "exports/job-1.csv"));
     }
 
     [Property]

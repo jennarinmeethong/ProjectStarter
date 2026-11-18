@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { completeExport, startExport } from "./export-job.ts";
 
 describe("export job", () => {
+  it("starts a queued job", () => {
+    expect(startExport({ kind: "queued", id: "job-1" })).toEqual({ kind: "running", id: "job-1" });
+  });
+
   it("completes a running job with its artifact key", () => {
     const running = startExport({ kind: "queued", id: "job-1" });
     expect(completeExport(running, "exports/job-1.csv")).toEqual({
@@ -13,7 +17,7 @@ describe("export job", () => {
   });
 
   it("rejects a blank artifact key", () => {
-    expect(() => completeExport({ kind: "running", id: "job-1" }, "  ")).toThrow();
+    expect(() => completeExport({ kind: "running", id: "job-1" }, "  ")).toThrow(/artifact key/);
   });
 
   it("keeps the job id and key for any non-blank key (property)", () => {
