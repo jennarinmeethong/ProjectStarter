@@ -18,7 +18,13 @@ path = "src/main.rs"
 adapters = { path = "../adapters" }
 application = { path = "../application" }
 domain = { path = "../domain" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"{% if http_api %}, "net", "signal"{% endif %}] }
-{%- if http_api %}
+tokio = { version = "1", features = ["macros", "rt-multi-thread"{% if serve_http %}, "net", "signal"{% endif %}] }
+{%- if serve_http %}
 axum = "0.8"
+{%- endif %}
+{%- if frontend == 'ssr' and http_api %}
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", default-features = false, features = ["util"] }
 {%- endif %}

@@ -1,0 +1,649 @@
+//! Server-rendered UI (driving side): decodes the form, calls the use case and renders the result.
+//! Domain and application never see HTTP or templates (ADR 0001, ADR 0005).
+//!
+//! CSRF protection (ADR 0005): a random token in a `__Host-` cookie, repeated in a hidden field and compared
+//! in constant time, plus a Fetch Metadata check: browsers say where a request comes from in `Sec-Fetch-Site`.
+
+use application::{ArtifactStore, complete_export};
+use askama::Template;
+use axum::Router;
+use axum::body::Body;
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use domain::{Queued, start};
+use subtle::ConstantTimeEq as _;
+
+const MAX_CONTENT_LENGTH: usize = 1_000_000;
+/// Worst case for the form body: every character is 4 UTF-8 bytes, each percent-encoded as 3.
+const MAX_FORM_BYTES: usize = 12 * MAX_CONTENT_LENGTH + 1024;
+const MAX_FORM_FIELDS: usize = 10;
+
+const COOKIE_NAME: &str = "__Host-csrf";
+const FIELD_NAME: &str = "csrf_token";
+const TOKEN_BYTES: usize = 32;
+/// 32 bytes as base64url without padding.
+const TOKEN_LENGTH: usize = 43;
+
+const INVALID_MESSAGE: &str = "Enter a job id (letters, digits, - or _) and some content.";
+const EXPIRED_MESSAGE: &str = "The form has expired. Reload the page and try again.";
+const SAVE_FAILED_MESSAGE: &str = "The export could not be saved.";
+
+const PAGE_CSP: &str =
+    "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+const API_CSP: &str = "default-src 'none'; frame-ancestors 'none'";
+
+const STYLESHEET: &str = include_str!("../static/app.css");
+
+/// What the page shows. askama escapes every field.
+#[derive(Template)]
+#[template(path = "index.html")]
+struct Page<'a> {
+    token: &'a str,
+    job_id: &'a str,
+    content: &'a str,
+    message: &'a str,
+}
+
+/// The form page, its stylesheet and `/healthz`, with security headers on every response. Unknown paths answer 404
+/// (bootstrap may route them elsewhere with `fallback_service`, e.g. to the JSON API).
+pub fn web_router<S>(store: S) -> Router
+where
+    S: ArtifactStore + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/", get(show).post(submit::<S>))
+        .route("/static/app.css", get(stylesheet))
+        .route("/healthz", get(healthz))
+        .fallback(not_found)
+        .layer(middleware::from_fn(security_headers))
+        .with_state(store)
+}
+
+async fn show(headers: HeaderMap) -> Response {
+    match session_token(&headers) {
+        Some(token) => render(StatusCode::OK, &Page { token: &token, job_id: "", content: "", message: "" }),
+        None => internal_error(),
+    }
+}
+
+/// Checks, in order: where the request came from, the form body, the CSRF token, the input; then saves.
+async fn submit<S>(State(store): State<S>, headers: HeaderMap, body: Body) -> Response
+where
+    S: ArtifactStore + Clone + Send + Sync + 'static,
+{
+    let Some(token) = session_token(&headers) else { return internal_error() };
+    let refuse = |status, message| render(status, &Page { token: &token, job_id: "", content: "", message });
+    if !same_origin(&headers) {
+        return refuse(StatusCode::FORBIDDEN, EXPIRED_MESSAGE);
+    }
+    let Some(form) = read_form(body).await else { return refuse(StatusCode::BAD_REQUEST, INVALID_MESSAGE) };
+    let cookie = cookie_token(&headers).unwrap_or_default();
+    if !tokens_match(&cookie, form.get(FIELD_NAME).map_or("", String::as_str)) {
+        return refuse(StatusCode::FORBIDDEN, EXPIRED_MESSAGE);
+    }
+    let id = form.get("job_id").map_or("", String::as_str);
+    let content = form.get("content").map_or("", String::as_str);
+    let shown = |message| Page { token: &token, job_id: id, content, message };
+    if !is_valid_job_id(id) || content.is_empty() || content.chars().count() > MAX_CONTENT_LENGTH {
+        return render(StatusCode::BAD_REQUEST, &shown(INVALID_MESSAGE));
+    }
+    match complete_export(&store, start(Queued::new(id)), content).await {
+        Ok(ready) => render(StatusCode::OK, &shown(&format!("Saved as {}", ready.artifact_key()))),
+        // The details stay out of the page; the log is the operator's to wire up (ADR 0005).
+        Err(_) => render(StatusCode::INTERNAL_SERVER_ERROR, &shown(SAVE_FAILED_MESSAGE)),
+    }
+}
+
+/// Renders the whole page before anything is sent, so a template failure cannot leave a half-written response.
+fn render(status: StatusCode, page: &Page<'_>) -> Response {
+    let Ok(html) = page.render() else { return internal_error() };
+    let cookie = format!("{COOKIE_NAME}={}; Path=/; Secure; HttpOnly; SameSite=Strict", page.token);
+    let (Ok(cookie), Ok(content_type)) =
+        (HeaderValue::try_from(cookie), HeaderValue::try_from("text/html; charset=utf-8"))
+    else {
+        return internal_error();
+    };
+    (status, [(header::SET_COOKIE, cookie), (header::CONTENT_TYPE, content_type)], html).into_response()
+}
+
+fn internal_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        "Internal error",
+    )
+        .into_response()
+}
+
+async fn stylesheet() -> Response {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLESHEET).into_response()
+}
+
+async fn healthz() -> Response {
+    // The API's policy: this is not a page.
+    (
+        [(header::CONTENT_TYPE, "application/json"), (header::CONTENT_SECURITY_POLICY, API_CSP)],
+        r#"{"status":"ok"}"#,
+    )
+        .into_response()
+}
+
+async fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "Not found")
+        .into_response()
+}
+
+/// `^[A-Za-z0-9_-]{1,64}$`
+fn is_valid_job_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Reads the urlencoded body (capped) as single-valued fields; `None` when it is too large, has more than
+/// [`MAX_FORM_FIELDS`] fields or repeats one.
+async fn read_form(body: Body) -> Option<std::collections::HashMap<String, String>> {
+    let bytes = axum::body::to_bytes(body, MAX_FORM_BYTES).await.ok()?;
+    let mut form = std::collections::HashMap::new();
+    for (name, value) in form_urlencoded::parse(&bytes) {
+        if form.len() >= MAX_FORM_FIELDS || form.insert(name.into_owned(), value.into_owned()).is_some() {
+            return None;
+        }
+    }
+    Some(form)
+}
+
+/// Fetch Metadata decides when the browser sends it (`Origin` can be `null` under `Referrer-Policy: no-referrer`).
+/// Without it (older browsers, non-browser clients) a present `Origin` must name this host; the token is needed either way.
+fn same_origin(headers: &HeaderMap) -> bool {
+    if let Some(site) = headers.get("sec-fetch-site") {
+        return site == "same-origin";
+    }
+    headers.get(header::ORIGIN).is_none_or(|origin| {
+        let host = headers.get(header::HOST).and_then(|host| host.to_str().ok());
+        let origin = origin.to_str().ok().and_then(|origin| origin.split_once("://")).map(|(_, rest)| rest);
+        host.is_some() && origin == host
+    })
+}
+
+fn is_token(value: &str) -> bool {
+    value.len() == TOKEN_LENGTH && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The token in the cookie, if it has the right shape.
+fn cookie_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find_map(|(name, value)| (name == COOKIE_NAME && is_token(value)).then(|| value.to_owned()))
+}
+
+/// The token already in the cookie, else a new one: open tabs keep working after a refusal.
+fn session_token(headers: &HeaderMap) -> Option<String> {
+    cookie_token(headers).or_else(new_token)
+}
+
+fn new_token() -> Option<String> {
+    let mut raw = [0_u8; TOKEN_BYTES];
+    getrandom::fill(&mut raw).ok()?;
+    Some(URL_SAFE_NO_PAD.encode(raw))
+}
+
+/// Compares the cookie with the form field in constant time.
+fn tokens_match(cookie: &str, field: &str) -> bool {
+    is_token(cookie) && bool::from(cookie.as_bytes().ct_eq(field.as_bytes()))
+}
+
+/// Sets each header unless the handler chose its own (`/healthz` keeps the API's policy).
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    let defaults = [
+        (header::CONTENT_SECURITY_POLICY, PAGE_CSP),
+        (
+            HeaderName::from_static("permissions-policy"),
+            "camera=(), microphone=(), geolocation=(), payment=()",
+        ),
+        (HeaderName::from_static("cross-origin-opener-policy"), "same-origin"),
+        (HeaderName::from_static("cross-origin-embedder-policy"), "require-corp"),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::X_FRAME_OPTIONS, "DENY"),
+        (header::REFERRER_POLICY, "no-referrer"),
+        (HeaderName::from_static("cross-origin-resource-policy"), "same-origin"),
+        (header::CACHE_CONTROL, "no-store"),
+    ];
+    for (name, value) in defaults {
+        headers.entry(name).or_insert(HeaderValue::from_static(value));
+    }
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use application::PortError;
+    use axum::http::Method;
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+
+    use super::*;
+    use crate::in_memory::InMemoryArtifactStore;
+
+    // Spelled out: the tests must not repeat the constants they check.
+    const PAGE_CSP: &str =
+        "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+    const API_CSP: &str = "default-src 'none'; frame-ancestors 'none'";
+    const INVALID: &str = "Enter a job id (letters, digits, - or _) and some content.";
+
+    /// Fails every save and remembers what it was asked, so the test can check nothing leaks into the page.
+    #[derive(Clone, Default)]
+    struct FailingStore {
+        asked: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ArtifactStore for FailingStore {
+        fn save(
+            &self,
+            job_id: &str,
+            content: &str,
+        ) -> impl Future<Output = Result<String, PortError>> + Send {
+            if let Ok(mut asked) = self.asked.lock() {
+                asked.push(job_id.to_owned());
+            }
+            std::future::ready(Err(PortError::from(format!("disk full while saving {job_id} ({content})"))))
+        }
+    }
+
+    struct Reply {
+        status: StatusCode,
+        headers: HeaderMap,
+        body: String,
+    }
+
+    impl Reply {
+        fn header(&self, name: &str) -> &str {
+            self.headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or_default()
+        }
+
+        fn token(&self) -> String {
+            let marker = "name=\"csrf_token\" value=\"";
+            let start = self.body.find(marker).map_or(0, |at| at + marker.len());
+            self.body.get(start..start + TOKEN_LENGTH).unwrap_or_default().to_owned()
+        }
+    }
+
+    async fn send(
+        app: &Router,
+        (method, path): (Method, &str),
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> Reply {
+        let mut request = Request::builder().method(method).uri(path);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let request = request.body(Body::from(body.to_owned())).unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let (parts, body) = response.into_parts();
+        let bytes = body.collect().await.unwrap().to_bytes();
+        Reply {
+            status: parts.status,
+            headers: parts.headers,
+            body: String::from_utf8(bytes.to_vec()).unwrap(),
+        }
+    }
+
+    fn app() -> Router {
+        web_router(InMemoryArtifactStore::default())
+    }
+
+    /// Fetches the form like a browser: returns the token and the cookie header to send back.
+    async fn open(app: &Router) -> (String, String) {
+        let page = send(app, (Method::GET, "/"), &[], "").await;
+        let token = page.token();
+        let cookie = format!("{COOKIE_NAME}={token}");
+        (token, cookie)
+    }
+
+    fn encode(fields: &[(&str, &str)]) -> String {
+        form_urlencoded::Serializer::new(String::new()).extend_pairs(fields).finish()
+    }
+
+    const FORM: (&str, &str) = ("content-type", "application/x-www-form-urlencoded");
+
+    async fn post(app: &Router, cookie: &str, extra: &[(&str, &str)], fields: &[(&str, &str)]) -> Reply {
+        let mut headers = vec![FORM, ("cookie", cookie)];
+        headers.extend_from_slice(extra);
+        send(app, (Method::POST, "/"), &headers, &encode(fields)).await
+    }
+
+    #[tokio::test]
+    async fn form_sets_the_csrf_cookie_and_the_matching_hidden_field() {
+        let reply = send(&app(), (Method::GET, "/"), &[], "").await;
+        assert_eq!(reply.status, StatusCode::OK);
+        let token = reply.token();
+        assert_eq!(token.len(), TOKEN_LENGTH);
+        assert!(is_token(&token));
+        assert_eq!(
+            reply.header("set-cookie"),
+            format!("__Host-csrf={token}; Path=/; Secure; HttpOnly; SameSite=Strict")
+        );
+        assert!(reply.body.contains("<title>Complete an export</title>"));
+        assert!(reply.body.contains("<h1>Complete an export</h1>"));
+        assert!(reply.body.contains("<p role=\"status\"></p>"));
+    }
+
+    #[tokio::test]
+    async fn each_new_visitor_gets_a_different_token() {
+        let app = app();
+        assert_ne!(
+            send(&app, (Method::GET, "/"), &[], "").await.token(),
+            send(&app, (Method::GET, "/"), &[], "").await.token()
+        );
+    }
+
+    #[tokio::test]
+    async fn page_sends_the_page_csp_and_the_security_headers() {
+        let reply = send(&app(), (Method::GET, "/"), &[], "").await;
+        assert_eq!(reply.header("content-security-policy"), PAGE_CSP);
+        assert_eq!(reply.header("x-content-type-options"), "nosniff");
+        assert_eq!(reply.header("x-frame-options"), "DENY");
+        assert_eq!(reply.header("referrer-policy"), "no-referrer");
+        assert_eq!(reply.header("cross-origin-resource-policy"), "same-origin");
+        assert_eq!(reply.header("cross-origin-opener-policy"), "same-origin");
+        assert_eq!(reply.header("cross-origin-embedder-policy"), "require-corp");
+        assert_eq!(reply.header("cache-control"), "no-store");
+        assert!(reply.header("permissions-policy").contains("camera=()"));
+        assert_eq!(reply.header("content-type"), "text/html; charset=utf-8");
+    }
+
+    #[tokio::test]
+    async fn serves_the_stylesheet() {
+        let reply = send(&app(), (Method::GET, "/static/app.css"), &[], "").await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.header("content-type"), "text/css; charset=utf-8");
+        assert!(reply.body.contains("body"));
+    }
+
+    #[tokio::test]
+    async fn completes_an_export() {
+        let store = InMemoryArtifactStore::default();
+        let app = web_router(store.clone());
+        let (token, cookie) = open(&app).await;
+        let reply =
+            post(&app, &cookie, &[], &[("csrf_token", &token), ("job_id", "job-1"), ("content", "id\n1\n")])
+                .await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert!(reply.body.contains("<p role=\"status\">Saved as exports/job-1.csv</p>"));
+        assert_eq!(store.read("exports/job-1.csv").unwrap().as_deref(), Some("id\n1\n"));
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_input() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        for (id, content) in [
+            ("", "x"),
+            ("not valid", "x"),
+            ("a/b", "x"),
+            (&"a".repeat(65), "x"),
+            ("ok", ""),
+            ("ok", &"x".repeat(1_000_001)),
+        ] {
+            let reply =
+                post(&app, &cookie, &[], &[("csrf_token", &token), ("job_id", id), ("content", content)])
+                    .await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "id {id:?}, {} chars", content.len());
+            assert!(reply.body.contains(INVALID));
+        }
+    }
+
+    #[tokio::test]
+    async fn accepts_a_job_id_of_64_characters_and_content_of_a_million_multibyte_characters() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let content = "é".repeat(1_000_000);
+        let id = "a".repeat(64);
+        let reply =
+            post(&app, &cookie, &[], &[("csrf_token", &token), ("job_id", &id), ("content", &content)]).await;
+        assert_eq!(reply.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn rejects_a_body_over_the_byte_cap() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let filler = "x".repeat(MAX_FORM_BYTES);
+        let reply =
+            post(&app, &cookie, &[], &[("csrf_token", &token), ("job_id", "a"), ("content", &filler)]).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn rejects_repeated_or_too_many_fields() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let repeated = post(
+            &app,
+            &cookie,
+            &[],
+            &[("csrf_token", &token), ("job_id", "a"), ("job_id", "b"), ("content", "x")],
+        )
+        .await;
+        assert_eq!(repeated.status, StatusCode::BAD_REQUEST);
+        let names: Vec<String> = (0..MAX_FORM_FIELDS).map(|n| format!("extra{n}")).collect();
+        let mut fields = vec![("csrf_token", token.as_str()), ("job_id", "a"), ("content", "x")];
+        fields.extend(names.iter().map(|name| (name.as_str(), "1")));
+        let many = post(&app, &cookie, &[], &fields).await;
+        assert_eq!(many.status, StatusCode::BAD_REQUEST);
+        let ten = post(&app, &cookie, &[], &fields[..MAX_FORM_FIELDS]).await;
+        assert_eq!(ten.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn escapes_user_input() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let reply = post(
+            &app,
+            &cookie,
+            &[],
+            &[
+                ("csrf_token", &token),
+                ("job_id", "<script>alert(1)</script>"),
+                ("content", "</textarea><b>x</b>"),
+            ],
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert!(!reply.body.contains("<script>alert"));
+        assert!(!reply.body.contains("<b>x</b>"));
+        assert!(
+            reply.body.contains("&lt;script&gt;alert(1)&lt;/script&gt;")
+                || reply.body.contains("&#60;script&#62;alert(1)&#60;/script&#62;")
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_a_missing_or_mismatched_token() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let other = new_token().unwrap();
+        let cases: [Vec<(&str, &str)>; 4] = [
+            vec![("job_id", "a"), ("content", "x")],
+            vec![("csrf_token", ""), ("job_id", "a"), ("content", "x")],
+            vec![("csrf_token", &other), ("job_id", "a"), ("content", "x")],
+            vec![("csrf_token", "short"), ("job_id", "a"), ("content", "x")],
+        ];
+        for fields in cases {
+            let reply = post(&app, &cookie, &[], &fields).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN, "{fields:?}");
+            assert!(reply.body.contains("The form has expired."));
+        }
+        // The refusal keeps the visitor's token, so the open form still works after a reload.
+        assert_eq!(
+            post(&app, &cookie, &[], &[("csrf_token", &other), ("job_id", "a"), ("content", "x")])
+                .await
+                .token(),
+            token
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_a_post_without_the_cookie_or_with_a_malformed_one() {
+        let app = app();
+        let (token, _) = open(&app).await;
+        let fields = [("csrf_token", token.as_str()), ("job_id", "a"), ("content", "x")];
+        let none = send(&app, (Method::POST, "/"), &[FORM], &encode(&fields)).await;
+        assert_eq!(none.status, StatusCode::FORBIDDEN);
+        let malformed = post(
+            &app,
+            "__Host-csrf=short",
+            &[],
+            &[("csrf_token", "short"), ("job_id", "a"), ("content", "x")],
+        )
+        .await;
+        assert_eq!(malformed.status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn finds_the_token_among_other_cookies() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let cookies = format!("theme=dark; {cookie}; other=1");
+        let reply =
+            post(&app, &cookies, &[], &[("csrf_token", &token), ("job_id", "a"), ("content", "x")]).await;
+        assert_eq!(reply.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn rejects_a_post_from_another_site() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let fields = [("csrf_token", token.as_str()), ("job_id", "a"), ("content", "x")];
+        for site in ["cross-site", "same-site", "none", ""] {
+            let reply = post(&app, &cookie, &[("sec-fetch-site", site)], &fields).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN, "Sec-Fetch-Site: {site}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_a_post_with_another_origin() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let fields = [("csrf_token", token.as_str()), ("job_id", "a"), ("content", "x")];
+        let foreign =
+            post(&app, &cookie, &[("host", "app.test"), ("origin", "https://evil.test")], &fields).await;
+        assert_eq!(foreign.status, StatusCode::FORBIDDEN);
+        let opaque = post(&app, &cookie, &[("host", "app.test"), ("origin", "null")], &fields).await;
+        assert_eq!(opaque.status, StatusCode::FORBIDDEN);
+        let hostless = post(&app, &cookie, &[("origin", "https://app.test")], &fields).await;
+        assert_eq!(hostless.status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn accepts_a_same_origin_post() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let fields = [("csrf_token", token.as_str()), ("job_id", "a"), ("content", "x")];
+        let reply = post(
+            &app,
+            &cookie,
+            &[("sec-fetch-site", "same-origin"), ("host", "app.test"), ("origin", "null")],
+            &fields,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn without_fetch_metadata_an_origin_naming_this_host_is_accepted() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let fields = [("csrf_token", token.as_str()), ("job_id", "a"), ("content", "x")];
+        let reply =
+            post(&app, &cookie, &[("host", "app.test"), ("origin", "https://app.test")], &fields).await;
+        assert_eq!(reply.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn checks_where_the_request_came_from_before_reading_the_body() {
+        // An oversized body from another site is a 403, not a 400: the body is never read.
+        let app = app();
+        let (_, cookie) = open(&app).await;
+        let body = "x".repeat(MAX_FORM_BYTES + 1);
+        let reply = send(
+            &app,
+            (Method::POST, "/"),
+            &[FORM, ("cookie", &cookie), ("sec-fetch-site", "cross-site")],
+            &body,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn keeps_the_token_while_valid() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let again = send(&app, (Method::GET, "/"), &[("cookie", &cookie)], "").await;
+        assert_eq!(again.token(), token);
+        let sent =
+            post(&app, &cookie, &[], &[("csrf_token", &token), ("job_id", "a"), ("content", "x")]).await;
+        assert_eq!(sent.token(), token);
+    }
+
+    #[tokio::test]
+    async fn reports_a_storage_failure_without_details() {
+        let store = FailingStore::default();
+        let app = web_router(store.clone());
+        let (token, cookie) = open(&app).await;
+        let reply = post(
+            &app,
+            &cookie,
+            &[],
+            &[("csrf_token", &token), ("job_id", "secret-job"), ("content", "private")],
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(reply.body.contains("The export could not be saved."));
+        assert!(!reply.body.contains("disk full"));
+        assert_eq!(store.asked.lock().unwrap().as_slice(), ["secret-job"]);
+    }
+
+    #[tokio::test]
+    async fn health_check_answers_ok_with_the_api_policy() {
+        let reply = send(&app(), (Method::GET, "/healthz"), &[], "").await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.body, r#"{"status":"ok"}"#);
+        assert_eq!(reply.header("content-type"), "application/json");
+        assert_eq!(reply.header("content-security-policy"), API_CSP);
+        assert_eq!(reply.header("x-content-type-options"), "nosniff");
+    }
+
+    #[tokio::test]
+    async fn answers_unknown_routes_with_404_and_no_json_api() {
+        for path in ["/does-not-exist", "/exports/job-1/complete"] {
+            let reply = send(&app(), (Method::POST, path), &[], "{}").await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+            assert_eq!(reply.header("x-content-type-options"), "nosniff");
+        }
+    }
+
+    #[test]
+    fn tokens_are_random_url_safe_and_compare_in_constant_time() {
+        let (first, second) = (new_token().unwrap(), new_token().unwrap());
+        assert!(is_token(&first) && is_token(&second));
+        assert_ne!(first, second);
+        assert!(tokens_match(&first, &first));
+        assert!(!tokens_match(&first, &second));
+        assert!(!tokens_match("", ""));
+    }
+}

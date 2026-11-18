@@ -832,6 +832,10 @@ for stack in "${stacks[@]}"; do
       seeded "check-layers: driver in bootstrap" crates/bootstrap/Cargo.toml 'redis = "1.8"\n' bash ci/check-layers.sh
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks rust "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test" crates/adapters/src/http.rs '/X_CONTENT_TYPE_OPTIONS/d'
+      # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
+      ssr_checks rust "cargo fetch -q" crates/adapters/templates/index.html '/CONTENT_SECURITY_POLICY, PAGE_CSP/d' \
+        crates/application/Cargo.toml 'askama = "0.16"\n' "bash ci/check-layers.sh"
+      ssr_api_checks rust "cargo fetch -q" "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test"
       seeded "check-layers: web framework in application" crates/application/Cargo.toml 'axum = "0.8"\n' bash ci/check-layers.sh
       # Design rules (ADR 0002), one violation at a time.
       seeded "clippy: ambient clock in domain" crates/domain/src/lib.rs '\n/// Reads the wall clock.\npub fn now() -> std::time::SystemTime {\n    std::time::SystemTime::now()\n}\n' cargo clippy -p domain -- -D warnings
