@@ -39,7 +39,7 @@ UI เป็นจุดที่ logic ทางธุรกิจรั่ว�
 | form, CSRF (token + `http.CrossOriginProtection`), escaping, header ของหน้า | `internal/adapters/web/handler_test.go` (`httptest`) และ `internal/bootstrap/handler_test.go` (API กับ UI บน server เดียว) ใน `{{ cmd.test }}` |
 {%- elif stack == 'rust' %}
 | web framework และ template engine อยู่นอก domain/application | `ci/check-layers.sh` (application ขึ้นกับ domain เท่านั้น จึงห้าม `axum`, `askama`) — `{{ cmd.arch }}` |
-| UI ไม่เรียก driver ของ datastore ตรง | `ci/check-layers.sh` (bootstrap ห้ามขึ้นกับ driver; driver อยู่ใน `adapters`) |
+| UI ไม่เรียก driver ของ datastore ตรง | `ci/check-layers.sh` ตรวจว่า `crates/adapters/src/web.rs` ไม่อ้างชื่อ driver (sqlx, redis, mongodb, aws_sdk_*, azure_*, ...) และ bootstrap ไม่ขึ้นกับ driver; module อื่นใน `adapters` ที่เป็นของ UI ในอนาคตต้องเพิ่มใน script นี้เอง |
 | form, CSRF (token + `Sec-Fetch-Site`), escaping, header ของหน้า | `crates/adapters/src/web.rs` (`tower::ServiceExt::oneshot`){% if http_api %} และ `crates/bootstrap/src/main.rs` (API กับ UI บน server เดียว){% endif %} ใน `{{ cmd.test }}` |
 {%- endif %}
 {%- else %}

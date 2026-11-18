@@ -405,6 +405,13 @@ ssr_checks() { # ssr_checks <stack> <install-cmd> <ui-file> <csp-sed-expression>
   # <framework-import-text> starting with "package" is the content of a new file <application-file> (Go: imports go first).
   if [[ "$6" == package* ]]; then seeded_new "ssr: template engine imported in application" "$5" "$6" bash -c "$7"
   else seeded "ssr: template engine imported in application" "$5" "$6" bash -c "$7"; fi
+  if [ -n "${8:-}" ]; then # optional <ui-file-checked> <driver-text> <check-cmd>: a datastore driver named in the UI is rejected by that check
+    printf '%b' "$9" >> "$8"
+    if out=$(bash -c "${10}" 2>&1); then fail "ssr: datastore driver named in the UI (should have failed)"
+    elif grep -q "must not name a datastore driver" <<<"$out"; then pass "ssr: datastore driver named in the UI rejected"
+    else fail "ssr: datastore driver in the UI failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'; fi
+    git checkout -q -- "$8"
+  fi
   sed -i 's#</form>#  <input name="seeded">\n&#' "$3"
   if out=$(bash -c "$ssr_test_ui" 2>&1); then fail "ssr: axe: unlabeled input (should have failed)"
   elif grep -q '"id": "label"' <<<"$out"; then pass "ssr: axe: unlabeled input rejected"
@@ -834,7 +841,8 @@ for stack in "${stacks[@]}"; do
       http_checks rust "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test" crates/adapters/src/http.rs '/X_CONTENT_TYPE_OPTIONS/d'
       # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
       ssr_checks rust "cargo fetch -q" crates/adapters/templates/index.html '/CONTENT_SECURITY_POLICY, PAGE_CSP/d' \
-        crates/application/Cargo.toml 'askama = "0.16"\n' "bash ci/check-layers.sh"
+        crates/application/Cargo.toml 'askama = "0.16"\n' "bash ci/check-layers.sh" \
+        crates/adapters/src/web.rs '\nuse redis::Client;\n' "bash ci/check-layers.sh"
       ssr_api_checks rust "cargo fetch -q" "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test"
       seeded "check-layers: web framework in application" crates/application/Cargo.toml 'axum = "0.8"\n' bash ci/check-layers.sh
       # Design rules (ADR 0002), one violation at a time.

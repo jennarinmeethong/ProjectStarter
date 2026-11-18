@@ -28,5 +28,17 @@ reject adapters '^bootstrap$' "only bootstrap wires dependencies (ADR 0001)"
 reject bootstrap '^(sqlx|sqlx-[a-z-]+|tokio-postgres|postgres|redis|mongodb|mysql_async|tiberius|aws-sdk-dynamodb|aws-sdk-s3|azure_data_cosmos|oracle|oracle-rs)$' \
   "datastore drivers live in adapters; bootstrap passes connection settings (docs/adr/0003-datastores.md)"
 
+# The server-rendered UI lives in the adapters crate next to the datastore drivers, so the crate-level rules above
+# cannot see it reach for one: it goes through the use case and its port (docs/adr/0005-frontend.md).
+ui=crates/adapters/src/web.rs
+if [ -f "$ui" ]; then
+  leaked=$(grep -nE '\b(sqlx|tokio_postgres|postgres|redis|mongodb|mysql_async|tiberius|oracle_rs|aws_config|aws_sdk_[a-z0-9_]+|azure_[a-z0-9_]+)\b' "$ui" || true)
+  if [ -n "$leaked" ]; then
+    echo "$ui must not name a datastore driver — call the use case; drivers stay in their own adapter modules (docs/adr/0005-frontend.md):" >&2
+    echo "$leaked" >&2
+    status=1
+  fi
+fi
+
 [ "$status" -eq 0 ] && echo "check-layers: OK"
 exit "$status"
