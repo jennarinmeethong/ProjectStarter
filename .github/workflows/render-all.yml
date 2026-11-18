@@ -1,0 +1,59 @@
+# Runs tests/render-all.sh for every stack in parallel (phase 5a).
+# The workflow only installs toolchains; all checks live in the script, so CI and a local run stay the same.
+name: render-all
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: ["README.md", "docs/**"]
+  push:
+    branches: [main]
+    paths-ignore: ["README.md", "docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-all-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render-all:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [typescript, python, dotnet, go, rust]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - if: matrix.stack == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - if: matrix.stack == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.x
+      - if: matrix.stack == 'rust'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      # System libraries for the Playwright browser checks of the frontend renders.
+      - if: matrix.stack == 'typescript'
+        run: npx --yes playwright install-deps chromium
+      - run: bash tests/render-all.sh ${{ matrix.stack }}
+
+  whitespace:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git diff --check "origin/${{ github.base_ref }}...HEAD"
