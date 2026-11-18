@@ -211,6 +211,27 @@ cosmosdb_checks() { # cosmosdb_checks <stack> <install> <integration-command> [s
   popd >/dev/null || return
 }
 
+s3_checks() { # s3_checks <stack> <install> <integration-command> [seeded|seeded_new label file text command...]
+  local dir="$work/$1-s3"
+  render "$1" '["codex"]' "$dir" -d 'datastores=["s3"]' -d http_api=true || { fail "render s3"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm init
+  bash -c "$2" >/dev/null 2>&1
+  verify "s3: adapter contract on a local S3 server" "$3"
+  if [ "$#" -gt 3 ]; then "$4" "${@:5}"; fi
+  if [ "$1" = typescript ]; then
+    local compose="docker compose -p ps-s3"
+    $compose down -v >/dev/null 2>&1
+    verify "compose: HTTP request is stored as an S3 object" \
+      "$compose build app && $compose up -d app \
+       && for _ in \$(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break; sleep 1; done \
+       && curl -fsS -X POST -H 'Content-Type: application/json' -d '{\"content\":\"id\\n1\\n\"}' http://127.0.0.1:8080/exports/s3-1/complete | grep -q 'exports/s3-1.csv' \
+       && $compose exec -T app node -e \"fetch('http://s3:9090/artifacts/exports/s3-1.csv').then(r => process.exit(r.ok ? 0 : 1))\""
+    $compose down -v >/dev/null 2>&1
+  fi
+  popd >/dev/null || return
+}
+
 http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: rendered with http_api=true
   local image="project-starter-$1"
   verify "playwright: API tests against the real server" "$2"
@@ -417,6 +438,9 @@ for stack in "${stacks[@]}"; do
       mariadb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       sqlserver_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       cosmosdb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
+      s3_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
+        seeded_new "dependency-cruiser: S3 SDK in application" src/application/s3-leak.ts \
+        'import "@aws-sdk/client-s3";\n' npx depcruise src --config .dependency-cruiser.cjs
       dynamodb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
         seeded "eslint: DynamoDB expression built from a value" src/adapters/dynamo-artifact-store.ts \
         '\nexport const seeded = (id: string) => ({ KeyConditionExpression: `job_id = ${id}` });\n' \
@@ -466,6 +490,7 @@ for stack in "${stacks[@]}"; do
       datastore_checks python
       mariadb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
       sqlserver_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
+      s3_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
       cosmosdb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
         seeded_new "import-linter: Cosmos DB SDK in application" src/demo_app/application/cosmos_leak.py \
         'import azure.cosmos\n' uv run lint-imports
@@ -511,6 +536,7 @@ for stack in "${stacks[@]}"; do
       mongodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       dynamodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       cosmosdb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
+      s3_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks dotnet 'dotnet test --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
@@ -539,6 +565,9 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks go
       mariadb_checks go "go mod tidy" "go test -tags integration ./..."
+      s3_checks go "go mod tidy" "go test -tags integration ./..." \
+        seeded_new "depguard: S3 SDK outside adapters" internal/application/s3_leak.go \
+        'package application\n\nimport _ "github.com/aws/aws-sdk-go-v2/service/s3"\n' go tool golangci-lint run
       cosmosdb_checks go "go mod tidy" "go test -tags integration ./..." \
         seeded_new "depguard: Cosmos DB SDK outside adapters" internal/application/cosmos_leak.go \
         'package application\n\nimport _ "github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"\n' go tool golangci-lint run
@@ -584,6 +613,8 @@ for stack in "${stacks[@]}"; do
       mongodb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
       dynamodb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
       cosmosdb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
+      s3_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
+        seeded "check-layers: S3 SDK in bootstrap" crates/bootstrap/Cargo.toml 'aws-sdk-s3 = "1"\n' bash ci/check-layers.sh
       sqlserver_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
         seeded "clippy: tiberius query outside the static-SQL gateway" crates/adapters/src/sqlserver.rs \
         '\n/// Builds SQL from a value.\npub async fn unsafe_delete(client: &mut Connection, table: &str) -> tiberius::Result<u64> {\n    Ok(client.execute(format!("DELETE FROM {table}"), &[]).await?.total())\n}\n' \

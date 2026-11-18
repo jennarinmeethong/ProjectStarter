@@ -1,0 +1,31 @@
+// Integration test: needs Docker. Run with `npm run test:integration` (excluded from `npm test`).
+import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
+import { afterAll, beforeAll } from "vitest";
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { S3ArtifactStore } from "./s3-artifact-store.ts";
+
+let container: StartedTestContainer;
+let store: S3ArtifactStore;
+
+beforeAll(async () => {
+  // The local S3 server accepts any credentials.
+  process.env["AWS_REGION"] = "us-east-1";
+  process.env["AWS_ACCESS_KEY_ID"] = "local";
+  process.env["AWS_SECRET_ACCESS_KEY"] = "local";
+  container = await new GenericContainer("adobe/s3mock:4.11.0")
+    .withEnvironment({ COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: "artifacts" })
+    .withExposedPorts(9090)
+    .withWaitStrategy(Wait.forHttp("/", 9090))
+    .start();
+  store = S3ArtifactStore.create({
+    bucket: "artifacts",
+    endpoint: `http://${container.getHost()}:${String(container.getMappedPort(9090))}`,
+  });
+}, 180_000);
+
+afterAll(async () => {
+  await store.close();
+  await container.stop();
+});
+
+describeArtifactStoreContract("S3ArtifactStore", () => ({ store, read: (key) => store.read(key) }));

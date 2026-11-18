@@ -71,6 +71,12 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 - Local ใช้ Cosmos DB emulator (vNext, `--protocol http`); key ใน `compose.yaml` และ test คือ well-known key ที่ Microsoft เผยแพร่ ไม่ใช่ความลับ และ `.gitleaks.toml` allowlist เฉพาะค่านี้{% if stack == 'rust' %}; Rust SDK รับ `http://` เฉพาะ host ของ emulator (`localhost`/`127.0.0.1` หรือ `AZURE_COSMOS_EMULATOR_HOST`) และยังเป็น beta จึง pin version แบบ `=`{% endif %}
 - query (ถ้าเพิ่ม) ต้องส่งค่าผ่าน `@parameter` เสมอ ห้ามประกอบ SQL ของ Cosmos จาก string
 
+{% endif %}{% if 's3' in datastores %}## S3 / MinIO (object storage)
+- adapter ใช้ S3 API ผ่าน AWS SDK จึงใช้ได้กับ AWS S3, MinIO และ store ที่รองรับ S3 อื่น ๆ; artifact key คือ object key โดยตรง
+- เลือก adapter ด้วย `S3_BUCKET`; `S3_ENDPOINT` ใช้กับ MinIO หรือ server local (เปิด path-style addressing ให้อัตโนมัติ) บน AWS ไม่ต้องตั้ง; credential มาจาก chain มาตรฐานของ SDK ห้ามใส่ key จริงใน repo
+- Local และ test ใช้ S3Mock (`adobe/s3mock`, Apache-2.0) ที่สร้าง bucket จาก env ให้: image ทางการของ MinIO เลิกเผยแพร่บน Docker Hub/Quay แล้ว และ template ไม่พึ่ง image ที่ไม่เป็นทางการ ถ้าต้องการทดสอบกับ MinIO จริง ให้ชี้ `S3_ENDPOINT` ไปที่ MinIO ที่องค์กรดูแลเอง
+- bucket ของระบบจริงสร้างด้วย IaC พร้อม policy (block public access, encryption, lifecycle)
+
 {% endif %}## การ apply migration
 {%- if 'sqlserver' in datastores %}
 - SQL Server ใช้ `migrations/sqlserver/` (T-SQL) และไม่มี init hook: `compose.yaml` จึงมี job `sqlserver-migrate` (one-shot, `sqlcmd`) ที่สร้าง database `app` แล้ว apply ไฟล์ตามลำดับชื่อ ส่วน integration test ทำขั้นตอนเดียวกันก่อนรัน contract; upsert ใช้ `MERGE ... WITH (HOLDLOCK)` เพื่อให้ atomic
@@ -88,6 +94,9 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 - `psycopg` ใช้ LGPL-3.0 ใช้เป็น dependency แบบไม่แก้ไขได้ตามปกติ
 {%- endif %}
 - Redis server ตั้งแต่ 7.4 ไม่ใช่ BSD แล้ว (8.x มีตัวเลือก AGPLv3) การรัน image แบบไม่แก้ไขเป็น service ใช้ได้ ถ้านโยบายองค์กรไม่รับ ให้ใช้ [Valkey](https://valkey.io/) (BSD) ซึ่งใช้ client เดิมได้
+{%- if 's3' in datastores %}
+- MinIO server ใช้ AGPLv3: รันแบบไม่แก้ไขเป็น storage ภายในได้ ถ้าแก้ source หรือให้บริการแก่ผู้อื่นต้องตรวจเงื่อนไข AGPL (หรือใช้ license เชิงพาณิชย์ของ MinIO); S3Mock และ AWS SDK เป็น Apache-2.0
+{%- endif %}
 {%- if 'cosmosdb' in datastores %}
 - Cosmos DB emulator (vNext preview) ใช้เพื่อพัฒนาและทดสอบเท่านั้น; Azure SDK ทุกภาษาเป็น MIT
 {%- endif %}

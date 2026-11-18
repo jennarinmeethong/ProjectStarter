@@ -1,0 +1,40 @@
+"""Integration test: needs Docker.
+
+Run with `uv run pytest -m integration` (deselected by default).
+"""
+
+from collections.abc import Iterator
+
+import pytest
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.wait_strategies import HttpWaitStrategy
+from tests.artifact_store_contract import ArtifactStoreContract, StoreUnderTest
+
+from {{ package_name }}.adapters.s3_artifact_store import S3ArtifactStore
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(scope="module")
+def endpoint() -> Iterator[str]:
+    container = (
+        DockerContainer("adobe/s3mock:4.11.0")
+        .with_env("COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS", "artifacts")
+        .with_exposed_ports(9090)
+        .waiting_for(HttpWaitStrategy(9090))
+    )
+    with pytest.MonkeyPatch.context() as env, container:
+        # The local S3 server accepts any credentials.
+        env.setenv("AWS_REGION", "us-east-1")
+        env.setenv("AWS_DEFAULT_REGION", "us-east-1")
+        env.setenv("AWS_ACCESS_KEY_ID", "local")
+        env.setenv("AWS_SECRET_ACCESS_KEY", "local")
+        yield f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9090)}"
+
+
+class TestS3ArtifactStore(ArtifactStoreContract):
+    @pytest.fixture
+    def subject(self, endpoint: str) -> Iterator[StoreUnderTest]:
+        store = S3ArtifactStore.create("artifacts", endpoint)
+        yield StoreUnderTest(store=store, read=store.read)
+        store.close()

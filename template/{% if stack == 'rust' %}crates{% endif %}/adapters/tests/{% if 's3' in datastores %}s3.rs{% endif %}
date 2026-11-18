@@ -1,0 +1,49 @@
+//! Integration test: needs Docker. Run with `cargo test -p adapters --features integration`.
+#![cfg(feature = "integration")]
+
+mod common;
+
+use std::future::Future;
+
+use adapters::s3::S3ArtifactStore;
+use application::PortError;
+use aws_sdk_s3::Client;
+use aws_sdk_s3::config::{BehaviorVersion, Config, Credentials, Region};
+use testcontainers_modules::testcontainers::core::wait::HttpWaitStrategy;
+use testcontainers_modules::testcontainers::core::{IntoContainerPort, WaitFor};
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+use testcontainers_modules::testcontainers::{GenericImage, ImageExt};
+
+impl common::ReadBack for S3ArtifactStore {
+    fn read_back(&self, key: &str) -> impl Future<Output = Result<Option<String>, PortError>> + Send {
+        self.read(key)
+    }
+}
+
+/// A client for the local S3 server, which accepts any credentials.
+fn local_client(endpoint: &str) -> Client {
+    let config = Config::builder()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new("us-east-1"))
+        .credentials_provider(Credentials::new("local", "local", None, None, "s3mock"))
+        .endpoint_url(endpoint)
+        .force_path_style(true)
+        .build();
+    Client::from_conf(config)
+}
+
+#[tokio::test]
+async fn s3_store_satisfies_the_contract() -> Result<(), PortError> {
+    let ready = HttpWaitStrategy::new("/").with_port(9090.tcp()).with_expected_status_code(200_u16);
+    let container = GenericImage::new("adobe/s3mock", "4.11.0")
+        .with_exposed_port(9090.tcp())
+        .with_wait_for(WaitFor::http(ready))
+        .with_env_var("COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS", "artifacts")
+        .start()
+        .await?;
+    let host = container.get_host().await?;
+    let port = container.get_host_port_ipv4(9090).await?;
+    let store = S3ArtifactStore::from_client(local_client(&format!("http://{host}:{port}")), "artifacts");
+
+    common::check_contract(&store).await
+}

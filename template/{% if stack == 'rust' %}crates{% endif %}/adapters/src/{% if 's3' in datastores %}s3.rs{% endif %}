@@ -1,0 +1,61 @@
+//! `ArtifactStore` on the S3 API (AWS S3, `MinIO`, or any S3-compatible store).
+//!
+//! The artifact key is the object key (ADR 0003).
+
+use application::{ArtifactStore, PortError};
+use aws_sdk_s3::Client;
+use aws_sdk_s3::primitives::ByteStream;
+
+/// Keeps artifacts as objects in one bucket.
+#[derive(Debug, Clone)]
+pub struct S3ArtifactStore {
+    client: Client,
+    bucket: String,
+}
+
+impl S3ArtifactStore {
+    /// Set `endpoint` for `MinIO` or a local server; omit it for AWS S3 (default region and credentials).
+    pub async fn connect(bucket: &str, endpoint: Option<&str>) -> Result<Self, PortError> {
+        let shared = aws_config::defaults(aws_config::BehaviorVersion::latest()).load().await;
+        let mut config = aws_sdk_s3::config::Builder::from(&shared);
+        if let Some(url) = endpoint {
+            // Path-style addressing: MinIO and local servers have no per-bucket DNS names.
+            config = config.endpoint_url(url).force_path_style(true);
+        }
+        Ok(Self::from_client(Client::from_conf(config.build()), bucket))
+    }
+
+    /// Uses a client configured elsewhere (tests, or a shared `SdkConfig`).
+    #[must_use]
+    pub fn from_client(client: Client, bucket: &str) -> Self {
+        Self { client, bucket: bucket.to_owned() }
+    }
+
+    /// Returns the content stored under `key`, if any.
+    pub async fn read(&self, key: &str) -> Result<Option<String>, PortError> {
+        let output = match self.client.get_object().bucket(&self.bucket).key(key).send().await {
+            Ok(output) => output,
+            Err(error) => {
+                let error = error.into_service_error();
+                return if error.is_no_such_key() { Ok(None) } else { Err(error.into()) };
+            }
+        };
+        let bytes = output.body.collect().await?.into_bytes();
+        Ok(Some(String::from_utf8(bytes.to_vec())?))
+    }
+}
+
+impl ArtifactStore for S3ArtifactStore {
+    async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
+        let key = format!("exports/{job_id}.csv");
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .content_type("text/csv")
+            .body(ByteStream::from(content.as_bytes().to_vec()))
+            .send()
+            .await?;
+        Ok(key)
+    }
+}
