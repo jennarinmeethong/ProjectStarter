@@ -93,9 +93,11 @@ public static class WebUiRequests
         return await host.PostAsync(content, cookie, fetchSite, origin);
     }
 
-    public static async Task<HttpResponseMessage> PostAsync(this WebUiHost host, HttpContent content, string? cookie, string? fetchSite = "same-origin", string? origin = null)
+    public static async Task<HttpResponseMessage> PostAsync(this WebUiHost host, HttpContent content, string? cookie, string? fetchSite = "same-origin", string? origin = null, bool expectContinue = false)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/", UriKind.Relative)) { Content = content };
+        // A refused oversized body: wait for the server's answer instead of writing into a closed socket (Linux resets it).
+        request.Headers.ExpectContinue = expectContinue;
         AddHeader(request, "Cookie", cookie);
         AddHeader(request, "Sec-Fetch-Site", fetchSite);
         AddHeader(request, "Origin", origin);
@@ -305,7 +307,8 @@ public sealed class WebUiFormTests : WebUiTestBase
         // About 13 MB, over the 12,001,024-byte cap (RequestSizeLimit endpoint metadata).
         var (cookie, token) = await Host.OpenAsync();
 
-        using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-12", new string('x', 13_000_000)), cookie);
+        using var content = new FormUrlEncodedContent(WebUiForm.Fields(token, "t-12", new string('x', 13_000_000)));
+        using var response = await Host.PostAsync(content, cookie, expectContinue: true);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Null(Store.Read("exports/t-12.csv"));
