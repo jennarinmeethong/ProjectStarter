@@ -595,8 +595,9 @@ for stack in "${stacks[@]}"; do
       # Dependency audit: clean on the render, rejects a known-vulnerable package.
       verify "uv audit" "uv audit --locked --preview-features audit-command"
       cp pyproject.toml uv.lock "$work/"
-      # pyyaml 5.3 has known advisories and no dependencies, so it resolves next to any other package set.
-      uv add --no-sync pyyaml==5.3 >/dev/null 2>&1
+      # pyyaml 5.3 has known advisories and no dependencies. Only below Python 3.14: libcst (via mutmut) needs
+      # pyyaml >= 6.0.3 on 3.14+, so an unconditional pin cannot resolve and the audit would pass.
+      uv add --no-sync "pyyaml==5.3; python_full_version < '3.14'" >/dev/null 2>&1
       expect_fail "uv audit: vulnerable dependency" uv audit --locked --preview-features audit-command
       cp "$work/pyproject.toml" "$work/uv.lock" .
       # Container and secret scanning (docs/security/owasp.md).
