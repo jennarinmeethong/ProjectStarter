@@ -34,9 +34,15 @@ internal sealed class FormRequestFilter : IAsyncAuthorizationFilter, IOrderedFil
             return; // No form, so no token: the antiforgery filter refuses it.
         }
 
+        // The size and form limits come from RequestSizeLimit/RequestFormLimits on the page model (endpoint metadata):
+        // keep them there, they must be in place before this read.
         try
         {
-            await request.ReadFormAsync(context.HttpContext.RequestAborted).ConfigureAwait(false);
+            var form = await request.ReadFormAsync(context.HttpContext.RequestAborted).ConfigureAwait(false);
+            if (form.Any(field => field.Value.Count > 1))
+            {
+                context.Result = Refusal.BadRequest(); // A repeated field is ambiguous: refuse it rather than pick one.
+            }
         }
         catch (Exception exception) when (exception is InvalidDataException or BadHttpRequestException)
         {

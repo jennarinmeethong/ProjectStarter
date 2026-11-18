@@ -286,6 +286,44 @@ public sealed class WebUiFormTests : WebUiTestBase
     }
 
     [Fact]
+    public async Task RejectsRepeatedFields()
+    {
+        var (cookie, token) = await Host.OpenAsync();
+        using var content = new FormUrlEncodedContent([new("csrf_token", token), new("job_id", "t-10"), new("job_id", "t-11"), new("content", "x")]);
+
+        using var response = await Host.PostAsync(content, cookie);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Null(Store.Read("exports/t-10.csv"));
+        Assert.Null(Store.Read("exports/t-11.csv"));
+    }
+
+    [Fact]
+    public async Task RejectsABodyOverTheCap()
+    {
+        // About 13 MB, over the 12,001,024-byte cap (RequestSizeLimit endpoint metadata).
+        var (cookie, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-12", new string('x', 13_000_000)), cookie);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Null(Store.Read("exports/t-12.csv"));
+    }
+
+    [Fact]
+    public async Task AcceptsMaximumLengthMultibyteContent()
+    {
+        // 1,000,000 x U+20AC is about 9 MB url-encoded: under the cap, so it must be accepted.
+        var (cookie, token) = await Host.OpenAsync();
+        var content = new string('€', 1_000_000);
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-13", content), cookie);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(content, Store.Read("exports/t-13.csv"));
+    }
+
+    [Fact]
     public async Task HidesStorageErrors()
     {
         await using var failing = await WebUiHost.StartAsync(new FailingArtifactStore());
