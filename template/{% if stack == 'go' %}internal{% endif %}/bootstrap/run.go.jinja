@@ -16,13 +16,15 @@ import (
 {%- if http_api %}
 	"time"
 {%- endif %}
-
-{% if http_api %}	"{{ go_module }}/internal/adapters/httpapi"
-{% endif %}{%- if 'cosmosdb' in datastores %}
+{# Exactly one blank line between the standard-library and module groups, whatever is enabled (gofumpt). #}
+{%- if 'cosmosdb' in datastores %}
 	"{{ go_module }}/internal/adapters/cosmosstore"
 {%- endif %}
 {%- if 'dynamodb' in datastores %}
 	"{{ go_module }}/internal/adapters/dynamostore"
+{%- endif %}
+{%- if http_api %}
+	"{{ go_module }}/internal/adapters/httpapi"
 {%- endif %}
 	"{{ go_module }}/internal/adapters/inmemory"
 {%- if 'mongodb' in datastores %}
