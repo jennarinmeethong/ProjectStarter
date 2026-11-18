@@ -1,0 +1,11 @@
+# Build and dependency output that tools can drop into template/ when run in place.
+# Generated projects get their own .gitignore from template/.
+bin/
+obj/
+node_modules/
+target/
+__pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
