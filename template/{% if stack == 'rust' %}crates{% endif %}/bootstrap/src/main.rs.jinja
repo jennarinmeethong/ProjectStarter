@@ -6,6 +6,9 @@ use std::process::ExitCode;
 
 {% if http_api %}use adapters::http::router;
 {% endif %}use adapters::in_memory::InMemoryArtifactStore;
+{%- if 'mongodb' in datastores %}
+use adapters::mongo::MongoArtifactStore;
+{%- endif %}
 {%- if mysql_engine %}
 use adapters::mysql::MySqlArtifactStore;
 {%- endif %}
@@ -36,6 +39,9 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 #[derive(Clone)]
 enum AnyStore {
     InMemory(InMemoryArtifactStore),
+{%- if 'mongodb' in datastores %}
+    Mongo(MongoArtifactStore),
+{%- endif %}
 {%- if mysql_engine %}
     MySql(MySqlArtifactStore),
 {%- endif %}
@@ -54,6 +60,9 @@ impl ArtifactStore for AnyStore {
     async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
         match self {
             Self::InMemory(store) => store.save(job_id, content).await,
+{%- if 'mongodb' in datastores %}
+            Self::Mongo(store) => store.save(job_id, content).await,
+{%- endif %}
 {%- if mysql_engine %}
             Self::MySql(store) => store.save(job_id, content).await,
 {%- endif %}
@@ -80,6 +89,11 @@ async fn open_store() -> Result<AnyStore, BoxError> {
 {%- if mysql_engine %}
     if let Ok(url) = std::env::var("MYSQL_URL") {
         return Ok(AnyStore::MySql(MySqlArtifactStore::connect(&url).await?));
+    }
+{%- endif %}
+{%- if 'mongodb' in datastores %}
+    if let Ok(url) = std::env::var("MONGODB_URL") {
+        return Ok(AnyStore::Mongo(MongoArtifactStore::connect(&url).await?));
     }
 {%- endif %}
 {%- if 'sqlserver' in datastores %}

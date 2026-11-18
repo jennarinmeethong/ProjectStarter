@@ -14,6 +14,9 @@ import uvicorn
 from {{ package_name }}.adapters.http.app import create_app
 {% endif -%}
 from {{ package_name }}.adapters.in_memory_artifact_store import InMemoryArtifactStore
+{%- if 'mongodb' in datastores %}
+from {{ package_name }}.adapters.mongo_artifact_store import MongoArtifactStore
+{%- endif %}
 {%- if mysql_engine %}
 from {{ package_name }}.adapters.mysql_artifact_store import MySqlArtifactStore
 {%- endif %}
@@ -58,6 +61,16 @@ def open_store() -> Generator[ArtifactStore, None, None]:
             yield mysql
         finally:
             mysql.close()
+        return
+{%- endif %}
+{%- if 'mongodb' in datastores %}
+    mongodb_url = os.environ.get("MONGODB_URL")
+    if mongodb_url:
+        mongo = MongoArtifactStore.from_url(mongodb_url)
+        try:
+            yield mongo
+        finally:
+            mongo.close()
         return
 {%- endif %}
 {%- if 'sqlserver' in datastores %}

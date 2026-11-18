@@ -16,6 +16,10 @@ require (
 	github.com/golangci/golangci-lint/v2 v2.15.0
 	golang.org/x/vuln v1.9.0
 	github.com/quasilyte/go-ruleguard/dsl v0.3.23 // used by ci/gorules (build tag ruleguard)
+{%- if 'mongodb' in datastores %}
+	github.com/testcontainers/testcontainers-go/modules/mongodb v0.44.0
+	go.mongodb.org/mongo-driver/v2 v2.9.3
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
 	github.com/microsoft/go-mssqldb v1.11.1
 	github.com/testcontainers/testcontainers-go/modules/mssql v0.44.0

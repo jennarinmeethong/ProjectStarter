@@ -1,0 +1,46 @@
+import { MongoClient, type Collection } from "mongodb";
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+interface ArtifactDocument {
+  _id: string;
+  job_id: string;
+  body: string;
+}
+
+/**
+ * ArtifactStore on MongoDB (also Atlas: pass a mongodb+srv:// URL). Filters are typed objects with string values,
+ * never parsed from strings, and server-side JavaScript operators are banned by ESLint (ADR 0003).
+ */
+export class MongoArtifactStore implements ArtifactStore {
+  readonly #client: MongoClient;
+  readonly #artifacts: Collection<ArtifactDocument>;
+
+  private constructor(client: MongoClient, artifacts: Collection<ArtifactDocument>) {
+    this.#client = client;
+    this.#artifacts = artifacts;
+  }
+
+  /** Connects to `uri` (the database comes from its path) and ensures the indexes exist. */
+  static async connect(uri: string): Promise<MongoArtifactStore> {
+    const client = new MongoClient(uri, { maxPoolSize: 5 });
+    await client.connect();
+    const artifacts = client.db().collection<ArtifactDocument>("export_artifacts");
+    await artifacts.createIndex({ job_id: 1 });
+    return new MongoArtifactStore(client, artifacts);
+  }
+
+  async save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    await this.#artifacts.replaceOne({ _id: key }, { job_id: jobId, body: content }, { upsert: true });
+    return key;
+  }
+
+  async read(key: string): Promise<string | undefined> {
+    const artifact = await this.#artifacts.findOne({ _id: key });
+    return artifact?.body;
+  }
+
+  async close(): Promise<void> {
+    await this.#client.close();
+  }
+}

@@ -135,6 +135,28 @@ sqlserver_checks() { # sqlserver_checks <stack> <install> <integration-command> 
   popd >/dev/null || return
 }
 
+mongodb_checks() { # mongodb_checks <stack> <install> <integration-command> [seeded|seeded_new label file text command...]
+  local dir="$work/$1-mongodb"
+  render "$1" '["codex"]' "$dir" -d 'datastores=["mongodb"]' -d http_api=true || { fail "render mongodb"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm init
+  bash -c "$2" >/dev/null 2>&1
+  verify "mongodb: adapter contract on a real MongoDB" "$3"
+  if [ "$#" -gt 3 ]; then "$4" "${@:5}"; fi
+  if [ "$1" = typescript ]; then
+    # End to end once: compose wires MONGODB_URL into the app and an HTTP request lands in MongoDB.
+    local compose="docker compose -p ps-mongodb"
+    $compose down -v >/dev/null 2>&1
+    verify "compose: HTTP request is stored in MongoDB" \
+      "$compose build app && $compose up -d --wait mongodb && $compose up -d app \
+       && for _ in \$(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break; sleep 1; done \
+       && curl -fsS -X POST -H 'Content-Type: application/json' -d '{\"content\":\"id\\n1\\n\"}' http://127.0.0.1:8080/exports/mongo-1/complete | grep -q 'exports/mongo-1.csv' \
+       && [ \"\$($compose exec -T mongodb mongosh -u app -p local-dev-only --authenticationDatabase admin app --quiet --eval 'db.export_artifacts.countDocuments({job_id: \"mongo-1\"})')\" = 1 ]"
+    $compose down -v >/dev/null 2>&1
+  fi
+  popd >/dev/null || return
+}
+
 http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: rendered with http_api=true
   local image="project-starter-$1"
   verify "playwright: API tests against the real server" "$2"
@@ -340,6 +362,9 @@ for stack in "${stacks[@]}"; do
       datastore_checks typescript
       mariadb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       sqlserver_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
+      mongodb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
+        seeded "eslint: MongoDB \$where" src/adapters/mongo-artifact-store.ts \
+        '\nexport const seeded = { $where: "this.a == 1" };\n' npx eslint src/adapters/mongo-artifact-store.ts
       verify "integration: adapter contracts on real PostgreSQL + Redis" "npm run test:integration"
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks typescript "npm run test:e2e" src/adapters/http/app.ts 's/      xFrameOptions: "DENY",/&\n      xContentTypeOptions: false,/'
@@ -382,6 +407,9 @@ for stack in "${stacks[@]}"; do
       datastore_checks python
       mariadb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
       sqlserver_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
+      mongodb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
+        seeded_new "import-linter: MongoDB driver in application" src/demo_app/application/mongo_leak.py \
+        'import pymongo\n' uv run lint-imports
       verify "integration: adapter contracts on real PostgreSQL + Redis" "uv run pytest -q -p no:warnings -m integration"
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks python "uv run pytest -q -p no:warnings -m e2e" src/demo_app/adapters/http/app.py '/"X-Content-Type-Options": "nosniff",/d'
@@ -415,6 +443,7 @@ for stack in "${stacks[@]}"; do
       datastore_checks dotnet
       mariadb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       sqlserver_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
+      mongodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks dotnet 'dotnet test --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
@@ -443,6 +472,10 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks go
       mariadb_checks go "go mod tidy" "go test -tags integration ./..."
+      mongodb_checks go "go mod tidy" "go test -tags integration ./..." \
+        seeded_new "ruleguard: MongoDB \$where" internal/adapters/mongostore/seeded.go \
+        'package mongostore\n\nimport "go.mongodb.org/mongo-driver/v2/bson"\n\nvar seeded = bson.M{"$where": "this.a == 1"}\n' \
+        go tool golangci-lint run
       sqlserver_checks go "go mod tidy" "go test -tags integration ./..." \
         seeded_new "depguard: SQL Server driver outside adapters" internal/application/sqlserver_driver.go \
         'package application\n\nimport _ "github.com/microsoft/go-mssqldb"\n' go tool golangci-lint run
@@ -475,6 +508,7 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks rust
       mariadb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
+      mongodb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
       sqlserver_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
         seeded "clippy: tiberius query outside the static-SQL gateway" crates/adapters/src/sqlserver.rs \
         '\n/// Builds SQL from a value.\npub async fn unsafe_delete(client: &mut Connection, table: &str) -> tiberius::Result<u64> {\n    Ok(client.execute(format!("DELETE FROM {table}"), &[]).await?.total())\n}\n' \

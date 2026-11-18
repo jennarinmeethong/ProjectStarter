@@ -1,4 +1,7 @@
 import { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";
+{%- if 'mongodb' in datastores %}
+import { MongoArtifactStore } from "../adapters/mongo-artifact-store.ts";
+{%- endif %}
 {%- if 'postgres' in datastores %}
 import { PostgresArtifactStore } from "../adapters/postgres-artifact-store.ts";
 {%- endif %}
@@ -45,6 +48,12 @@ function openStore(): Promise<OpenStore> {
   const sqlServerUrl = process.env.SQLSERVER_URL;
   if (sqlServerUrl) {
     return SqlServerArtifactStore.connect(sqlServerUrl).then((store) => ({ store, close: () => store.close() }));
+  }
+{%- endif %}
+{%- if 'mongodb' in datastores %}
+  const mongoUrl = process.env.MONGODB_URL;
+  if (mongoUrl) {
+    return MongoArtifactStore.connect(mongoUrl).then((store) => ({ store, close: () => store.close() }));
   }
 {%- endif %}
 {%- if 'redis' in datastores %}

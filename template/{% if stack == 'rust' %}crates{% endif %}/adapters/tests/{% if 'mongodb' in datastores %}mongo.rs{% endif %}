@@ -1,0 +1,28 @@
+//! Integration test: needs Docker. Run with `cargo test -p adapters --features integration`.
+#![cfg(feature = "integration")]
+
+mod common;
+
+use std::future::Future;
+
+use adapters::mongo::MongoArtifactStore;
+use application::PortError;
+use testcontainers_modules::mongo::Mongo;
+use testcontainers_modules::testcontainers::ImageExt;
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+
+impl common::ReadBack for MongoArtifactStore {
+    fn read_back(&self, key: &str) -> impl Future<Output = Result<Option<String>, PortError>> + Send {
+        self.read(key)
+    }
+}
+
+#[tokio::test]
+async fn mongo_store_satisfies_the_contract() -> Result<(), PortError> {
+    let container = Mongo::default().with_tag("8.0").start().await?;
+    let host = container.get_host().await?;
+    let port = container.get_host_port_ipv4(27017).await?;
+    let store = MongoArtifactStore::connect(&format!("mongodb://{host}:{port}/app")).await?;
+
+    common::check_contract(&store).await
+}
