@@ -129,7 +129,7 @@ sqlserver_checks() { # sqlserver_checks <stack> <install> <integration-command> 
     $compose down -v >/dev/null 2>&1
     verify "compose: SQL Server migrate job creates the schema" \
       "$compose up -d --wait sqlserver && $compose run --rm sqlserver-migrate \
-       && [ \"\$($compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Local-dev-only-1 -C -d app -h -1 -W -Q 'SET NOCOUNT ON; SELECT COUNT(*) FROM export_artifacts' | tr -d '[:space:]')\" = 0 ]"
+       && [ \"\$(MSYS_NO_PATHCONV=1 $compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Local-dev-only-1 -C -d app -h -1 -W -Q 'SET NOCOUNT ON; SELECT COUNT(*) FROM export_artifacts' | tr -d '[:space:]')\" = 0 ]"
     $compose down -v >/dev/null 2>&1
   fi
   popd >/dev/null || return
