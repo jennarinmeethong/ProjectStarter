@@ -33,8 +33,8 @@ Picked A: least change, and it gives real per-stack timings to decide whether B 
   reports, so once the checks are required a docs-only PR would wait forever (changed after review).
 - A "Free disk space" step first in every matrix job (removes Android SDK, GHC, CodeQL from the runner): each job pulls
   every datastore image, and Rust builds one `target/` per render (added after review).
-- `concurrency` per ref with `cancel-in-progress: true`.
-- `strategy.matrix.stack: [typescript, python, dotnet, go, rust]`, `fail-fast: false`, `runs-on: ubuntu-latest`, `timeout-minutes: 120`.
+- `concurrency` per ref; `cancel-in-progress` only for `pull_request` (pushes to `main` each keep a result).
+- `strategy.matrix.stack: [typescript, python, dotnet, go, rust]`, `fail-fast: false`, `runs-on: ubuntu-latest`, `timeout-minutes: 180`.
 - Steps: checkout → `astral-sh/setup-uv` (all) → `actions/setup-node` 24 (all; TypeScript needs it, other stacks' checks may call node/npx)
   → per stack: `actions/setup-dotnet` 10.0.x, `actions/setup-go` 1.26.x, Rust via preinstalled rustup + `taiki-e/install-action` for cargo-deny
   → TypeScript only: `npx playwright install-deps chromium` (system libraries for the browser tests)
