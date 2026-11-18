@@ -18,3 +18,12 @@ func sqlFromStrings(m dsl.Matcher) {
 		Where(m["method"].Text.Matches(`^(Exec|Query|QueryRow)(Context)?$`)).
 		Report(`Do not build SQL from strings. Use placeholders ($1, $2 ...) and pass values as arguments (docs/adr/0003-datastores.md).`)
 }
+
+// noServerSideJS flags MongoDB operators that run JavaScript on the database server; they turn data into code
+// (NoSQL injection, OWASP A03). Keep filters as bson documents with plain values (docs/adr/0003-datastores.md).
+func noServerSideJS(m dsl.Matcher) {
+	m.Import("go.mongodb.org/mongo-driver/v2/bson")
+	m.Match(`bson.M{$*_}`, `bson.D{$*_}`, `bson.E{$*_}`).
+		Where(m["$$"].Text.Matches(`"\$(where|function|accumulator)"`)).
+		Report(`Do not use $where/$function/$accumulator: they run JavaScript on the database server (docs/adr/0003-datastores.md).`)
+}

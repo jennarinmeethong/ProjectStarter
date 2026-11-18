@@ -27,6 +27,9 @@ services:
       # Local development only: the container's certificate is self-signed.
       SQLSERVER_URL: sqlserver://sa:${MSSQL_SA_PASSWORD:-Local-dev-only-1}@sqlserver:1433/app?trustServerCertificate=true
 {%- endif %}
+{%- if 'mongodb' in datastores %}
+      MONGODB_URL: mongodb://app:${MONGO_PASSWORD:-local-dev-only}@mongodb:27017/app?authSource=admin
+{%- endif %}
 {%- if 'redis' in datastores %}
       REDIS_URL: redis://redis:6379/0
 {%- endif %}
@@ -42,6 +45,10 @@ services:
 {%- if 'sqlserver' in datastores %}
       sqlserver-migrate:
         condition: service_completed_successfully
+{%- endif %}
+{%- if 'mongodb' in datastores %}
+      mongodb:
+        condition: service_healthy
 {%- endif %}
 {%- if 'redis' in datastores %}
       redis:
@@ -120,6 +127,21 @@ services:
         sqlcmd -Q "IF DB_ID(N'app') IS NULL CREATE DATABASE app" &&
         for f in /migrations/*.sql; do sqlcmd -d app -i "$$f"; done
 {%- endif %}
+{%- if 'mongodb' in datastores %}
+
+  mongodb:
+    # MongoDB Community Server is under the SSPL (ADR 0003). The adapter creates its own indexes.
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: app
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-local-dev-only}
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      retries: 30
+{%- endif %}
 {%- if 'redis' in datastores %}
 
   redis:
@@ -143,7 +165,7 @@ services:
     # Published on the host's loopback only.
     ports: ["127.0.0.1:8081:8080"]
 {%- endif %}
-{%- if 'postgres' in datastores or mysql_engine or 'sqlserver' in datastores %}
+{%- if 'postgres' in datastores or mysql_engine or 'sqlserver' in datastores or 'mongodb' in datastores %}
 
 volumes:
 {%- if 'postgres' in datastores %}
@@ -154,5 +176,8 @@ volumes:
 {%- endif %}
 {%- if 'sqlserver' in datastores %}
   sqlserver-data:
+{%- endif %}
+{%- if 'mongodb' in datastores %}
+  mongodb-data:
 {%- endif %}
 {%- endif %}

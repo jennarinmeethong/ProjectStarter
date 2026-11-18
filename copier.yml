@@ -69,6 +69,7 @@ datastores:
     MySQL: mysql
     MariaDB: mariadb
     SQL Server: sqlserver
+    MongoDB: mongodb
     Redis: redis
   default: []
   validator: >-

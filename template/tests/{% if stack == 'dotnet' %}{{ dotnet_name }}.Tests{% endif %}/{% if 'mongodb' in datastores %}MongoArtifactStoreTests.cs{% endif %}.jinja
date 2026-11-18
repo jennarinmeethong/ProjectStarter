@@ -1,0 +1,41 @@
+using MongoDB.Driver;
+using Testcontainers.MongoDb;
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Starts MongoDB once per test class.</summary>
+public sealed class MongoFixture : IAsyncLifetime
+{
+    private readonly MongoDbContainer container = new MongoDbBuilder("mongo:8.0").Build();
+
+    private MongoArtifactStore? store;
+
+    public MongoArtifactStore Store => store ?? throw new InvalidOperationException("Fixture not initialised.");
+
+    public async ValueTask InitializeAsync()
+    {
+        await container.StartAsync(TestContext.Current.CancellationToken);
+        var url = new MongoUrlBuilder(container.GetConnectionString()) { DatabaseName = "app", AuthenticationSource = "admin" };
+        store = await MongoArtifactStore.ConnectAsync(url.ToString());
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (store is not null)
+        {
+            await store.DisposeAsync();
+        }
+
+        await container.DisposeAsync();
+    }
+}
+
+/// <summary>Integration test: needs Docker. Run with the Category=Integration filter (excluded from verify).</summary>
+[Trait("Category", "Integration")]
+public sealed class MongoArtifactStoreTests(MongoFixture fixture) : ArtifactStoreContract, IClassFixture<MongoFixture>
+{
+    protected override StoreUnderTest Subject =>
+        new(fixture.Store, key => fixture.Store.ReadAsync(key, TestContext.Current.CancellationToken));
+}

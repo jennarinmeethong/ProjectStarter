@@ -34,9 +34,16 @@ percent-encoding = "2"
 {%- if 'redis' in datastores %}
 redis = { version = "1.8", default-features = false, features = ["tokio-comp"] }
 {%- endif %}
+{%- if 'mongodb' in datastores %}
+mongodb = "3"
+{%- endif %}
 {%- if http_api %}
 axum = "0.8"
+{%- endif %}
+{%- if http_api or 'mongodb' in datastores %}
 serde = { version = "1", features = ["derive"] }
+{%- endif %}
+{%- if http_api %}
 serde_json = "1"
 {%- endif %}
 
@@ -46,6 +53,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 {%- set modules = [] %}
 {%- if mysql_engine %}{% set _ = modules.append('"' ~ mysql_engine ~ '"') %}{% endif %}
 {%- if 'postgres' in datastores %}{% set _ = modules.append('"postgres"') %}{% endif %}
+{%- if 'mongodb' in datastores %}{% set _ = modules.append('"mongo"') %}{% endif %}
 {%- if 'sqlserver' in datastores %}{% set _ = modules.append('"mssql_server"') %}{% endif %}
 {%- if 'redis' in datastores %}{% set _ = modules.append('"redis"') %}{% endif %}
 testcontainers-modules = { version = "0.15", features = [{{ modules | join(', ') }}] }

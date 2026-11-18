@@ -26,6 +26,14 @@ if (owned is null && !string.IsNullOrEmpty(mysqlUrl))
     (store, owned) = (mysql, mysql);
 }
 {%- endif %}
+{%- if 'mongodb' in datastores %}
+var mongoUrl = Environment.GetEnvironmentVariable("MONGODB_URL");
+if (owned is null && !string.IsNullOrEmpty(mongoUrl))
+{
+    var mongo = await MongoArtifactStore.ConnectAsync(mongoUrl);
+    (store, owned) = (mongo, mongo);
+}
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
 var sqlServerUrl = Environment.GetEnvironmentVariable("SQLSERVER_URL");
 if (owned is null && !string.IsNullOrEmpty(sqlServerUrl))

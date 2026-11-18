@@ -1,0 +1,20 @@
+// Integration test: needs Docker. Run with `npm run test:integration` (excluded from `npm test`).
+import { MongoDBContainer, type StartedMongoDBContainer } from "@testcontainers/mongodb";
+import { afterAll, beforeAll } from "vitest";
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { MongoArtifactStore } from "./mongo-artifact-store.ts";
+
+let container: StartedMongoDBContainer;
+let store: MongoArtifactStore;
+
+beforeAll(async () => {
+  container = await new MongoDBContainer("mongo:8.0").start();
+  store = await MongoArtifactStore.connect(`${container.getConnectionString()}/app?directConnection=true`);
+}, 180_000);
+
+afterAll(async () => {
+  await store.close();
+  await container.stop();
+});
+
+describeArtifactStoreContract("MongoArtifactStore", () => ({ store, read: (key) => store.read(key) }));

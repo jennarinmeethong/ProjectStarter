@@ -1,0 +1,37 @@
+//go:build integration
+
+// Integration test: needs Docker. Run with `go test -tags integration ./...`.
+package mongostore_test
+
+import (
+	"testing"
+
+	"github.com/testcontainers/testcontainers-go"
+	tcmongodb "github.com/testcontainers/testcontainers-go/modules/mongodb"
+
+	"{{ go_module }}/internal/adapters/mongostore"
+	"{{ go_module }}/internal/adapters/storetest"
+)
+
+func TestMongoStoreSatisfiesTheContract(t *testing.T) {
+	ctx := t.Context()
+	container, err := tcmongodb.Run(ctx, "mongo:8.0",
+		tcmongodb.WithUsername("app"), tcmongodb.WithPassword("app-test-only"))
+	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		t.Fatalf("start mongodb: %v", err)
+	}
+	endpoint, err := container.Endpoint(ctx, "")
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	store, err := mongostore.Open(ctx, "mongodb://app:app-test-only@"+endpoint+"/app?authSource=admin")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(t.Context()) })
+
+	storetest.Run(t, func(*testing.T) storetest.Subject {
+		return storetest.Subject{Store: store, Read: store.Read}
+	})
+}

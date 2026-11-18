@@ -44,6 +44,16 @@ const noSqlFromStrings = [
   },
 ];
 
+// NoSQL injection (OWASP A03): operators that run JavaScript on the database server turn data into code.
+// Keep filters as typed objects with plain values (ADR 0003).
+const SERVER_SIDE_JS = "/^\\$(where|function|accumulator)$/";
+const noServerSideJs = [
+  {
+    selector: `Property[key.name=${SERVER_SIDE_JS}], Property[key.value=${SERVER_SIDE_JS}]`,
+    message: `Do not use $where/$function/$accumulator: they run JavaScript on the database server (${ADR_DATA}).`,
+  },
+];
+
 // Hidden inputs make domain/application code non-deterministic and untestable (DIP: inject them as ports).
 const noHiddenInputs = [
   {
@@ -77,7 +87,7 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/ban-ts-comment": ["error", { "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true }],
       "@typescript-eslint/no-explicit-any": "error",
-      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings],
+      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings, ...noServerSideJs],
 
       // Single responsibility: when a unit outgrows these limits, split it by reason to change (ADR 0002 #SRP).
       // Cognitive complexity (how hard a function is to read) replaces cyclomatic `complexity`.
@@ -141,7 +151,7 @@ export default tseslint.config(
         { name: "process", message: `No environment/process access in domain/application. Read config in bootstrap and pass it in (${ADR_DESIGN} #DIP).` },
         { name: "fetch", message: `No I/O in domain/application. Define a port in application and implement it in adapters (${ADR_LAYERS}).` },
       ],
-      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings, ...noHiddenInputs],
+      "no-restricted-syntax": ["error", noCastThroughUnknown, ...noSqlFromStrings, ...noServerSideJs, ...noHiddenInputs],
       "no-console": ["error"],
     },
   },

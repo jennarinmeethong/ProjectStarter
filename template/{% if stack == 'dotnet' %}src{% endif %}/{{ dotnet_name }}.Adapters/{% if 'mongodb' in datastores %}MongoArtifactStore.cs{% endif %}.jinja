@@ -1,0 +1,60 @@
+using MongoDB.Bson.Serialization.Attributes;
+using MongoDB.Driver;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+/// <summary>
+/// IArtifactStore on MongoDB (also Atlas: pass a mongodb+srv:// URL). Filters are typed expressions,
+/// never parsed from strings (ADR 0003).
+/// </summary>
+public sealed class MongoArtifactStore : IArtifactStore, IAsyncDisposable
+{
+    private readonly MongoClient client;
+    private readonly IMongoCollection<ArtifactDocument> artifacts;
+
+    private MongoArtifactStore(MongoClient client, IMongoCollection<ArtifactDocument> artifacts)
+    {
+        this.client = client;
+        this.artifacts = artifacts;
+    }
+
+    /// <summary>Connects to a mongodb:// URL (the database comes from its path) and ensures the indexes exist.</summary>
+    public static async Task<MongoArtifactStore> ConnectAsync(string connection)
+    {
+        var url = MongoUrl.Create(connection);
+        var client = new MongoClient(url);
+        var artifacts = client.GetDatabase(url.DatabaseName ?? "app").GetCollection<ArtifactDocument>("export_artifacts");
+        var byJob = new CreateIndexModel<ArtifactDocument>(Builders<ArtifactDocument>.IndexKeys.Ascending(a => a.JobId));
+        await artifacts.Indexes.CreateOneAsync(byJob).ConfigureAwait(false);
+        return new MongoArtifactStore(client, artifacts);
+    }
+
+    public async Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        await artifacts.ReplaceOneAsync(
+            a => a.Key == key,
+            new ArtifactDocument(key, jobId, content),
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken).ConfigureAwait(false);
+        return key;
+    }
+
+    public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        var artifact = await artifacts.Find(a => a.Key == key).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+        return artifact?.Body;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        client.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    internal sealed record ArtifactDocument(
+        [property: BsonId] string Key,
+        [property: BsonElement("job_id")] string JobId,
+        [property: BsonElement("body")] string Body);
+}

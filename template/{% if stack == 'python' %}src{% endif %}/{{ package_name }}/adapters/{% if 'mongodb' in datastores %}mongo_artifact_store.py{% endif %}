@@ -1,0 +1,41 @@
+"""ArtifactStore on MongoDB (also Atlas: pass a mongodb+srv:// URL).
+
+Filters are dicts with plain string values, never parsed from strings (ADR 0003).
+"""
+
+from __future__ import annotations
+
+from typing import Any, Self
+
+from pymongo import ASCENDING, MongoClient
+from pymongo.collection import Collection
+
+Document = dict[str, Any]
+
+
+class MongoArtifactStore:
+    def __init__(self, client: MongoClient[Document]) -> None:
+        self._client = client
+        self._artifacts: Collection[Document] = client.get_default_database()["export_artifacts"]
+
+    @classmethod
+    def from_url(cls, url: str) -> Self:
+        """Connects to mongodb://user:pass@host:port/db (the database comes from the path)."""
+        store = cls(MongoClient(url, maxPoolSize=5))
+        store._artifacts.create_index([("job_id", ASCENDING)])
+        return store
+
+    def save(self, job_id: str, content: str) -> str:
+        key = f"exports/{job_id}.csv"
+        self._artifacts.replace_one({"_id": key}, {"job_id": job_id, "body": content}, upsert=True)
+        return key
+
+    def read(self, key: str) -> str | None:
+        artifact = self._artifacts.find_one({"_id": key})
+        if artifact is None:
+            return None
+        body = artifact.get("body")
+        return body if isinstance(body, str) else None
+
+    def close(self) -> None:
+        self._client.close()

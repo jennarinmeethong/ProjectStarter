@@ -11,6 +11,9 @@
 {%- endif %}
 {%- if datastores %}
   <ItemGroup>
+{%- if 'mongodb' in datastores %}
+    <PackageReference Include="MongoDB.Driver" />
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
     <PackageReference Include="Microsoft.Data.SqlClient" />
 {%- endif %}

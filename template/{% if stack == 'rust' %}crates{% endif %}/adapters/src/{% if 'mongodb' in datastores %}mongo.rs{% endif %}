@@ -1,0 +1,48 @@
+//! `ArtifactStore` on MongoDB (also Atlas: pass a mongodb+srv:// URL).
+//!
+//! Filters are `doc!` documents with plain values, never parsed from strings (ADR 0003).
+
+use application::{ArtifactStore, PortError};
+use mongodb::bson::doc;
+use mongodb::{Client, Collection, IndexModel};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Artifact {
+    #[serde(rename = "_id")]
+    key: String,
+    job_id: String,
+    body: String,
+}
+
+/// Keeps artifacts in the `export_artifacts` collection.
+#[derive(Debug, Clone)]
+pub struct MongoArtifactStore {
+    artifacts: Collection<Artifact>,
+}
+
+impl MongoArtifactStore {
+    /// Connects to `url` (the database comes from its path) and ensures the indexes exist.
+    pub async fn connect(url: &str) -> Result<Self, PortError> {
+        let client = Client::with_uri_str(url).await?;
+        let database = client.default_database().unwrap_or_else(|| client.database("app"));
+        let artifacts = database.collection::<Artifact>("export_artifacts");
+        artifacts.create_index(IndexModel::builder().keys(doc! { "job_id": 1 }).build()).await?;
+        Ok(Self { artifacts })
+    }
+
+    /// Returns the content stored under `key`, if any.
+    pub async fn read(&self, key: &str) -> Result<Option<String>, PortError> {
+        let found = self.artifacts.find_one(doc! { "_id": key }).await?;
+        Ok(found.map(|artifact| artifact.body))
+    }
+}
+
+impl ArtifactStore for MongoArtifactStore {
+    async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
+        let key = format!("exports/{job_id}.csv");
+        let artifact = Artifact { key: key.clone(), job_id: job_id.to_owned(), body: content.to_owned() };
+        self.artifacts.replace_one(doc! { "_id": &key }, &artifact).upsert(true).await?;
+        Ok(key)
+    }
+}
