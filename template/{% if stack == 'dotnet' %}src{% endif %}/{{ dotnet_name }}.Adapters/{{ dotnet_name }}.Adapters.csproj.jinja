@@ -11,6 +11,9 @@
 {%- endif %}
 {%- if datastores %}
   <ItemGroup>
+{%- if 'sqlserver' in datastores %}
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+{%- endif %}
 {%- if mysql_engine %}
     <PackageReference Include="MySqlConnector" />
 {%- endif %}

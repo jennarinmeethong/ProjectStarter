@@ -1,0 +1,62 @@
+import sql from "mssql";
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+// HOLDLOCK makes MERGE an atomic upsert under concurrency.
+const UPSERT_SQL = `MERGE export_artifacts WITH (HOLDLOCK) AS target
+USING (SELECT @key AS artifact_key, @jobId AS job_id, @body AS body) AS source
+ON target.artifact_key = source.artifact_key
+WHEN MATCHED THEN UPDATE SET body = source.body
+WHEN NOT MATCHED THEN INSERT (artifact_key, job_id, body) VALUES (source.artifact_key, source.job_id, source.body);`;
+const READ_SQL = "SELECT body FROM export_artifacts WHERE artifact_key = @key";
+
+/** Parses `sqlserver://user:password@host:port/database[?trustServerCertificate=true]`. */
+export function toConfig(uri: string): sql.config {
+  const url = new URL(uri);
+  return {
+    server: url.hostname,
+    port: Number(url.port || "1433"),
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    database: url.pathname.slice(1) || "master",
+    pool: { max: 5 },
+    options: { encrypt: true, trustServerCertificate: url.searchParams.get("trustServerCertificate") === "true" },
+  };
+}
+
+/** ArtifactStore on SQL Server. Schema: migrations/sqlserver/. Queries are always parameterised (ADR 0003). */
+export class SqlServerArtifactStore implements ArtifactStore {
+  readonly #pool: sql.ConnectionPool;
+
+  constructor(pool: sql.ConnectionPool) {
+    this.#pool = pool;
+  }
+
+  static async connect(uri: string): Promise<SqlServerArtifactStore> {
+    const pool = new sql.ConnectionPool(toConfig(uri));
+    await pool.connect();
+    return new SqlServerArtifactStore(pool);
+  }
+
+  async save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    await this.#pool
+      .request()
+      .input("key", sql.NVarChar(255), key)
+      .input("jobId", sql.NVarChar(64), jobId)
+      .input("body", sql.NVarChar(sql.MAX), content)
+      .query(UPSERT_SQL);
+    return key;
+  }
+
+  async read(key: string): Promise<string | undefined> {
+    const result = await this.#pool
+      .request()
+      .input("key", sql.NVarChar(255), key)
+      .query<{ body: string }>(READ_SQL);
+    return result.recordset[0]?.body;
+  }
+
+  async close(): Promise<void> {
+    await this.#pool.close();
+  }
+}

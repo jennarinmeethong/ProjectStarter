@@ -23,6 +23,9 @@ from {{ package_name }}.adapters.postgres_artifact_store import PostgresArtifact
 {%- if 'redis' in datastores %}
 from {{ package_name }}.adapters.redis_artifact_store import RedisArtifactStore
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+from {{ package_name }}.adapters.sqlserver_artifact_store import SqlServerArtifactStore
+{%- endif %}
 {%- if http_api %}
 {%- if datastores %}
 from {{ package_name }}.application.complete_export import ArtifactStore
@@ -55,6 +58,16 @@ def open_store() -> Generator[ArtifactStore, None, None]:
             yield mysql
         finally:
             mysql.close()
+        return
+{%- endif %}
+{%- if 'sqlserver' in datastores %}
+    sqlserver_url = os.environ.get("SQLSERVER_URL")
+    if sqlserver_url:
+        sqlserver = SqlServerArtifactStore.from_url(sqlserver_url)
+        try:
+            yield sqlserver
+        finally:
+            sqlserver.close()
         return
 {%- endif %}
 {%- if 'redis' in datastores %}

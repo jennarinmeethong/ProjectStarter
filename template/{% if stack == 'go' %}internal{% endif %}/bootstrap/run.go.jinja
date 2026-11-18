@@ -28,6 +28,9 @@ import (
 {%- if 'redis' in datastores %}
 	"{{ go_module }}/internal/adapters/redisstore"
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+	"{{ go_module }}/internal/adapters/sqlserverstore"
+{%- endif %}
 	"{{ go_module }}/internal/application"
 {%- if not http_api %}
 	"{{ go_module }}/internal/domain"
@@ -85,6 +88,15 @@ func openStore(ctx context.Context) (application.ArtifactStore, func(), error) {
 		store, err := mysqlstore.Open(ctx, url)
 		if err != nil {
 			return nil, nil, fmt.Errorf("open mysql: %w", err)
+		}
+		return store, func() { _ = store.Close() }, nil
+	}
+{%- endif %}
+{%- if 'sqlserver' in datastores %}
+	if url := os.Getenv("SQLSERVER_URL"); url != "" {
+		store, err := sqlserverstore.Open(ctx, url)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open sqlserver: %w", err)
 		}
 		return store, func() { _ = store.Close() }, nil
 	}

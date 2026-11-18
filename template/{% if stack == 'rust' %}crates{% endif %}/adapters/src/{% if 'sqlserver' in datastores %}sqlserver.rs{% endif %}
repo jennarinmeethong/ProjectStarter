@@ -1,0 +1,96 @@
+//! `ArtifactStore` on SQL Server (tiberius). Schema: `migrations/sqlserver/`.
+//!
+//! tiberius accepts SQL from any string, so `crates/adapters/clippy.toml` bans its query methods
+//! everywhere except the gateways below, which only take `&'static str` constants (ADR 0003).
+
+use std::sync::Arc;
+
+use application::{ArtifactStore, PortError};
+use percent_encoding::percent_decode_str;
+use tiberius::{AuthMethod, Client, Config, EncryptionLevel, ExecuteResult, QueryStream, ToSql};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
+use url::Url;
+
+// HOLDLOCK makes MERGE an atomic upsert under concurrency.
+const UPSERT_SQL: &str = "MERGE export_artifacts WITH (HOLDLOCK) AS target \
+     USING (SELECT @P1 AS artifact_key, @P2 AS job_id, @P3 AS body) AS source \
+     ON target.artifact_key = source.artifact_key \
+     WHEN MATCHED THEN UPDATE SET body = source.body \
+     WHEN NOT MATCHED THEN INSERT (artifact_key, job_id, body) \
+     VALUES (source.artifact_key, source.job_id, source.body);";
+const READ_SQL: &str = "SELECT body FROM export_artifacts WHERE artifact_key = @P1";
+
+type Connection = Client<Compat<TcpStream>>;
+
+/// Keeps artifacts in the `export_artifacts` table over one shared connection.
+#[derive(Debug, Clone)]
+pub struct SqlServerArtifactStore {
+    client: Arc<Mutex<Connection>>,
+}
+
+impl SqlServerArtifactStore {
+    /// Connects to `url` (sqlserver://user:pass@host:port/db[?trustServerCertificate=true]).
+    pub async fn connect(url: &str) -> Result<Self, PortError> {
+        let config = to_config(url)?;
+        let tcp = TcpStream::connect(config.get_addr()).await?;
+        tcp.set_nodelay(true)?;
+        // The login handshake future is large; box it instead of growing every caller's stack.
+        let client = Box::pin(Client::connect(config, tcp.compat_write())).await?;
+        Ok(Self { client: Arc::new(Mutex::new(client)) })
+    }
+
+    /// Returns the content stored under `key`, if any.
+    pub async fn read(&self, key: &str) -> Result<Option<String>, PortError> {
+        let mut client = self.client.lock().await;
+        let row = query(&mut client, READ_SQL, &[&key]).await?.into_row().await?;
+        Ok(row.and_then(|row| row.get::<&str, _>(0).map(str::to_owned)))
+    }
+}
+
+impl ArtifactStore for SqlServerArtifactStore {
+    async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
+        let key = format!("exports/{job_id}.csv");
+        let mut client = self.client.lock().await;
+        execute(&mut client, UPSERT_SQL, &[&key.as_str(), &job_id, &content]).await?;
+        Ok(key)
+    }
+}
+
+/// The only place that runs a query. `&'static str` keeps SQL a compile-time constant.
+#[expect(clippy::disallowed_methods, reason = "audited gateway: SQL is a &'static str constant")]
+async fn query<'a>(
+    client: &'a mut Connection,
+    sql: &'static str,
+    params: &[&dyn ToSql],
+) -> tiberius::Result<QueryStream<'a>> {
+    client.query(sql, params).await
+}
+
+/// The only place that runs a statement. `&'static str` keeps SQL a compile-time constant.
+#[expect(clippy::disallowed_methods, reason = "audited gateway: SQL is a &'static str constant")]
+async fn execute(
+    client: &mut Connection,
+    sql: &'static str,
+    params: &[&dyn ToSql],
+) -> tiberius::Result<ExecuteResult> {
+    client.execute(sql, params).await
+}
+
+fn to_config(url: &str) -> Result<Config, PortError> {
+    let parsed = Url::parse(url)?;
+    let mut config = Config::new();
+    config.host(parsed.host_str().unwrap_or("localhost"));
+    config.port(parsed.port().unwrap_or(1433));
+    let database = parsed.path().trim_start_matches('/');
+    config.database(if database.is_empty() { "master" } else { database });
+    let user = percent_decode_str(parsed.username()).decode_utf8()?;
+    let password = percent_decode_str(parsed.password().unwrap_or_default()).decode_utf8()?;
+    config.authentication(AuthMethod::sql_server(user, password));
+    config.encryption(EncryptionLevel::Required);
+    if parsed.query_pairs().any(|(name, value)| name == "trustServerCertificate" && value == "true") {
+        config.trust_cert();
+    }
+    Ok(config)
+}

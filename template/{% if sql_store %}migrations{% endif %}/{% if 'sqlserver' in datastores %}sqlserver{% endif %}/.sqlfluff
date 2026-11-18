@@ -1,0 +1,3 @@
+# Guardrail config (protected). T-SQL dialect for migrations/sqlserver (overrides the root .sqlfluff).
+[sqlfluff]
+dialect = tsql

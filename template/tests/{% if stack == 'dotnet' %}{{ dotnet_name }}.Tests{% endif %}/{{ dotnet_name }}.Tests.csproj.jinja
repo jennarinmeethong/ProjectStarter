@@ -10,6 +10,9 @@
 {%- endif %}
     <PackageReference Include="NetArchTest.Rules" />
     <PackageReference Include="xunit.v3" />
+{%- if 'sqlserver' in datastores %}
+    <PackageReference Include="Testcontainers.MsSql" />
+{%- endif %}
 {%- if mysql_engine %}
     <PackageReference Include="Testcontainers.{{ 'MySql' if mysql_engine == 'mysql' else 'MariaDb' }}" />
 {%- endif %}

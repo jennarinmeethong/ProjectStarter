@@ -26,6 +26,14 @@ if (owned is null && !string.IsNullOrEmpty(mysqlUrl))
     (store, owned) = (mysql, mysql);
 }
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+var sqlServerUrl = Environment.GetEnvironmentVariable("SQLSERVER_URL");
+if (owned is null && !string.IsNullOrEmpty(sqlServerUrl))
+{
+    var sqlServer = SqlServerArtifactStore.Create(sqlServerUrl);
+    (store, owned) = (sqlServer, sqlServer);
+}
+{%- endif %}
 {%- if 'redis' in datastores %}
 var redisUrl = Environment.GetEnvironmentVariable("REDIS_URL");
 if (owned is null && !string.IsNullOrEmpty(redisUrl))

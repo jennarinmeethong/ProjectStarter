@@ -1,0 +1,52 @@
+"""Integration test: needs Docker.
+
+Run with `uv run pytest -m integration` (deselected by default).
+"""
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import mssql_python
+import pytest
+from testcontainers.community.mssql import SqlServerContainer
+from tests.artifact_store_contract import ArtifactStoreContract, StoreUnderTest
+
+from {{ package_name }}.adapters.sqlserver_artifact_store import (
+    SqlServerArtifactStore,
+    open_cursor,
+    to_connection_string,
+)
+
+pytestmark = pytest.mark.integration
+
+MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations" / "sqlserver"
+IMAGE = "mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04"
+
+
+def run_batch(url: str, sql: str) -> None:
+    with mssql_python.connect(to_connection_string(url), autocommit=True) as connection:
+        cursor = open_cursor(connection)
+        cursor.execute(sql)
+        cursor.close()
+
+
+@pytest.fixture(scope="module")
+def database_url() -> Iterator[str]:
+    with SqlServerContainer(IMAGE, password="Test-only-Passw0rd") as server:
+        host = server.get_container_host_ip()
+        port = int(server.get_exposed_port(1433))
+        base = f"sqlserver://sa:Test-only-Passw0rd@{host}:{port}"
+        query = "?trustServerCertificate=true"
+        # Same steps as the compose migrate job: create the database, then apply files in order.
+        run_batch(f"{base}/master{query}", "IF DB_ID(N'app') IS NULL CREATE DATABASE app")
+        for migration in sorted(MIGRATIONS.glob("*.sql")):
+            run_batch(f"{base}/app{query}", migration.read_text(encoding="utf-8"))
+        yield f"{base}/app{query}"
+
+
+class TestSqlServerArtifactStore(ArtifactStoreContract):
+    @pytest.fixture
+    def subject(self, database_url: str) -> Iterator[StoreUnderTest]:
+        store = SqlServerArtifactStore.from_url(database_url)
+        yield StoreUnderTest(store=store, read=store.read)
+        store.close()

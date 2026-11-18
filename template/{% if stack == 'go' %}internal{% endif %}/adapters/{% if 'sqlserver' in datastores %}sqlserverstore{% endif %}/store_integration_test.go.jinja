@@ -1,0 +1,59 @@
+//go:build integration
+
+// Integration test: needs Docker. Run with `go test -tags integration ./...`.
+package sqlserverstore_test
+
+import (
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/testcontainers/testcontainers-go"
+	tcmssql "github.com/testcontainers/testcontainers-go/modules/mssql"
+
+	"{{ go_module }}/internal/adapters/sqlserverstore"
+	"{{ go_module }}/internal/adapters/storetest"
+)
+
+func TestSQLServerStoreSatisfiesTheContract(t *testing.T) {
+	ctx := t.Context()
+	migrations, err := filepath.Glob(filepath.Join("..", "..", "..", "migrations", "sqlserver", "*.sql"))
+	if err != nil || len(migrations) == 0 {
+		t.Fatalf("no migrations found: %v", err)
+	}
+	sort.Strings(migrations)
+
+	// Same steps as the compose migrate job: create the database, then apply files in name order with sqlcmd.
+	scripts := make([]io.Reader, 0, 1+len(migrations))
+	scripts = append(scripts, strings.NewReader("IF DB_ID(N'app') IS NULL CREATE DATABASE app"))
+	for _, path := range migrations {
+		content, err := os.ReadFile(path) //nolint:gosec // test reads the repository's own migrations
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		scripts = append(scripts, strings.NewReader("USE app;\n"+string(content)))
+	}
+
+	container, err := tcmssql.Run(ctx, "mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04",
+		tcmssql.WithAcceptEULA(), tcmssql.WithPassword("Test-only-Passw0rd"), tcmssql.WithInitSQL(scripts...))
+	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		t.Fatalf("start sqlserver: %v", err)
+	}
+	dsn, err := container.ConnectionString(ctx, "database=app", "encrypt=true", "TrustServerCertificate=true")
+	if err != nil {
+		t.Fatalf("connection string: %v", err)
+	}
+	store, err := sqlserverstore.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	storetest.Run(t, func(*testing.T) storetest.Subject {
+		return storetest.Subject{Store: store, Read: store.Read}
+	})
+}

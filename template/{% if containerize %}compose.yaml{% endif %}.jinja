@@ -23,6 +23,10 @@ services:
 {%- if mysql_engine %}
       MYSQL_URL: mysql://app:${MYSQL_PASSWORD:-local-dev-only}@{{ mysql_engine }}:3306/app
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+      # Local development only: the container's certificate is self-signed.
+      SQLSERVER_URL: sqlserver://sa:${MSSQL_SA_PASSWORD:-Local-dev-only-1}@sqlserver:1433/app?trustServerCertificate=true
+{%- endif %}
 {%- if 'redis' in datastores %}
       REDIS_URL: redis://redis:6379/0
 {%- endif %}
@@ -34,6 +38,10 @@ services:
 {%- if mysql_engine %}
       {{ mysql_engine }}:
         condition: service_healthy
+{%- endif %}
+{%- if 'sqlserver' in datastores %}
+      sqlserver-migrate:
+        condition: service_completed_successfully
 {%- endif %}
 {%- if 'redis' in datastores %}
       redis:
@@ -79,6 +87,39 @@ services:
       interval: 2s
       retries: 60
 {%- endif %}
+{%- if 'sqlserver' in datastores %}
+
+  sqlserver:
+    # SQL Server Developer edition: free for development and testing under Microsoft's EULA (ADR 0003).
+    image: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Local-dev-only-1}
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1' -b"]
+      interval: 5s
+      retries: 40
+
+  # SQL Server has no init-script hook: this one-shot job creates the database and applies migrations/sqlserver.
+  sqlserver-migrate:
+    image: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Local-dev-only-1}
+    volumes:
+      - ./migrations/sqlserver:/migrations:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        sqlcmd() { /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P "$${MSSQL_SA_PASSWORD}" -C -b "$$@"; } &&
+        sqlcmd -Q "IF DB_ID(N'app') IS NULL CREATE DATABASE app" &&
+        for f in /migrations/*.sql; do sqlcmd -d app -i "$$f"; done
+{%- endif %}
 {%- if 'redis' in datastores %}
 
   redis:
@@ -102,7 +143,7 @@ services:
     # Published on the host's loopback only.
     ports: ["127.0.0.1:8081:8080"]
 {%- endif %}
-{%- if 'postgres' in datastores or mysql_engine %}
+{%- if 'postgres' in datastores or mysql_engine or 'sqlserver' in datastores %}
 
 volumes:
 {%- if 'postgres' in datastores %}
@@ -110,5 +151,8 @@ volumes:
 {%- endif %}
 {%- if mysql_engine %}
   {{ mysql_engine }}-data:
+{%- endif %}
+{%- if 'sqlserver' in datastores %}
+  sqlserver-data:
 {%- endif %}
 {%- endif %}

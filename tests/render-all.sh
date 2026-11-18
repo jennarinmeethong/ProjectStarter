@@ -111,6 +111,30 @@ mariadb_checks() { # mariadb_checks <stack> <install> <integration-command>: Mar
   popd >/dev/null || return
 }
 
+sqlserver_checks() { # sqlserver_checks <stack> <install> <integration-command> [seeded|seeded_new label file text command...]
+  local dir="$work/$1-sqlserver"
+  render "$1" '["codex"]' "$dir" -d 'datastores=["sqlserver"]' || { fail "render sqlserver"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm init
+  bash -c "$2" >/dev/null 2>&1
+  verify "sqlserver: adapter contract on a real SQL Server" "$3"
+  if [ "$#" -gt 3 ]; then "$4" "${@:5}"; fi
+  if [ "$1" = typescript ]; then
+    # Stack-independent parts, checked once: T-SQL lint and the compose migrate job.
+    local sqlfluff="uvx -q sqlfluff==4.5.0"
+    verify "sqlfluff: T-SQL migrations" "$sqlfluff lint migrations"
+    seeded "sqlfluff: lower-case T-SQL keywords" migrations/sqlserver/0001_create_export_artifacts.sql \
+      '\nselect body from export_artifacts;\n' $sqlfluff lint migrations
+    local compose="docker compose -p ps-sqlserver"
+    $compose down -v >/dev/null 2>&1
+    verify "compose: SQL Server migrate job creates the schema" \
+      "$compose up -d --wait sqlserver && $compose run --rm sqlserver-migrate \
+       && [ \"\$(MSYS_NO_PATHCONV=1 $compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Local-dev-only-1 -C -d app -h -1 -W -Q 'SET NOCOUNT ON; SELECT COUNT(*) FROM export_artifacts' | tr -d '[:space:]')\" = 0 ]"
+    $compose down -v >/dev/null 2>&1
+  fi
+  popd >/dev/null || return
+}
+
 http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: rendered with http_api=true
   local image="project-starter-$1"
   verify "playwright: API tests against the real server" "$2"
@@ -315,6 +339,7 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks typescript
       mariadb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
+      sqlserver_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       verify "integration: adapter contracts on real PostgreSQL + Redis" "npm run test:integration"
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks typescript "npm run test:e2e" src/adapters/http/app.ts 's/      xFrameOptions: "DENY",/&\n      xContentTypeOptions: false,/'
@@ -356,6 +381,7 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks python
       mariadb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
+      sqlserver_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
       verify "integration: adapter contracts on real PostgreSQL + Redis" "uv run pytest -q -p no:warnings -m integration"
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks python "uv run pytest -q -p no:warnings -m e2e" src/demo_app/adapters/http/app.py '/"X-Content-Type-Options": "nosniff",/d'
@@ -388,6 +414,7 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks dotnet
       mariadb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
+      sqlserver_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks dotnet 'dotnet test --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
@@ -416,6 +443,9 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks go
       mariadb_checks go "go mod tidy" "go test -tags integration ./..."
+      sqlserver_checks go "go mod tidy" "go test -tags integration ./..." \
+        seeded_new "depguard: SQL Server driver outside adapters" internal/application/sqlserver_driver.go \
+        'package application\n\nimport _ "github.com/microsoft/go-mssqldb"\n' go tool golangci-lint run
       verify "integration: adapter contracts on real PostgreSQL + Redis" "go test -tags integration ./..."
       seeded_new "ruleguard: SQL built by concatenation" internal/adapters/postgres/unsafe.go 'package postgres\n\nimport "context"\n\n// Unsafe builds SQL from a value.\nfunc (s *Store) Unsafe(ctx context.Context, jobID string) error {\n\t_, err := s.pool.Exec(ctx, "SELECT body FROM export_artifacts WHERE job_id = \x27"+jobID+"\x27")\n\treturn err //nolint:wrapcheck // seeded\n}\n' go tool golangci-lint run ./internal/adapters/postgres/
       seeded_new "depguard: driver imported in application" internal/application/driver.go 'package application\n\nimport "github.com/jackc/pgx/v5/pgxpool"\n\n// Pool leaks the driver into the application layer.\ntype Pool = pgxpool.Pool\n' go tool golangci-lint run --enable-only depguard ./internal/application/
@@ -445,6 +475,10 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks rust
       mariadb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
+      sqlserver_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
+        seeded "clippy: tiberius query outside the static-SQL gateway" crates/adapters/src/sqlserver.rs \
+        '\n/// Builds SQL from a value.\npub async fn unsafe_delete(client: &mut Connection, table: &str) -> tiberius::Result<u64> {\n    Ok(client.execute(format!("DELETE FROM {table}"), &[]).await?.total())\n}\n' \
+        cargo clippy -p adapters -- -D warnings
       verify "integration: adapter contracts on real PostgreSQL + Redis" "cargo test -p adapters --features integration"
       seeded "sqlx: SQL built from a string does not compile" crates/adapters/src/postgres.rs '\n/// Builds SQL from a value.\npub async fn unsafe_read(pool: &PgPool, job_id: &str) -> Result<(), PortError> {\n    let sql = format!("SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27");\n    sqlx::query(&sql).execute(pool).await?;\n    Ok(())\n}\n' cargo check -p adapters
       seeded "check-layers: driver in bootstrap" crates/bootstrap/Cargo.toml 'redis = "1.8"\n' bash ci/check-layers.sh

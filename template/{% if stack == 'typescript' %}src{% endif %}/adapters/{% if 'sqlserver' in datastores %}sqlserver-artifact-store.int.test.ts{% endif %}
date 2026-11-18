@@ -1,0 +1,44 @@
+// Integration test: needs Docker. Run with `npm run test:integration` (excluded from `npm test`).
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { MSSQLServerContainer, type StartedMSSQLServerContainer } from "@testcontainers/mssqlserver";
+import sql from "mssql";
+import { afterAll, beforeAll } from "vitest";
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { SqlServerArtifactStore, toConfig } from "./sqlserver-artifact-store.ts";
+
+const MIGRATIONS = "migrations/sqlserver";
+
+let container: StartedMSSQLServerContainer;
+let store: SqlServerArtifactStore;
+
+/** Creates the `app` database and applies migrations/sqlserver in order, like the compose migrate job. */
+async function migrate(url: (database: string) => string): Promise<void> {
+  const master = await new sql.ConnectionPool(toConfig(url("master"))).connect();
+  await master.request().batch("IF DB_ID(N'app') IS NULL CREATE DATABASE app");
+  await master.close();
+  const app = await new sql.ConnectionPool(toConfig(url("app"))).connect();
+  const files = (await readdir(MIGRATIONS)).filter((name) => name.endsWith(".sql")).sort();
+  for (const name of files) {
+    await app.request().batch(await readFile(join(MIGRATIONS, name), "utf8"));
+  }
+  await app.close();
+}
+
+beforeAll(async () => {
+  container = await new MSSQLServerContainer("mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04")
+    .acceptLicense()
+    .start();
+  const credentials = `${encodeURIComponent(container.getUsername())}:${encodeURIComponent(container.getPassword())}`;
+  const url = (database: string): string =>
+    `sqlserver://${credentials}@${container.getHost()}:${String(container.getPort())}/${database}?trustServerCertificate=true`;
+  await migrate(url);
+  store = await SqlServerArtifactStore.connect(url("app"));
+}, 300_000);
+
+afterAll(async () => {
+  await store.close();
+  await container.stop();
+});
+
+describeArtifactStoreContract("SqlServerArtifactStore", () => ({ store, read: (key) => store.read(key) }));
