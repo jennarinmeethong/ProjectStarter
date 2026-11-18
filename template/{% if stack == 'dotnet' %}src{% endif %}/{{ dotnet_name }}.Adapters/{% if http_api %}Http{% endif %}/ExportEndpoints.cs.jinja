@@ -53,7 +53,7 @@ public static partial class ExportEndpoints
         return TypedResults.Created($"/exports/{ready.Id}", new CompleteExportResponse(ready.Id, ready.ArtifactKey));
     }
 
-    [GeneratedRegex("^[A-Za-z0-9_-]{1,64}$")]
+    [GeneratedRegex("^[A-Za-z0-9_-]{1,64}\\z")]
     private static partial Regex JobId();
 }
 {%- if frontend != 'ssr' %}

@@ -58,7 +58,7 @@ public sealed partial class IndexModel(CompleteExport useCase, ILogger<IndexMode
         return result;
     }
 
-    [GeneratedRegex("^[A-Za-z0-9_-]{1,64}$")]
+    [GeneratedRegex("^[A-Za-z0-9_-]{1,64}\\z")]
     private static partial Regex JobIdPattern();
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Saving export {JobId} failed")]

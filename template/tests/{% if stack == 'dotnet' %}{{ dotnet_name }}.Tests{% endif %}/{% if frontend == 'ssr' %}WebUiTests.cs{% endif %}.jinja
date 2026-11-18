@@ -242,6 +242,7 @@ public sealed class WebUiFormTests : WebUiTestBase
     [Theory]
     [InlineData("not valid", 1)]
     [InlineData("ok", 0)]
+    [InlineData("ok\n", 1)]
     [InlineData("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 1)]
     [InlineData("ok", 1_000_001)]
     public async Task RejectsInvalidInput(string jobId, int contentLength)
