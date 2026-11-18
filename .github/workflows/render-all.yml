@@ -3,12 +3,11 @@
 name: render-all
 
 on:
+# No paths-ignore: once these checks are required, a skipped workflow would leave docs-only PRs waiting forever.
   pull_request:
     branches: [main]
-    paths-ignore: ["README.md", "docs/**"]
   push:
     branches: [main]
-    paths-ignore: ["README.md", "docs/**"]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +26,11 @@ jobs:
       matrix:
         stack: [typescript, python, dotnet, go, rust]
     steps:
+      # Each job pulls every datastore image and builds several renders (Rust: one target/ per render); make room first.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-node@v4

@@ -29,8 +29,10 @@ Picked A: least change, and it gives real per-stack timings to decide whether B 
 ## Design
 
 - New file `.github/workflows/render-all.yml` at the repo root (separate from `template/.github/`, which is rendered output).
-- Triggers: `pull_request` to `main`, `push` to `main`, `workflow_dispatch`. `paths-ignore` for `README.md` and `docs/**`
-  (repo-level prose only; `template/docs/**` still triggers).
+- Triggers: `pull_request` to `main`, `push` to `main`, `workflow_dispatch`. No `paths-ignore`: a skipped workflow never
+  reports, so once the checks are required a docs-only PR would wait forever (changed after review).
+- A "Free disk space" step first in every matrix job (removes Android SDK, GHC, CodeQL from the runner): each job pulls
+  every datastore image, and Rust builds one `target/` per render (added after review).
 - `concurrency` per ref with `cancel-in-progress: true`.
 - `strategy.matrix.stack: [typescript, python, dotnet, go, rust]`, `fail-fast: false`, `runs-on: ubuntu-latest`, `timeout-minutes: 120`.
 - Steps: checkout → `astral-sh/setup-uv` (all) → `actions/setup-node` 24 (all; TypeScript needs it, other stacks' checks may call node/npx)
