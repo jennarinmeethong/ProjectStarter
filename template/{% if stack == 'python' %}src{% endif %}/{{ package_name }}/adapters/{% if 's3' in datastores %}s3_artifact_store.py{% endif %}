@@ -1,0 +1,49 @@
+"""ArtifactStore on the S3 API (AWS S3, MinIO, or any S3-compatible store).
+
+The artifact key is the object key (ADR 0003).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Self, cast
+
+import boto3
+from botocore.config import Config
+
+if TYPE_CHECKING:
+    from types_boto3_s3.client import S3Client
+
+
+def open_client(endpoint: str | None = None) -> S3Client:
+    """Path-style addressing for MinIO and local servers, which have no per-bucket DNS names."""
+    config = Config(s3={"addressing_style": "path"}) if endpoint else None
+    # The stubs are the "lite" flavour (no per-service overloads), so name the client type here.
+    return cast("S3Client", boto3.client("s3", endpoint_url=endpoint, config=config))
+
+
+class S3ArtifactStore:
+    def __init__(self, client: S3Client, bucket: str) -> None:
+        self._client = client
+        self._bucket = bucket
+
+    @classmethod
+    def create(cls, bucket: str, endpoint: str | None = None) -> Self:
+        """Set endpoint for MinIO or a local server; omit it for AWS S3."""
+        return cls(open_client(endpoint), bucket)
+
+    def save(self, job_id: str, content: str) -> str:
+        key = f"exports/{job_id}.csv"
+        self._client.put_object(
+            Bucket=self._bucket, Key=key, Body=content.encode(), ContentType="text/csv"
+        )
+        return key
+
+    def read(self, key: str) -> str | None:
+        try:
+            response = self._client.get_object(Bucket=self._bucket, Key=key)
+        except self._client.exceptions.NoSuchKey:
+            return None
+        return response["Body"].read().decode()
+
+    def close(self) -> None:
+        self._client.close()

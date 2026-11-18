@@ -72,6 +72,7 @@ datastores:
     MongoDB: mongodb
     DynamoDB: dynamodb
     Cosmos DB: cosmosdb
+    S3 / MinIO (S3 API): s3
     Redis: redis
   default: []
   validator: >-

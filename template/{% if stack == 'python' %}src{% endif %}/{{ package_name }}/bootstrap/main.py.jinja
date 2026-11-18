@@ -32,6 +32,9 @@ from {{ package_name }}.adapters.postgres_artifact_store import PostgresArtifact
 {%- if 'redis' in datastores %}
 from {{ package_name }}.adapters.redis_artifact_store import RedisArtifactStore
 {%- endif %}
+{%- if 's3' in datastores %}
+from {{ package_name }}.adapters.s3_artifact_store import S3ArtifactStore
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
 from {{ package_name }}.adapters.sqlserver_artifact_store import SqlServerArtifactStore
 {%- endif %}
@@ -112,6 +115,16 @@ def open_store() -> Generator[ArtifactStore, None, None]:
             yield sqlserver
         finally:
             sqlserver.close()
+        return
+{%- endif %}
+{%- if 's3' in datastores %}
+    s3_bucket = os.environ.get("S3_BUCKET")
+    if s3_bucket:
+        s3 = S3ArtifactStore.create(s3_bucket, os.environ.get("S3_ENDPOINT"))
+        try:
+            yield s3
+        finally:
+            s3.close()
         return
 {%- endif %}
 {%- if 'redis' in datastores %}

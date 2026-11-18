@@ -62,6 +62,14 @@ if (owned is null && !string.IsNullOrEmpty(sqlServerUrl))
     (store, owned) = (sqlServer, sqlServer);
 }
 {%- endif %}
+{%- if 's3' in datastores %}
+var s3Bucket = Environment.GetEnvironmentVariable("S3_BUCKET");
+if (owned is null && !string.IsNullOrEmpty(s3Bucket))
+{
+    var s3 = S3ArtifactStore.Create(s3Bucket, Environment.GetEnvironmentVariable("S3_ENDPOINT"));
+    (store, owned) = (s3, s3);
+}
+{%- endif %}
 {%- if 'redis' in datastores %}
 var redisUrl = Environment.GetEnvironmentVariable("REDIS_URL");
 if (owned is null && !string.IsNullOrEmpty(redisUrl))

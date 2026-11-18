@@ -1,0 +1,60 @@
+using System.Net;
+using Amazon.S3;
+using Amazon.S3.Model;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+/// <summary>
+/// IArtifactStore on the S3 API (AWS S3, MinIO, or any S3-compatible store). The artifact key is the object key
+/// (ADR 0003).
+/// </summary>
+public sealed class S3ArtifactStore : IArtifactStore, IAsyncDisposable
+{
+    private readonly AmazonS3Client client;
+    private readonly string bucket;
+
+    private S3ArtifactStore(AmazonS3Client client, string bucket)
+    {
+        this.client = client;
+        this.bucket = bucket;
+    }
+
+    /// <summary>Set endpoint for MinIO or a local server; omit it for AWS S3 (default region and credentials).</summary>
+    public static S3ArtifactStore Create(string bucket, string? endpoint)
+    {
+        // Path-style addressing: MinIO and local servers have no per-bucket DNS names.
+        var client = string.IsNullOrEmpty(endpoint)
+            ? new AmazonS3Client()
+            : new AmazonS3Client(new AmazonS3Config { ServiceURL = endpoint, ForcePathStyle = true });
+        return new S3ArtifactStore(client, bucket);
+    }
+
+    public async Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        var request = new PutObjectRequest { BucketName = bucket, Key = key, ContentBody = content, ContentType = "text/csv" };
+        await client.PutObjectAsync(request, cancellationToken).ConfigureAwait(false);
+        return key;
+    }
+
+    public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await client.GetObjectAsync(bucket, key, cancellationToken).ConfigureAwait(false);
+            using var reader = new StreamReader(response.ResponseStream);
+            return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (AmazonS3Exception error) when (error.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        client.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

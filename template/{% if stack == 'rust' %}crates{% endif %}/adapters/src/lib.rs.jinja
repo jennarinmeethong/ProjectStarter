@@ -27,6 +27,9 @@ pub mod postgres;
 {%- if 'redis' in datastores %}
 pub mod redis_store;
 {%- endif %}
+{%- if 's3' in datastores %}
+pub mod s3;
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
 pub mod sqlserver;
 {%- endif %}

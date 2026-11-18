@@ -1,0 +1,42 @@
+//go:build integration
+
+// Integration test: needs Docker. Run with `go test -tags integration ./...`.
+package s3store_test
+
+import (
+	"testing"
+
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
+
+	"{{ go_module }}/internal/adapters/s3store"
+	"{{ go_module }}/internal/adapters/storetest"
+)
+
+func TestS3StoreSatisfiesTheContract(t *testing.T) {
+	ctx := t.Context()
+	// The local S3 server accepts any credentials.
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_ACCESS_KEY_ID", "local")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "local")
+
+	container, err := testcontainers.Run(ctx, "adobe/s3mock:4.11.0",
+		testcontainers.WithEnv(map[string]string{"COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS": "artifacts"}),
+		testcontainers.WithExposedPorts("9090/tcp"),
+		testcontainers.WithWaitStrategy(wait.ForHTTP("/").WithPort("9090/tcp")))
+	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		t.Fatalf("start s3mock: %v", err)
+	}
+	endpoint, err := container.PortEndpoint(ctx, "9090/tcp", "http")
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	store, err := s3store.Open(ctx, "artifacts", endpoint)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	storetest.Run(t, func(*testing.T) storetest.Subject {
+		return storetest.Subject{Store: store, Read: store.Read}
+	})
+}

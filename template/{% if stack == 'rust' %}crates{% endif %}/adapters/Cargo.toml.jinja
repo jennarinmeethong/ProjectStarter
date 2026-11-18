@@ -39,11 +39,16 @@ redis = { version = "1.8", default-features = false, features = ["tokio-comp"] }
 azure_core = "1.1"
 azure_data_cosmos = { version = "=1.1.0-beta.2", features = ["key_auth", "control_plane"] }
 {%- endif %}
-{%- if 'dynamodb' in datastores %}
-# Without default features: the defaults also pull the legacy hyper 0.14/rustls 0.21 stack, which has open
-# advisories (cargo deny). default-https-client is hyper 1 + rustls 0.23.
+{%- if 'dynamodb' in datastores or 's3' in datastores %}
+# AWS SDK without default features: the defaults also pull the legacy hyper 0.14/rustls 0.21 stack, which has
+# open advisories (cargo deny). default-https-client is hyper 1 + rustls 0.23.
 aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client", "credentials-process", "sso"] }
+{%- endif %}
+{%- if 'dynamodb' in datastores %}
 aws-sdk-dynamodb = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+{%- endif %}
+{%- if 's3' in datastores %}
+aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 {%- endif %}
 {%- if 'mongodb' in datastores %}
 mongodb = "3"
@@ -70,7 +75,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 {%- if 'redis' in datastores %}{% set _ = modules.append('"redis"') %}{% endif %}
 testcontainers-modules = { version = "0.15", features = [{{ modules | join(', ') }}] }
 {%- endif %}
-{%- if 'cosmosdb' in datastores %}
-# HTTP readiness checks for images without a module (the Cosmos DB emulator).
+{%- if 'cosmosdb' in datastores or 's3' in datastores %}
+# HTTP readiness checks for images without a module (Cosmos DB emulator, S3Mock).
 testcontainers = { version = "0.27", features = ["http_wait"] }
 {%- endif %}

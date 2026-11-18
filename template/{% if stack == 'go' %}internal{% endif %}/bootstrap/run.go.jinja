@@ -37,6 +37,9 @@ import (
 {%- if 'redis' in datastores %}
 	"{{ go_module }}/internal/adapters/redisstore"
 {%- endif %}
+{%- if 's3' in datastores %}
+	"{{ go_module }}/internal/adapters/s3store"
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
 	"{{ go_module }}/internal/adapters/sqlserverstore"
 {%- endif %}
@@ -135,6 +138,15 @@ func openStore(ctx context.Context) (application.ArtifactStore, func(), error) {
 			return nil, nil, fmt.Errorf("open sqlserver: %w", err)
 		}
 		return store, func() { _ = store.Close() }, nil
+	}
+{%- endif %}
+{%- if 's3' in datastores %}
+	if bucket := os.Getenv("S3_BUCKET"); bucket != "" {
+		store, err := s3store.Open(ctx, bucket, os.Getenv("S3_ENDPOINT"))
+		if err != nil {
+			return nil, nil, fmt.Errorf("open s3: %w", err)
+		}
+		return store, func() {}, nil
 	}
 {%- endif %}
 {%- if 'redis' in datastores %}

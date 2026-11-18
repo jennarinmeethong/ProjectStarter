@@ -10,7 +10,7 @@
 {%- endif %}
     <PackageReference Include="NetArchTest.Rules" />
     <PackageReference Include="xunit.v3" />
-{%- if 'dynamodb' in datastores or 'cosmosdb' in datastores %}
+{%- if 'dynamodb' in datastores or 'cosmosdb' in datastores or 's3' in datastores %}
     <PackageReference Include="Testcontainers" />
 {%- endif %}
 {%- if 'mongodb' in datastores %}

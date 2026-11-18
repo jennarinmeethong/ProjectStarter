@@ -51,7 +51,7 @@ module.exports = {
       severity: "error",
       from: { path: "^src/(domain|application|bootstrap)/" },
       // Matches resolved paths and bare names (packages whose exports map dependency-cruiser cannot resolve).
-      to: { path: "(^|node_modules/)(pg|pg-[^/]+|redis|@redis/[^/]+|ioredis|mysql2|mssql|tedious|oracledb|mongodb|@aws-sdk/client-dynamodb|@azure/cosmos|minio)(/|$)" },
+      to: { path: "(^|node_modules/)(pg|pg-[^/]+|redis|@redis/[^/]+|ioredis|mysql2|mssql|tedious|oracledb|mongodb|@aws-sdk/client-dynamodb|@aws-sdk/client-s3|@azure/cosmos|minio)(/|$)" },
     },
     {
       name: "ui-not-to-datastore-drivers",

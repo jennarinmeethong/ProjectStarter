@@ -49,6 +49,17 @@ services:
       # Lets the Rust SDK accept plain HTTP for this host (emulator only).
       AZURE_COSMOS_EMULATOR_HOST: cosmosdb
 {%- endif %}
+{%- if 's3' in datastores %}
+      S3_BUCKET: artifacts
+      S3_ENDPOINT: http://s3:9090
+{%- if 'dynamodb' not in datastores %}
+      # The local S3 server accepts any credentials; real S3/MinIO uses the SDK's default credential chain.
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+{%- endif %}
+{%- endif %}
 {%- if 'redis' in datastores %}
       REDIS_URL: redis://redis:6379/0
 {%- endif %}
@@ -76,6 +87,10 @@ services:
 {%- if 'cosmosdb' in datastores %}
       cosmosdb:
         condition: service_healthy
+{%- endif %}
+{%- if 's3' in datastores %}
+      s3:
+        condition: service_started
 {%- endif %}
 {%- if 'redis' in datastores %}
       redis:
@@ -209,6 +224,15 @@ services:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/ready"]
       interval: 2s
       retries: 60
+{%- endif %}
+{%- if 's3' in datastores %}
+
+  s3:
+    # S3Mock (Apache-2.0): a local S3 API for development and tests. In production point S3_ENDPOINT at MinIO or
+    # leave it unset for AWS S3 (ADR 0003). In memory: objects reset when the container restarts.
+    image: adobe/s3mock:4.11.0
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: artifacts
 {%- endif %}
 {%- if 'redis' in datastores %}
 

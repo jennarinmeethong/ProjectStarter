@@ -1,0 +1,48 @@
+using DotNet.Testcontainers.Builders;
+using DotNet.Testcontainers.Containers;
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Starts a local S3 server (S3Mock) with the artifacts bucket once per test class.</summary>
+public sealed class S3Fixture : IAsyncLifetime
+{
+    private readonly IContainer container = new ContainerBuilder("adobe/s3mock:4.11.0")
+        .WithEnvironment("COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS", "artifacts")
+        .WithPortBinding(9090, true)
+        .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(9090)))
+        .Build();
+
+    private S3ArtifactStore? store;
+
+    public S3ArtifactStore Store => store ?? throw new InvalidOperationException("Fixture not initialised.");
+
+    public async ValueTask InitializeAsync()
+    {
+        // The local S3 server accepts any credentials.
+        Environment.SetEnvironmentVariable("AWS_REGION", "us-east-1");
+        Environment.SetEnvironmentVariable("AWS_ACCESS_KEY_ID", "local");
+        Environment.SetEnvironmentVariable("AWS_SECRET_ACCESS_KEY", "local");
+        await container.StartAsync(TestContext.Current.CancellationToken);
+        store = S3ArtifactStore.Create("artifacts", $"http://{container.Hostname}:{container.GetMappedPublicPort(9090)}");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (store is not null)
+        {
+            await store.DisposeAsync();
+        }
+
+        await container.DisposeAsync();
+    }
+}
+
+/// <summary>Integration test: needs Docker. Run with the Category=Integration filter (excluded from verify).</summary>
+[Trait("Category", "Integration")]
+public sealed class S3ArtifactStoreTests(S3Fixture fixture) : ArtifactStoreContract, IClassFixture<S3Fixture>
+{
+    protected override StoreUnderTest Subject =>
+        new(fixture.Store, key => fixture.Store.ReadAsync(key, TestContext.Current.CancellationToken));
+}

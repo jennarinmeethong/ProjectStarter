@@ -26,7 +26,7 @@ forbidden_modules =
 {%- if 'cosmosdb' in datastores %}
     azure.cosmos
 {%- endif %}
-{%- if 'dynamodb' in datastores %}
+{%- if 'dynamodb' in datastores or 's3' in datastores %}
     boto3
     botocore
 {%- endif %}

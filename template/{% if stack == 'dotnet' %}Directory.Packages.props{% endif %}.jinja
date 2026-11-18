@@ -15,7 +15,10 @@
 {%- if 'dynamodb' in datastores %}
     <PackageVersion Include="AWSSDK.DynamoDBv2" Version="4.0.110.3" />
 {%- endif %}
-{%- if 'dynamodb' in datastores or 'cosmosdb' in datastores %}
+{%- if 's3' in datastores %}
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.104.12" />
+{%- endif %}
+{%- if 'dynamodb' in datastores or 'cosmosdb' in datastores or 's3' in datastores %}
     <PackageVersion Include="Testcontainers" Version="4.16.0" />
 {%- endif %}
 {%- if 'mongodb' in datastores %}

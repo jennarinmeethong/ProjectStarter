@@ -1,0 +1,50 @@
+import { GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+export interface S3Settings {
+  readonly bucket: string;
+  /** Set for MinIO or a local S3 server; omit for AWS S3, where the SDK's default region and credentials apply. */
+  readonly endpoint?: string | undefined;
+}
+
+/** ArtifactStore on the S3 API (AWS S3, MinIO, or any S3-compatible store). The artifact key is the object key. */
+export class S3ArtifactStore implements ArtifactStore {
+  readonly #client: S3Client;
+  readonly #bucket: string;
+
+  constructor(client: S3Client, bucket: string) {
+    this.#client = client;
+    this.#bucket = bucket;
+  }
+
+  static create(settings: S3Settings): S3ArtifactStore {
+    // Path-style addressing (http://host/bucket/key): MinIO and local servers have no per-bucket DNS names.
+    const client = new S3Client(settings.endpoint ? { endpoint: settings.endpoint, forcePathStyle: true } : {});
+    return new S3ArtifactStore(client, settings.bucket);
+  }
+
+  async save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    await this.#client.send(
+      new PutObjectCommand({ Bucket: this.#bucket, Key: key, Body: content, ContentType: "text/csv" }),
+    );
+    return key;
+  }
+
+  async read(key: string): Promise<string | undefined> {
+    try {
+      const result = await this.#client.send(new GetObjectCommand({ Bucket: this.#bucket, Key: key }));
+      return await result.Body?.transformToString("utf-8");
+    } catch (error) {
+      if (error instanceof NoSuchKey) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  close(): Promise<void> {
+    this.#client.destroy();
+    return Promise.resolve();
+  }
+}

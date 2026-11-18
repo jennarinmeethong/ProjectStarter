@@ -16,6 +16,9 @@ import { SqlServerArtifactStore } from "../adapters/sqlserver-artifact-store.ts"
 {%- if 'redis' in datastores %}
 import { RedisArtifactStore } from "../adapters/redis-artifact-store.ts";
 {%- endif %}
+{%- if 's3' in datastores %}
+import { S3ArtifactStore } from "../adapters/s3-artifact-store.ts";
+{%- endif %}
 {%- if http_api %}
 import { serve } from "@hono/node-server";
 import { createHttpApp } from "../adapters/http/app.ts";
@@ -74,6 +77,13 @@ function openStore(): Promise<OpenStore> {
   const dynamoTable = process.env.DYNAMODB_TABLE;
   if (dynamoTable) {
     const store = DynamoArtifactStore.create({ table: dynamoTable, endpoint: process.env.DYNAMODB_ENDPOINT });
+    return Promise.resolve({ store, close: () => store.close() });
+  }
+{%- endif %}
+{%- if 's3' in datastores %}
+  const s3Bucket = process.env.S3_BUCKET;
+  if (s3Bucket) {
+    const store = S3ArtifactStore.create({ bucket: s3Bucket, endpoint: process.env.S3_ENDPOINT });
     return Promise.resolve({ store, close: () => store.close() });
   }
 {%- endif %}
