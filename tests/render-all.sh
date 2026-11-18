@@ -375,6 +375,27 @@ secret_checks() { # secret_checks: gitleaks is clean on the render and rejects a
   unset MSYS_NO_PATHCONV
 }
 
+# Each stack's own verify command (the generated AGENTS.md "Verify your work" step).
+declare -A verify_cmd=(
+  [typescript]="npm run verify"
+  [python]="uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest -q"
+  [dotnet]='dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build --filter-not-trait "Category=Integration" --filter-not-trait "Category=E2E"'
+  [go]="go vet ./... && go tool golangci-lint run && go test ./..."
+  [rust]="cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && bash ci/check-layers.sh && cargo test --workspace"
+)
+declare -A install_cmd=(
+  [typescript]="npm install --no-audit --no-fund" [python]="uv sync" [dotnet]="dotnet restore" [go]="go mod tidy" [rust]="cargo fetch -q"
+)
+
+default_verify() { # default_verify <stack>: the claude-only render keeps every optional answer at its default
+  # (no datastores, no HTTP API, no frontend); what most users get must pass its own verify too.
+  pushd "$work/$1-claude" >/dev/null || return
+  git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base && git branch -q base
+  bash -c "${install_cmd[$1]}" >/dev/null 2>&1
+  verify "defaults: $1 verify" "${verify_cmd[$1]}"
+  popd >/dev/null || return
+}
+
 for stack in "${stacks[@]}"; do
   echo "== $stack"
 
@@ -436,6 +457,8 @@ for stack in "${stacks[@]}"; do
       fail "unrendered Jinja in $(grep -rIl '{{\|{%' "$d" --exclude=ci.yml | head -1)"
     fi
   done
+
+  default_verify "$stack"
 
   # Full verification on the both-tools render.
   d="$work/$stack-claude,codex"
@@ -500,7 +523,7 @@ for stack in "${stacks[@]}"; do
       ;;
     python)
       uv sync >/dev/null 2>&1
-      verify "python verify" "uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest -q"
+      verify "python verify" "${verify_cmd[python]}"
       # Dependency audit: clean on the render, rejects a known-vulnerable package.
       verify "uv audit" "uv audit --locked --preview-features audit-command"
       cp pyproject.toml uv.lock "$work/"
@@ -547,7 +570,7 @@ for stack in "${stacks[@]}"; do
       expect_fail "import-linter: domain -> adapters" uv run lint-imports
       ;;
     dotnet)
-      verify "dotnet verify" 'dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build --filter-not-trait "Category=Integration" --filter-not-trait "Category=E2E"'
+      verify "dotnet verify" "${verify_cmd[dotnet]}"
       # Dependency audit (NuGetAudit + TreatWarningsAsErrors): clean, then rejects a known-vulnerable package.
       verify "nuget audit" "dotnet restore --force-evaluate"
       sed -i 's#<PackageVersion Include="xunit.v3"#<PackageVersion Include="Newtonsoft.Json" Version="12.0.1" />\n    &#' Directory.Packages.props
@@ -580,7 +603,11 @@ for stack in "${stacks[@]}"; do
       ;;
     go)
       go mod tidy >/dev/null 2>&1
-      verify "go verify" "go vet ./... && go tool golangci-lint run && go test ./..."
+      verify "go verify" "${verify_cmd[go]}"
+      # The property test (rapid) must catch a bug that the example test and fixed inputs miss.
+      sed -i 's/artifactKey: artifactKey}/artifactKey: strings.ToLower(artifactKey)}/' internal/domain/exportjob.go
+      expect_fail "rapid: property test catches a key-mangling bug" go test -count=1 ./internal/domain/
+      git checkout -q -- internal/domain/exportjob.go
       # Dependency audit: clean, then rejects a vulnerable function that our code actually calls.
       verify "govulncheck" "go tool govulncheck ./..."
       cp go.mod go.sum "$work/"
@@ -629,7 +656,7 @@ for stack in "${stacks[@]}"; do
       ;;
     rust)
       cargo fetch -q >/dev/null 2>&1
-      verify "rust verify" "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && bash ci/check-layers.sh && cargo test --workspace"
+      verify "rust verify" "${verify_cmd[rust]}"
       # Dependency audit: clean, then rejects a crate with a known advisory.
       verify "cargo deny advisories" "cargo deny check advisories"
       cp crates/adapters/Cargo.toml Cargo.lock "$work/"
