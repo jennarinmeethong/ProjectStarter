@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"pgregory.net/rapid"
+
 	"{{ go_module }}/internal/domain"
 )
 
@@ -29,21 +31,29 @@ func TestRejectsBlankArtifactKey(t *testing.T) {
 	}
 }
 
-// FuzzCompleteKeepsIDAndKey is a property test: for any id and any non-blank key, completing keeps both.
-// `go test` runs the seed corpus; `go test -fuzz=FuzzCompleteKeepsIDAndKey ./internal/domain` explores more.
+// TestCompleteKeepsIDAndKey is a property test: for any id and any non-blank key, completing keeps both.
+// Every `go test` checks 100 generated cases and shrinks a failure to a minimal one; raise the count with
+// `go test ./internal/domain -rapid.checks=10000`, replay a failure with the -rapid.seed it prints.
+func TestCompleteKeepsIDAndKey(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, completeKeepsIDAndKey)
+}
+
+// FuzzCompleteKeepsIDAndKey runs the same property under Go's coverage-guided fuzzer for long searches:
+// `go test -fuzz=FuzzCompleteKeepsIDAndKey ./internal/domain`. Plain `go test` runs one seed only.
 func FuzzCompleteKeepsIDAndKey(f *testing.F) {
-	f.Add("job-1", "exports/job-1.csv")
-	f.Add("", "k")
-	f.Fuzz(func(t *testing.T, id, key string) {
-		if strings.TrimSpace(key) == "" {
-			return // blank keys are rejected by design (TestRejectsBlankArtifactKey)
-		}
-		ready, err := domain.Complete(domain.Start(domain.NewQueued(id)), key)
-		if err != nil {
-			t.Fatalf("Complete(%q, %q): %v", id, key, err)
-		}
-		if ready.ID() != id || ready.ArtifactKey() != key {
-			t.Fatalf("got %q %q, want %q %q", ready.ID(), ready.ArtifactKey(), id, key)
-		}
-	})
+	f.Fuzz(rapid.MakeFuzz(completeKeepsIDAndKey))
+}
+
+func completeKeepsIDAndKey(t *rapid.T) {
+	id := rapid.String().Draw(t, "id")
+	key := rapid.String().Filter(func(k string) bool { return strings.TrimSpace(k) != "" }).Draw(t, "key")
+
+	ready, err := domain.Complete(domain.Start(domain.NewQueued(id)), key)
+	if err != nil {
+		t.Fatalf("Complete(%q, %q): %v", id, key, err)
+	}
+	if ready.ID() != id || ready.ArtifactKey() != key {
+		t.Fatalf("got %q %q, want %q %q", ready.ID(), ready.ArtifactKey(), id, key)
+	}
 }
