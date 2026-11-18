@@ -58,6 +58,7 @@ jobs:
   # Mutation testing of the domain layer: fails when tests stop killing mutants (threshold in the stack's config).
   mutation:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 {%- if stack == 'typescript' %}
@@ -81,7 +82,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-mutants
+          tool: cargo-mutants@27.1.0
 {%- endif %}
       - name: Mutation testing (domain)
         run: {{ cmd.mutation }}

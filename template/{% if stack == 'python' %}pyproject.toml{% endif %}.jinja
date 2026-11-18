@@ -62,7 +62,8 @@ build-backend = "hatchling.build"
 packages = ["src/{{ package_name }}"]
 
 # Mutation testing of the domain layer: `uv run mutmut run`, gated by ci/mutation-gate.py (Linux/macOS/WSL; CI runs it).
-# also_copy brings the rest of the package so tests that import other layers still collect.
+# also_copy brings the rest of the package so tests that import other layers still collect; it copies
+# the domain too, so each run re-mutates from scratch (no incremental results; fine for a small domain).
 [tool.mutmut]
 source_paths = ["src/{{ package_name }}/domain/"]
 also_copy = ["src/{{ package_name }}/"]

@@ -402,7 +402,7 @@ default_verify() { # default_verify <stack>: the claude-only render keeps every 
 declare -A mutation_cmd=(
   [typescript]="npm run mutation"
   [python]="uv run mutmut run && uv run mutmut export-cicd-stats && uv run python ci/mutation-gate.py"
-  [dotnet]="dotnet tool restore && dotnet stryker"
+  [dotnet]="cd tests/DemoApp.Domain.Tests && dotnet tool restore && dotnet stryker"
   [go]="go run github.com/go-gremlins/gremlins/cmd/gremlins@v0.5.1 unleash ./internal/domain"
   [rust]="cargo mutants -p domain"
 )
@@ -413,7 +413,7 @@ declare -A mutation_file=(
 declare -A mutation_anchor=(
   [typescript]='^  if (artifactKey.trim().length === 0) {'
   [python]='^    if not artifact_key.strip():'
-  [dotnet]='^        if (string.IsNullOrWhiteSpace(artifactKey))'
+  [dotnet]='^        return new ExportJob.Ready(job.Id, artifactKey);'
   [go]='^\tif strings.TrimSpace(artifactKey) == "" {'
   [rust]='^    if artifact_key.trim().is_empty() {'
 )
@@ -425,16 +425,26 @@ declare -A mutation_gap=(
   [rust]='    if artifact_key.len() > 1024 {\n        return Err(CompleteError::BlankArtifactKey);\n    }'
 )
 declare -A mutation_rejected=(
-  [typescript]='under breaking threshold' [python]='surviving mutants' [dotnet]='lower than the configured break threshold'
+  [typescript]='under breaking threshold' [python]='surviving mutants: uv run mutmut results' [dotnet]='lower than the configured break threshold'
   [go]='below efficacy-threshold' [rust]='MISSED'
 )
 
-default_mutation() { # default_mutation <stack>: on the default render, mutation passes; an untested branch fails it
+mutation_unsupported_here() { # mutmut, Stryker.NET and gremlins misbehave on Windows; CI (Linux) runs them
   case "$1:$(uname -s)" in
     python:MINGW* | python:MSYS* | dotnet:MINGW* | dotnet:MSYS* | go:MINGW* | go:MSYS*)
-      echo "  SKIP mutation ($1): mutmut, Stryker.NET and gremlins need Linux/macOS here; CI runs it"
-      return ;;
+      echo "  SKIP mutation ($1): needs Linux/macOS here; CI runs it"; return 0 ;;
   esac
+  return 1
+}
+
+full_mutation() { # full_mutation <stack>: in the full render (datastores + HTTP API), the domain run still needs no Docker
+  mutation_unsupported_here "$1" && return
+  verify "full render: $1 mutation" "${mutation_cmd[$1]}"
+  rm -rf .stryker-tmp reports mutants tests/DemoApp.Domain.Tests/StrykerOutput mutants.out mutants.out.old
+}
+
+default_mutation() { # default_mutation <stack>: on the default render, mutation passes; an untested branch fails it
+  mutation_unsupported_here "$1" && return
   pushd "$work/$1-claude" >/dev/null || return
   local file=${mutation_file[$1]} out
   verify "defaults: $1 mutation" "${mutation_cmd[$1]}"
@@ -447,7 +457,7 @@ default_mutation() { # default_mutation <stack>: on the default render, mutation
     fail "mutation: untested branch failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'
   fi
   git checkout -q -- "$file"
-  rm -rf .stryker-tmp reports mutants StrykerOutput mutants.out mutants.out.old
+  rm -rf .stryker-tmp reports mutants tests/DemoApp.Domain.Tests/StrykerOutput mutants.out mutants.out.old
   popd >/dev/null || return
 }
 
@@ -524,6 +534,7 @@ for stack in "${stacks[@]}"; do
     typescript)
       npm install --no-audit --no-fund >/dev/null 2>&1
       verify "npm run verify" "npm run verify"
+      full_mutation typescript
       # Dependency audit: clean on the render, rejects a known-vulnerable package.
       verify "npm audit (ci/npm-audit.mjs)" "node ci/npm-audit.mjs"
       cp package.json package-lock.json "$work/"
@@ -580,6 +591,7 @@ for stack in "${stacks[@]}"; do
     python)
       uv sync >/dev/null 2>&1
       verify "python verify" "${verify_cmd[python]}"
+      full_mutation python
       # Dependency audit: clean on the render, rejects a known-vulnerable package.
       verify "uv audit" "uv audit --locked --preview-features audit-command"
       cp pyproject.toml uv.lock "$work/"
@@ -627,6 +639,7 @@ for stack in "${stacks[@]}"; do
       ;;
     dotnet)
       verify "dotnet verify" "${verify_cmd[dotnet]}"
+      full_mutation dotnet
       # Dependency audit (NuGetAudit + TreatWarningsAsErrors): clean, then rejects a known-vulnerable package.
       verify "nuget audit" "dotnet restore --force-evaluate"
       sed -i 's#<PackageVersion Include="xunit.v3"#<PackageVersion Include="Newtonsoft.Json" Version="12.0.1" />\n    &#' Directory.Packages.props
@@ -660,6 +673,7 @@ for stack in "${stacks[@]}"; do
     go)
       go mod tidy >/dev/null 2>&1
       verify "go verify" "${verify_cmd[go]}"
+      full_mutation go
       # The property test (rapid) must catch a bug that the example test and fixed inputs miss.
       sed -i 's/artifactKey: artifactKey}/artifactKey: strings.ToLower(artifactKey)}/' internal/domain/exportjob.go
       # Must fail as a rapid property failure, not as a compile error from a stale sed target.
@@ -715,6 +729,7 @@ for stack in "${stacks[@]}"; do
     rust)
       cargo fetch -q >/dev/null 2>&1
       verify "rust verify" "${verify_cmd[rust]}"
+      full_mutation rust
       # Dependency audit: clean, then rejects a crate with a known advisory.
       verify "cargo deny advisories" "cargo deny check advisories"
       cp crates/adapters/Cargo.toml Cargo.lock "$work/"
@@ -759,7 +774,7 @@ for stack in "${stacks[@]}"; do
   case "$stack" in
     typescript) sed -i 's/  it("rejects/  it.skip("rejects/' src/domain/export-job.test.ts ;;
     python) sed -i 's/^def test_rejects/@pytest.mark.skip\ndef test_rejects/' tests/test_export_job.py ;;
-    dotnet) sed -i 's/\[Fact\]/[Fact(Skip = "x")]/' tests/DemoApp.Tests/ExportJobTests.cs ;;
+    dotnet) sed -i 's/\[Fact\]/[Fact(Skip = "x")]/' tests/DemoApp.Domain.Tests/ExportJobTests.cs ;;
     go) sed -i 's/^func TestRejectsBlankArtifactKey(t \*testing.T) {$/&\n\tt.Skip("x")/' internal/domain/exportjob_test.go ;;
     rust) sed -i 's/^#\[tokio::test\]$/&\n#[ignore]/' crates/adapters/tests/in_memory.rs ;;
   esac

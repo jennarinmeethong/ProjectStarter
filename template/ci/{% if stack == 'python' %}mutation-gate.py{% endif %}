@@ -1,27 +1,32 @@
 """Fail when the domain mutation score drops below THRESHOLD (mutmut has no break option).
 
-Run after `uv run mutmut run && uv run mutmut export-cicd-stats`; reads mutants/mutmut-cicd-stats.json.
+Run after `uv run mutmut run && uv run mutmut export-cicd-stats`.
+Reads mutants/mutmut-cicd-stats.json.
 """
 
 import json
 import sys
 from pathlib import Path
 
-THRESHOLD = 99.0  # percent of mutants the tests must kill; raising it is fine, lowering it needs an owner
+# Percent of mutants the tests must kill. Raising it is fine; lowering it needs an owner.
+THRESHOLD = 99.0
+KILLED = ("killed", "timeout", "segfault")
+# Survivors, mutants no test reaches, and mutants an interrupted run never checked.
+MISSED = ("survived", "no_tests", "suspicious", "not_checked")
 
 
 def main() -> int:
     stats = json.loads(Path("mutants/mutmut-cicd-stats.json").read_text(encoding="utf-8"))
-    killed = int(stats["killed"]) + int(stats["timeout"])
-    missed = int(stats["survived"]) + int(stats["no_tests"]) + int(stats["suspicious"])
+    killed = sum(int(stats.get(key, 0)) for key in KILLED)
+    missed = sum(int(stats.get(key, 0)) for key in MISSED)
     tested = killed + missed
     if tested == 0:
-        print("mutation gate: no mutants were tested; check [tool.mutmut] in pyproject.toml")
+        sys.stdout.write("mutation gate: no mutants tested; see [tool.mutmut] in pyproject.toml\n")
         return 1
     score = 100.0 * killed / tested
-    print(f"mutation score {score:.2f}% ({killed} killed, {missed} missed; threshold {THRESHOLD}%)")
+    sys.stdout.write(f"mutation score {score:.2f}% ({killed} killed, {missed} missed)\n")
     if score < THRESHOLD:
-        print("surviving mutants: uv run mutmut results; inspect one: uv run mutmut show <name>")
+        sys.stdout.write(f"below {THRESHOLD}%: surviving mutants: uv run mutmut results\n")
         return 1
     return 0
 
