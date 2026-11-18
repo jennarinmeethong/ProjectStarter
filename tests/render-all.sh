@@ -185,6 +185,32 @@ dynamodb_checks() { # dynamodb_checks <stack> <install> <integration-command> [s
   popd >/dev/null || return
 }
 
+cosmosdb_checks() { # cosmosdb_checks <stack> <install> <integration-command> [seeded|seeded_new label file text command...]
+  local dir="$work/$1-cosmosdb"
+  render "$1" '["codex"]' "$dir" -d 'datastores=["cosmosdb"]' -d http_api=true || { fail "render cosmosdb"; return; }
+  pushd "$dir" >/dev/null || return
+  git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm init
+  bash -c "$2" >/dev/null 2>&1
+  verify "cosmosdb: adapter contract on the Cosmos DB emulator" "$3"
+  if [ "$#" -gt 3 ]; then "$4" "${@:5}"; fi
+  if [ "$1" = typescript ]; then
+    # The emulator's well-known key in compose.yaml must not trip secret scanning (.gitleaks.toml allowlist).
+    local vol gitleaks="zricethezav/gitleaks:v8.30.1"
+    vol=$(docker_vol)
+    export MSYS_NO_PATHCONV=1
+    verify "gitleaks: Cosmos DB emulator key is allowlisted"       "docker run --rm -v '$vol:/repo' -w /repo $gitleaks git --config .gitleaks.toml --redact --exit-code 1 /repo"
+    unset MSYS_NO_PATHCONV
+    local compose="docker compose -p ps-cosmosdb"
+    $compose down -v >/dev/null 2>&1
+    verify "compose: HTTP request is stored in the Cosmos DB emulator" \
+      "$compose build app && $compose up -d app \
+       && for _ in \$(seq 1 90); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break; sleep 1; done \
+       && curl -fsS -X POST -H 'Content-Type: application/json' -d '{\"content\":\"id\\n1\\n\"}' http://127.0.0.1:8080/exports/cosmos-1/complete | grep -q 'exports/cosmos-1.csv'"
+    $compose down -v >/dev/null 2>&1
+  fi
+  popd >/dev/null || return
+}
+
 http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: rendered with http_api=true
   local image="project-starter-$1"
   verify "playwright: API tests against the real server" "$2"
@@ -390,6 +416,7 @@ for stack in "${stacks[@]}"; do
       datastore_checks typescript
       mariadb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       sqlserver_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
+      cosmosdb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
       dynamodb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
         seeded "eslint: DynamoDB expression built from a value" src/adapters/dynamo-artifact-store.ts \
         '\nexport const seeded = (id: string) => ({ KeyConditionExpression: `job_id = ${id}` });\n' \
@@ -439,6 +466,9 @@ for stack in "${stacks[@]}"; do
       datastore_checks python
       mariadb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
       sqlserver_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
+      cosmosdb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
+        seeded_new "import-linter: Cosmos DB SDK in application" src/demo_app/application/cosmos_leak.py \
+        'import azure.cosmos\n' uv run lint-imports
       dynamodb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
         seeded_new "import-linter: AWS SDK in application" src/demo_app/application/dynamo_leak.py \
         'import boto3\n' uv run lint-imports
@@ -480,6 +510,7 @@ for stack in "${stacks[@]}"; do
       sqlserver_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       mongodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       dynamodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
+      cosmosdb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
       verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks dotnet 'dotnet test --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
@@ -508,6 +539,9 @@ for stack in "${stacks[@]}"; do
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks go
       mariadb_checks go "go mod tidy" "go test -tags integration ./..."
+      cosmosdb_checks go "go mod tidy" "go test -tags integration ./..." \
+        seeded_new "depguard: Cosmos DB SDK outside adapters" internal/application/cosmos_leak.go \
+        'package application\n\nimport _ "github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"\n' go tool golangci-lint run
       dynamodb_checks go "go mod tidy" "go test -tags integration ./..." \
         seeded_new "depguard: DynamoDB SDK outside adapters" internal/application/dynamo_leak.go \
         'package application\n\nimport _ "github.com/aws/aws-sdk-go-v2/service/dynamodb"\n' go tool golangci-lint run
@@ -549,6 +583,7 @@ for stack in "${stacks[@]}"; do
       mariadb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
       mongodb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
       dynamodb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
+      cosmosdb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
       sqlserver_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
         seeded "clippy: tiberius query outside the static-SQL gateway" crates/adapters/src/sqlserver.rs \
         '\n/// Builds SQL from a value.\npub async fn unsafe_delete(client: &mut Connection, table: &str) -> tiberius::Result<u64> {\n    Ok(client.execute(format!("DELETE FROM {table}"), &[]).await?.total())\n}\n' \

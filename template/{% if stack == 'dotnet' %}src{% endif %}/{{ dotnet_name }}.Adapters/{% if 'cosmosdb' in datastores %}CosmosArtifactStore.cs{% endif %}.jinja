@@ -1,0 +1,85 @@
+using System.Net;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Azure.Cosmos;
+using {{ dotnet_name }}.Application;
+
+namespace {{ dotnet_name }}.Adapters;
+
+/// <summary>
+/// IArtifactStore on Azure Cosmos DB (NoSQL API). Items are point reads/writes by id; queries, when added,
+/// take values through QueryDefinition.WithParameter, never inline (ADR 0003).
+/// </summary>
+public sealed class CosmosArtifactStore : IArtifactStore, IAsyncDisposable
+{
+    private const string ContainerName = "export_artifacts";
+
+    private readonly CosmosClient client;
+    private readonly Container items;
+
+    private CosmosArtifactStore(CosmosClient client, Container items)
+    {
+        this.client = client;
+        this.items = items;
+    }
+
+    /// <summary>createIfMissing is for local use: real accounts get their containers from infrastructure as code.</summary>
+    public static async Task<CosmosArtifactStore> ConnectAsync(string endpoint, string key, string database, bool createIfMissing)
+    {
+        var options = new CosmosClientOptions
+        {
+            ConnectionMode = ConnectionMode.Gateway,
+            LimitToEndpoint = true,
+            UseSystemTextJsonSerializerWithOptions = new JsonSerializerOptions(),
+        };
+        var client = new CosmosClient(endpoint, key, options);
+        if (!createIfMissing)
+        {
+            return new CosmosArtifactStore(client, client.GetContainer(database, ContainerName));
+        }
+
+        Database db = await client.CreateDatabaseIfNotExistsAsync(database).ConfigureAwait(false);
+        Container items = await db.CreateContainerIfNotExistsAsync(new ContainerProperties(ContainerName, "/id")).ConfigureAwait(false);
+        return new CosmosArtifactStore(client, items);
+    }
+
+    /// <summary>Cosmos item ids cannot contain "/", so the artifact key maps to an id with "|" instead.</summary>
+    private static string ItemId(string key) => key.Replace('/', '|');
+
+    public async Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken)
+    {
+        var key = $"exports/{jobId}.csv";
+        var id = ItemId(key);
+        await items.UpsertItemAsync(new ArtifactItem(id, jobId, content), new PartitionKey(id), cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        return key;
+    }
+
+    public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var id = ItemId(key);
+        using var response = await items.ReadItemStreamAsync(id, new PartitionKey(id), cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        var item = await JsonSerializer.DeserializeAsync<ArtifactItem>(response.Content, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        return item?.Body;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        client.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    internal sealed record ArtifactItem(
+        [property: JsonPropertyName("id")] string Id,
+        [property: JsonPropertyName("job_id")] string JobId,
+        [property: JsonPropertyName("body")] string Body);
+}

@@ -1,12 +1,16 @@
 //! Adapters: implementations of application ports, and the driving side{% if http_api %} (HTTP){% endif %}.
 //! Drivers and frameworks stay in this crate (ADR 0001).
 
+{%- if 'cosmosdb' in datastores or 'dynamodb' in datastores %}
+{% endif %}
+{%- if 'cosmosdb' in datastores %}
+pub mod cosmos;
+{%- endif %}
 {%- if 'dynamodb' in datastores %}
-
 pub mod dynamo;
 {%- endif %}
 {%- if http_api %}
-{%- if 'dynamodb' not in datastores %}
+{%- if 'dynamodb' not in datastores and 'cosmosdb' not in datastores %}
 {% endif %}
 pub mod http;
 {%- endif %}

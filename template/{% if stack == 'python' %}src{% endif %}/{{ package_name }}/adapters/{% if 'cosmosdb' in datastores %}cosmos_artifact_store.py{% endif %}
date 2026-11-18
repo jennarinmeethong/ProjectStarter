@@ -1,0 +1,55 @@
+"""ArtifactStore on Azure Cosmos DB (NoSQL API).
+
+Items are point reads/writes by id; queries, when added, take values as @parameters (ADR 0003).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Self
+
+from azure.cosmos import CosmosClient, PartitionKey
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
+
+if TYPE_CHECKING:
+    from azure.cosmos.container import ContainerProxy
+
+CONTAINER = "export_artifacts"
+
+
+def item_id(key: str) -> str:
+    """Cosmos item ids cannot contain "/", so the artifact key maps to an id with "|" instead."""
+    return key.replace("/", "|")
+
+
+class CosmosArtifactStore:
+    def __init__(self, client: CosmosClient, items: ContainerProxy) -> None:
+        self._client = client
+        self._items = items
+
+    @classmethod
+    def connect(cls, endpoint: str, key: str, database: str, *, create_if_missing: bool) -> Self:
+        """create_if_missing is for local use: real accounts get their containers from IaC."""
+        client = CosmosClient(endpoint, credential=key)
+        if not create_if_missing:
+            return cls(client, client.get_database_client(database).get_container_client(CONTAINER))
+        db = client.create_database_if_not_exists(database)
+        items = db.create_container_if_not_exists(
+            CONTAINER, partition_key=PartitionKey(path="/id", kind="Hash")
+        )
+        return cls(client, items)
+
+    def save(self, job_id: str, content: str) -> str:
+        key = f"exports/{job_id}.csv"
+        self._items.upsert_item({"id": item_id(key), "job_id": job_id, "body": content})
+        return key
+
+    def read(self, key: str) -> str | None:
+        try:
+            item = self._items.read_item(item_id(key), partition_key=item_id(key))
+        except CosmosResourceNotFoundError:
+            return None
+        body = item.get("body")
+        return body if isinstance(body, str) else None
+
+    def close(self) -> None:
+        self._client.close()

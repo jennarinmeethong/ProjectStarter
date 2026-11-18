@@ -1,7 +1,6 @@
-{%- if 'dynamodb' in datastores %}
-import { DynamoArtifactStore } from "../adapters/dynamo-artifact-store.ts";
-{%- endif %}
-import { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";
+{% if 'cosmosdb' in datastores %}import { CosmosArtifactStore } from "../adapters/cosmos-artifact-store.ts";
+{% endif %}{% if 'dynamodb' in datastores %}import { DynamoArtifactStore } from "../adapters/dynamo-artifact-store.ts";
+{% endif %}import { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";
 {%- if 'mongodb' in datastores %}
 import { MongoArtifactStore } from "../adapters/mongo-artifact-store.ts";
 {%- endif %}
@@ -57,6 +56,18 @@ function openStore(): Promise<OpenStore> {
   const mongoUrl = process.env.MONGODB_URL;
   if (mongoUrl) {
     return MongoArtifactStore.connect(mongoUrl).then((store) => ({ store, close: () => store.close() }));
+  }
+{%- endif %}
+{%- if 'cosmosdb' in datastores %}
+  const cosmosEndpoint = process.env.COSMOS_ENDPOINT;
+  if (cosmosEndpoint) {
+    const settings = {
+      endpoint: cosmosEndpoint,
+      key: process.env.COSMOS_KEY ?? "",
+      database: process.env.COSMOS_DATABASE ?? "app",
+      createIfMissing: process.env.COSMOS_CREATE_IF_MISSING === "true",
+    };
+    return CosmosArtifactStore.connect(settings).then((store) => ({ store, close: () => store.close() }));
   }
 {%- endif %}
 {%- if 'dynamodb' in datastores %}

@@ -1,0 +1,68 @@
+import { type Container, CosmosClient, PartitionKeyKind } from "@azure/cosmos";
+import type { ArtifactStore } from "../application/complete-export.ts";
+
+const CONTAINER = "export_artifacts";
+
+interface ArtifactItem {
+  id: string;
+  job_id: string;
+  body: string;
+}
+
+export interface CosmosSettings {
+  readonly endpoint: string;
+  readonly key: string;
+  readonly database: string;
+  /** Local only: real accounts get the database and container from infrastructure as code. */
+  readonly createIfMissing: boolean;
+}
+
+/** Cosmos item ids cannot contain "/", so the artifact key maps to an id with "|" instead. */
+export function itemId(key: string): string {
+  return key.replaceAll("/", "|");
+}
+
+/**
+ * ArtifactStore on Azure Cosmos DB (NoSQL API). Items are point reads/writes by id; queries, when added, take
+ * values as @parameters, never inline (ADR 0003).
+ */
+export class CosmosArtifactStore implements ArtifactStore {
+  readonly #client: CosmosClient;
+  readonly #items: Container;
+
+  private constructor(client: CosmosClient, items: Container) {
+    this.#client = client;
+    this.#items = items;
+  }
+
+  static async connect(settings: CosmosSettings): Promise<CosmosArtifactStore> {
+    const client = new CosmosClient({ endpoint: settings.endpoint, key: settings.key });
+    if (!settings.createIfMissing) {
+      return new CosmosArtifactStore(client, client.database(settings.database).container(CONTAINER));
+    }
+    const { database } = await client.databases.createIfNotExists({ id: settings.database });
+    const { container } = await database.containers.createIfNotExists({
+      id: CONTAINER,
+      partitionKey: { paths: ["/id"], kind: PartitionKeyKind.Hash },
+    });
+    return new CosmosArtifactStore(client, container);
+  }
+
+  async save(jobId: string, content: string): Promise<string> {
+    const key = `exports/${jobId}.csv`;
+    const item: ArtifactItem = { id: itemId(key), job_id: jobId, body: content };
+    await this.#items.items.upsert(item);
+    return key;
+  }
+
+  async read(key: string): Promise<string | undefined> {
+    const id = itemId(key);
+    const { resource } = await this.#items.item(id, id).read<ArtifactItem>();
+    return resource?.body;
+  }
+
+  close(): Promise<void> {
+    this.#client.dispose();
+    return Promise.resolve();
+  }
+}

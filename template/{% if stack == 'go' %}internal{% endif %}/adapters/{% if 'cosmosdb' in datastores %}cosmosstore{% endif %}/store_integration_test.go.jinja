@@ -1,0 +1,43 @@
+//go:build integration
+
+// Integration test: needs Docker. Run with `go test -tags integration ./...`.
+package cosmosstore_test
+
+import (
+	"testing"
+
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
+
+	"{{ go_module }}/internal/adapters/cosmosstore"
+	"{{ go_module }}/internal/adapters/storetest"
+)
+
+// emulatorKey is the Cosmos DB emulator's published well-known key: not a secret.
+const emulatorKey = "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=="
+
+func TestCosmosStoreSatisfiesTheContract(t *testing.T) {
+	ctx := t.Context()
+	container, err := testcontainers.Run(ctx, "mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview",
+		testcontainers.WithCmd("--protocol", "http"),
+		testcontainers.WithExposedPorts("8081/tcp", "8080/tcp"),
+		testcontainers.WithWaitStrategy(wait.ForHTTP("/ready").WithPort("8080/tcp")))
+	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		t.Fatalf("start cosmos emulator: %v", err)
+	}
+	endpoint, err := container.PortEndpoint(ctx, "8081/tcp", "http")
+	if err != nil {
+		t.Fatalf("endpoint: %v", err)
+	}
+	if err := cosmosstore.EnsureContainer(ctx, endpoint, emulatorKey, "app"); err != nil {
+		t.Fatalf("ensure container: %v", err)
+	}
+	store, err := cosmosstore.Open(endpoint, emulatorKey, "app")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	storetest.Run(t, func(*testing.T) storetest.Subject {
+		return storetest.Subject{Store: store, Read: store.Read}
+	})
+}

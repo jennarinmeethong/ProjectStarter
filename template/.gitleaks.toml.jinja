@@ -1,0 +1,10 @@
+# Guardrail config (protected). Secret scanning; see docs/security/owasp.md.
+# Never add an allowlist entry to hide a real secret: rotate the secret, then remove it from history.
+[extend]
+useDefault = true
+{%- if 'cosmosdb' in datastores %}
+
+[allowlist]
+description = "The Azure Cosmos DB emulator's published well-known key: not a secret (docs/adr/0003-datastores.md)"
+regexes = ['''C2y6yDjf5/R\+ob0N8A7Cgv30VRDJIWEHLM\+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==''']
+{%- endif %}

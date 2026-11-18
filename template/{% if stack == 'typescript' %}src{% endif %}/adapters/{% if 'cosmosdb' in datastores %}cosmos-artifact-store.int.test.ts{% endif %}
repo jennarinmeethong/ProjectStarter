@@ -1,0 +1,32 @@
+// Integration test: needs Docker. Run with `npm run test:integration` (excluded from `npm test`).
+import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
+import { afterAll, beforeAll } from "vitest";
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { CosmosArtifactStore } from "./cosmos-artifact-store.ts";
+
+// The emulator's published well-known key: not a secret.
+const EMULATOR_KEY = "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==";
+
+let container: StartedTestContainer;
+let store: CosmosArtifactStore;
+
+beforeAll(async () => {
+  container = await new GenericContainer("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview")
+    .withCommand(["--protocol", "http"])
+    .withExposedPorts(8081, 8080)
+    .withWaitStrategy(Wait.forHttp("/ready", 8080))
+    .start();
+  store = await CosmosArtifactStore.connect({
+    endpoint: `http://${container.getHost()}:${String(container.getMappedPort(8081))}`,
+    key: EMULATOR_KEY,
+    database: "app",
+    createIfMissing: true,
+  });
+}, 240_000);
+
+afterAll(async () => {
+  await store.close();
+  await container.stop();
+});
+
+describeArtifactStoreContract("CosmosArtifactStore", () => ({ store, read: (key) => store.read(key) }));
