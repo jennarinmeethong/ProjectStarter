@@ -3,6 +3,8 @@
 #   1. the generated project passes its own verify command, and
 #   2. the guardrails reject a seeded violation (escape hatch, layer leak, skipped test).
 # Usage: tests/render-all.sh [stack...]      (default: typescript python dotnet go rust)
+# The renders go to a temp folder that is deleted when every check passes; it is kept on a failure,
+# or always with KEEP_WORK=1, and its path is printed at the end.
 # Needs: uv, git, bash >= 4 (associative arrays; Git Bash and Linux are fine, macOS /bin/bash 3.2 is not), Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go; rustup + cargo-deny + cargo-mutants for rust.
 set -uo pipefail
 
@@ -11,6 +13,17 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/project-starter-XXXXXX")
 stacks=("$@")
 [ ${#stacks[@]} -gt 0 ] || stacks=(typescript python dotnet go rust)
 failures=0
+
+cleanup() {
+  cd "$repo" || return
+  if [ "$failures" -gt 0 ] || [ "${KEEP_WORK:-0}" = 1 ]; then
+    echo "Rendered into $work (kept)"
+  else
+    chmod -R u+w "$work" 2>/dev/null
+    rm -rf "$work" 2>/dev/null || echo "Could not fully remove $work (files still in use?)"
+  fi
+}
+trap cleanup EXIT
 
 pass() { echo "  PASS $*"; }
 fail() { echo "  FAIL $*"; failures=$((failures + 1)); }
@@ -792,5 +805,4 @@ for stack in "${stacks[@]}"; do
 done
 
 echo
-echo "Rendered into $work"
 if [ "$failures" -eq 0 ]; then echo "ALL PASSED"; else echo "$failures FAILURE(S)"; exit 1; fi
