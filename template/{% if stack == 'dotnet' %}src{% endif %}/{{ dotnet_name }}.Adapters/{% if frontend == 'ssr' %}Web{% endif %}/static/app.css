@@ -1,0 +1,33 @@
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  color: #1a1a1a;
+  background: #ffffff;
+}
+
+main {
+  max-width: 40rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+input,
+textarea,
+button {
+  font: inherit;
+}
+
+textarea {
+  min-height: 8rem;
+}
+
+button {
+  justify-self: start;
+  padding: 0.5rem 1rem;
+}

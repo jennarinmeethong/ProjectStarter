@@ -29,7 +29,7 @@
     <PackageReference Include="Testcontainers.Redis" />
 {%- endif %}
   </ItemGroup>
-{%- if http_api %}
+{%- if serve_http %}
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>

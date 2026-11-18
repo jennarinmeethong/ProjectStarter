@@ -736,6 +736,14 @@ for stack in "${stacks[@]}"; do
       verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks dotnet 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
+      # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API. The Application seed adds the
+      # framework reference too (without it the seed would only fail to compile) and must be caught by the arch test.
+      ssr_checks dotnet "dotnet restore" src/DemoApp.Adapters/Web/Pages/Index.cshtml '/headers.ContentSecurityPolicy = /d' \
+        src/DemoApp.Application/CompleteExport.cs '\npublic static class PageLeak\n{\n    public static Microsoft.AspNetCore.Html.HtmlString Render() => new("x");\n}\n' \
+        'sed -i "s#</Project>#  <ItemGroup><FrameworkReference Include=\"Microsoft.AspNetCore.App\" /></ItemGroup>\n</Project>#" src/DemoApp.Application/DemoApp.Application.csproj; out=$(dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture" 2>&1); git checkout -q -- src/DemoApp.Application/DemoApp.Application.csproj; ! grep -q "Domain/Application must not touch I/O" <<<"$out"' \
+        src/DemoApp.Adapters/Web/Pages/Index.cshtml.cs '\npublic static class DriverLeak\n{\n    public static System.Data.Common.DbConnection? Connection { get; set; }\n}\n' \
+        'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture"'
+      ssr_api_checks dotnet "dotnet restore" 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=E2E"'
       seeded "CA2100: SQL built by concatenation" src/DemoApp.Adapters/PostgresArtifactStore.cs '\npublic static class Unsafe\n{\n    public static NpgsqlCommand Query(NpgsqlConnection connection, string jobId) =>\n        new() { Connection = connection, CommandText = "SELECT body FROM export_artifacts WHERE job_id = \x27" + jobId + "\x27" };\n}\n' dotnet build
       # Design rules (ADR 0002), one violation at a time.
       seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build

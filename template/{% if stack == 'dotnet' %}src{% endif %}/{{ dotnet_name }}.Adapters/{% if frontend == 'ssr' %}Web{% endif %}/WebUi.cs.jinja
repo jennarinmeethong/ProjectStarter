@@ -1,0 +1,86 @@
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+{%- if not http_api %}
+using Microsoft.AspNetCore.Http.HttpResults;
+{%- endif %}
+using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace {{ dotnet_name }}.Adapters.Web;
+{%- if not http_api %}
+
+public sealed record HealthResponse(string Status);
+{%- endif %}
+
+/// <summary>
+/// Server-rendered UI (ADR 0005): Razor Pages under Web/Pages, built-in antiforgery (cookie <c>__Host-csrf</c>, field
+/// <c>csrf_token</c>), a cross-site check before the body is read, and the security headers for every response.
+/// Bootstrap calls <see cref="AddWebUi"/> and <see cref="MapWebUi"/>; the page reaches storage only through the use case.
+/// </summary>
+public static class WebUi
+{
+    internal const int MaxFields = 10;
+    internal const int MaxValueBytes = 12 * 1_000_000;
+    internal const long MaxBodyBytes = MaxValueBytes + 1024;
+
+    public static IServiceCollection AddWebUi(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.AddRazorPages(WebUiOptions.ConfigurePages).AddApplicationPart(typeof(WebUi).Assembly);
+        services.AddAntiforgery(WebUiOptions.ConfigureAntiforgery);
+        return services;
+    }
+
+    public static WebApplication MapWebUi(this WebApplication app)
+    {
+        ArgumentNullException.ThrowIfNull(app);
+        app.UsePageSecurityHeaders();
+        app.MapGet("/static/app.css", () => Results.Text(Stylesheet.Text, "text/css; charset=utf-8"));
+{%- if not http_api %}
+        app.MapGet("/healthz", () => TypedResults.Ok(new HealthResponse("ok")));
+{%- endif %}
+        app.MapRazorPages();
+        return app;
+    }
+}
+
+/// <summary>Options for Razor Pages and antiforgery: pages live under Web/Pages; the token is in cookie
+/// <c>__Host-csrf</c> (<c>Secure</c>, <c>HttpOnly</c>, <c>SameSite=Strict</c>) and hidden field <c>csrf_token</c>.</summary>
+internal static class WebUiOptions
+{
+    public static void ConfigurePages(RazorPagesOptions options)
+    {
+        options.RootDirectory = "/Web/Pages";
+        options.Conventions.ConfigureFilter(new FormRequestFilter());
+        options.Conventions.ConfigureFilter(new AntiforgeryFailureFilter());
+    }
+
+    public static void ConfigureAntiforgery(AntiforgeryOptions options)
+    {
+        options.FormFieldName = "csrf_token";
+        options.HeaderName = null;
+        options.SuppressXFrameOptionsHeader = true;
+        options.Cookie.Name = "__Host-csrf";
+        options.Cookie.Path = "/";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        // Always would make antiforgery throw on plain http (Kestrel behind a TLS proxy, or 127.0.0.1 in tests);
+        // PageSecurityHeaders marks the cookie Secure on every response instead.
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    }
+}
+
+/// <summary>Web/static/app.css, embedded in the assembly so the image needs no content root.</summary>
+internal static class Stylesheet
+{
+    public static readonly string Text = Read();
+
+    private static string Read()
+    {
+        using var stream = typeof(Stylesheet).Assembly.GetManifestResourceStream("static/app.css")
+            ?? throw new InvalidOperationException("Web/static/app.css is not embedded in the assembly.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+}

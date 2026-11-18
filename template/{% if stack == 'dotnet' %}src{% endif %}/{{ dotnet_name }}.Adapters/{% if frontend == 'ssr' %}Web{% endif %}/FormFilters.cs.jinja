@@ -1,0 +1,72 @@
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Core.Infrastructure;
+using Microsoft.AspNetCore.Mvc.Filters;
+
+namespace {{ dotnet_name }}.Adapters.Web;
+
+/// <summary>Runs before the antiforgery filter (order 1000) on state-changing requests: refuses a request that the
+/// browser marks as not same-origin before the body is read (403), then reads the form within the page's limits so an
+/// oversized or malformed form is a 400, not an antiforgery failure. Without <c>Sec-Fetch-Site</c> (old browsers,
+/// non-browser clients) the antiforgery token alone decides. Origin is not checked: Chromium sends <c>Origin: null</c>
+/// on same-origin form posts under <c>Referrer-Policy: no-referrer</c>.</summary>
+internal sealed class FormRequestFilter : IAsyncAuthorizationFilter, IOrderedFilter
+{
+    public int Order => -1000;
+
+    public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
+    {
+        var request = context.HttpContext.Request;
+        if (HttpMethods.IsGet(request.Method) || HttpMethods.IsHead(request.Method) || HttpMethods.IsOptions(request.Method))
+        {
+            return;
+        }
+
+        var site = request.Headers["Sec-Fetch-Site"].ToString();
+        if (site.Length > 0 && !string.Equals(site, "same-origin", StringComparison.Ordinal))
+        {
+            context.Result = Refusal.Forbidden();
+            return;
+        }
+
+        if (!request.HasFormContentType)
+        {
+            return; // No form, so no token: the antiforgery filter refuses it.
+        }
+
+        try
+        {
+            await request.ReadFormAsync(context.HttpContext.RequestAborted).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or BadHttpRequestException)
+        {
+            context.Result = Refusal.BadRequest();
+        }
+    }
+}
+
+/// <summary>Antiforgery failures answer 403 (the framework default is 400), the same as the other stacks' UIs.</summary>
+internal sealed class AntiforgeryFailureFilter : IAlwaysRunResultFilter
+{
+    public void OnResultExecuting(ResultExecutingContext context)
+    {
+        if (context.Result is IAntiforgeryValidationFailedResult)
+        {
+            context.Result = Refusal.Forbidden();
+        }
+    }
+
+    public void OnResultExecuted(ResultExecutedContext context)
+    {
+    }
+}
+
+internal static class Refusal
+{
+    public static ContentResult Forbidden() => Text(StatusCodes.Status403Forbidden, "The form has expired. Reload the page and try again.");
+
+    public static ContentResult BadRequest() => Text(StatusCodes.Status400BadRequest, "The form could not be read.");
+
+    private static ContentResult Text(int statusCode, string text) =>
+        new() { StatusCode = statusCode, ContentType = "text/plain; charset=utf-8", Content = text };
+}

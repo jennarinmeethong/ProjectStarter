@@ -1,5 +1,6 @@
-using {{ dotnet_name }}.Adapters.Http;
-using {{ dotnet_name }}.Application;
+{% if http_api %}using {{ dotnet_name }}.Adapters.Http;
+{% endif %}{% if frontend == 'ssr' %}using {{ dotnet_name }}.Adapters.Web;
+{% endif %}using {{ dotnet_name }}.Application;
 
 namespace {{ dotnet_name }}.Bootstrap;
 
@@ -14,12 +15,22 @@ public static class HttpHost
         builder.Services.AddProblemDetails();
         builder.Services.AddSingleton(store);
         builder.Services.AddSingleton<CompleteExport>();
+{%- if frontend == 'ssr' %}
+        builder.Services.AddWebUi();
+{%- endif %}
 
         var app = builder.Build();
         app.UseExceptionHandler();
         app.UseStatusCodePages();
+{%- if frontend == 'ssr' %}
+        // The UI owns the security headers: the page CSP for the page, the API CSP for /healthz{% if http_api %} and /exports{% endif %}.
+        app.MapWebUi();
+{%- else %}
         app.UseSecurityHeaders();
+{%- endif %}
+{%- if http_api %}
         app.MapExportEndpoints();
+{%- endif %}
         return app;
     }
 }

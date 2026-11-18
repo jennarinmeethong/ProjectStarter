@@ -1,6 +1,6 @@
 using {{ dotnet_name }}.Adapters;
 using {{ dotnet_name }}.Application;
-{%- if http_api %}
+{%- if serve_http %}
 using {{ dotnet_name }}.Bootstrap;
 {%- else %}
 using {{ dotnet_name }}.Domain;
@@ -87,7 +87,7 @@ if (owned is null && !string.IsNullOrEmpty(redisUrl))
 }
 {%- endif %}
 {%- endif %}
-{%- if http_api %}
+{%- if serve_http %}
 
 // Loopback by default; the container image sets HOST=0.0.0.0 explicitly.
 var host = Environment.GetEnvironmentVariable("HOST") ?? "127.0.0.1";

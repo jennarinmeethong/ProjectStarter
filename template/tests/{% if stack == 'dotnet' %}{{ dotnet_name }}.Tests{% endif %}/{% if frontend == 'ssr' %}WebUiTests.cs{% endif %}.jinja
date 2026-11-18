@@ -1,0 +1,387 @@
+using System.Net;
+using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+using {{ dotnet_name }}.Application;
+using {{ dotnet_name }}.Bootstrap;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>A store that always fails, to check that the page hides the details.</summary>
+public sealed class FailingArtifactStore : IArtifactStore
+{
+    public Task<string> SaveAsync(string jobId, string content, CancellationToken cancellationToken) =>
+        throw new IOException($"disk full while saving {jobId} ({content.Length} chars)");
+}
+
+/// <summary>The real HTTP host on a free port. The client keeps cookies by hand: the antiforgery cookie is Secure,
+/// which HttpClient's cookie container does not send over http (browsers do, on 127.0.0.1).</summary>
+public sealed class WebUiHost : IAsyncDisposable
+{
+    private readonly WebApplication app;
+
+    private WebUiHost(WebApplication app, HttpClient client)
+    {
+        this.app = app;
+        Client = client;
+    }
+
+    public HttpClient Client { get; }
+
+    public static async Task<WebUiHost> StartAsync(IArtifactStore store)
+    {
+        var app = HttpHost.Build(store, "http://127.0.0.1:0");
+        await app.StartAsync(TestContext.Current.CancellationToken);
+#pragma warning disable CA2000 // The handler is owned and disposed by the client.
+        var client = new HttpClient(new SocketsHttpHandler { UseCookies = false, AllowAutoRedirect = false }) { BaseAddress = BoundAddress(app) };
+#pragma warning restore CA2000
+        return new WebUiHost(app, client);
+    }
+
+    /// <summary>The address Kestrel actually bound to (port 0 picks a free port).</summary>
+    private static Uri BoundAddress(WebApplication host) =>
+        new(host.Services.GetRequiredService<IServer>().Features.GetRequiredFeature<IServerAddressesFeature>().Addresses.First());
+
+    public async Task<HttpResponseMessage> GetAsync(string path) =>
+        await Client.GetAsync(new Uri(path, UriKind.Relative), TestContext.Current.CancellationToken);
+
+    public async ValueTask DisposeAsync()
+    {
+        Client.Dispose();
+        await app.DisposeAsync();
+    }
+}
+
+/// <summary>Form helpers: open the form like a browser (cookie + hidden field), then post it.</summary>
+public static partial class WebUiForm
+{
+    public static async Task<(string Cookie, string Token)> OpenAsync(this WebUiHost host)
+    {
+        using var response = await host.GetAsync("/");
+        var html = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        return (CookieFrom(response).Split(';')[0], TokenFrom(html));
+    }
+
+    public static string CookieFrom(HttpResponseMessage response) =>
+        response.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-csrf=", StringComparison.Ordinal));
+
+    private static string TokenFrom(string html)
+    {
+        var token = TokenField().Match(html);
+        Assert.True(token.Success, "The form must carry the antiforgery token in a hidden csrf_token field.");
+        return WebUtility.HtmlDecode(token.Groups[1].Value);
+    }
+
+    public static Dictionary<string, string> Fields(string token, string jobId, string content) =>
+        new() { ["csrf_token"] = token, ["job_id"] = jobId, ["content"] = content };
+
+    [GeneratedRegex("name=\"csrf_token\"[^>]*value=\"([^\"]+)\"")]
+    private static partial Regex TokenField();
+}
+
+/// <summary>Posts the form with the headers a browser would send.</summary>
+public static class WebUiRequests
+{
+    public static async Task<HttpResponseMessage> PostAsync(this WebUiHost host, IDictionary<string, string> form, string? cookie, string? fetchSite = "same-origin", string? origin = null)
+    {
+        using var content = new FormUrlEncodedContent(form);
+        return await host.PostAsync(content, cookie, fetchSite, origin);
+    }
+
+    public static async Task<HttpResponseMessage> PostAsync(this WebUiHost host, HttpContent content, string? cookie, string? fetchSite = "same-origin", string? origin = null)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/", UriKind.Relative)) { Content = content };
+        AddHeader(request, "Cookie", cookie);
+        AddHeader(request, "Sec-Fetch-Site", fetchSite);
+        AddHeader(request, "Origin", origin);
+        return await host.Client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    public static async Task<string> TextAsync(this HttpResponseMessage response) =>
+        await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+    private static void AddHeader(HttpRequestMessage request, string name, string? value)
+    {
+        if (value is not null)
+        {
+            request.Headers.Add(name, value);
+        }
+    }
+}
+
+/// <summary>Starts a host on an in-memory store for each test (xUnit creates one instance per test).</summary>
+public abstract class WebUiTestBase : IAsyncLifetime
+{
+    private WebUiHost? host;
+
+    protected InMemoryArtifactStore Store { get; } = new();
+
+    protected WebUiHost Host => host ?? throw new InvalidOperationException("Host not started.");
+
+    public async ValueTask InitializeAsync() => host = await WebUiHost.StartAsync(Store);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (host is not null)
+        {
+            await host.DisposeAsync();
+        }
+
+        GC.SuppressFinalize(this);
+    }
+}
+
+/// <summary>Server-rendered UI (ADR 0005), in process against the real host: the page, its headers and the stylesheet.</summary>
+public sealed class WebUiPageTests : WebUiTestBase
+{
+    private const string PageCsp = "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+    private const string ApiCsp = "default-src 'none'; frame-ancestors 'none'";
+
+    [Fact]
+    public async Task FormSetsTheAntiforgeryCookieAndTheHiddenField()
+    {
+        using var response = await Host.GetAsync("/");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var html = await response.TextAsync();
+        Assert.Contains("<title>Complete an export</title>", html, StringComparison.Ordinal);
+        Assert.Contains("<h1>Complete an export</h1>", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"csrf_token\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<script", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("style=", html, StringComparison.OrdinalIgnoreCase);
+        var cookie = WebUiForm.CookieFrom(response);
+        foreach (var attribute in new[] { "path=/", "secure", "httponly", "samesite=strict" })
+        {
+            Assert.Contains(attribute, cookie, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.DoesNotContain("domain=", cookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("/")]
+    [InlineData("/static/app.css")]
+    public async Task PageSendsThePageCspAndTheSecurityHeaders(string path)
+    {
+        using var response = await Host.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(PageCsp, response.Headers.GetValues("Content-Security-Policy").Single());
+        Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
+        Assert.Equal("DENY", response.Headers.GetValues("X-Frame-Options").Single());
+        Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());
+        Assert.Equal("same-origin", response.Headers.GetValues("Cross-Origin-Opener-Policy").Single());
+        Assert.Equal("require-corp", response.Headers.GetValues("Cross-Origin-Embedder-Policy").Single());
+        Assert.True(response.Headers.Contains("Permissions-Policy"));
+        Assert.False(response.Headers.Contains("Server"));
+    }
+
+    [Fact]
+    public async Task ServesTheStylesheet()
+    {
+        using var response = await Host.GetAsync("/static/app.css");
+
+        Assert.Equal("text/css", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("font-family", await response.TextAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HealthCheckKeepsTheApiCsp()
+    {
+        using var response = await Host.GetAsync("/healthz");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(ApiCsp, response.Headers.GetValues("Content-Security-Policy").Single());
+    }
+{%- if http_api %}
+
+    [Fact]
+    public async Task ApiPathsKeepTheApiCsp()
+    {
+        using var content = new StringContent("{\"content\":\"x\"}", System.Text.Encoding.UTF8, "application/json");
+        using var response = await Host.Client.PostAsync(new Uri("/exports/api-1/complete", UriKind.Relative), content, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(ApiCsp, response.Headers.GetValues("Content-Security-Policy").Single());
+    }
+{%- else %}
+
+    [Fact]
+    public async Task HasNoJsonApiWithoutHttpApi()
+    {
+        using var content = new StringContent("{\"content\":\"x\"}", System.Text.Encoding.UTF8, "application/json");
+        using var response = await Host.Client.PostAsync(new Uri("/exports/api-1/complete", UriKind.Relative), content, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+{%- endif %}
+}
+
+/// <summary>The form flow: success, validation, escaping and storage failures.</summary>
+public sealed class WebUiFormTests : WebUiTestBase
+{
+    private const string Invalid = "Enter a job id (letters, digits, - or _) and some content.";
+
+    [Fact]
+    public async Task CompletesAnExport()
+    {
+        var (cookie, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "ui-1", "id,name"), cookie);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("Saved as exports/ui-1.csv", await response.TextAsync(), StringComparison.Ordinal);
+        Assert.Equal("id,name", Store.Read("exports/ui-1.csv"));
+    }
+
+    [Theory]
+    [InlineData("not valid", 1)]
+    [InlineData("ok", 0)]
+    [InlineData("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 1)]
+    [InlineData("ok", 1_000_001)]
+    public async Task RejectsInvalidInput(string jobId, int contentLength)
+    {
+        var (cookie, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, jobId, new string('x', contentLength)), cookie);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains(WebUtility.HtmlEncode(Invalid), await response.TextAsync(), StringComparison.Ordinal);
+        Assert.Null(Store.Read($"exports/{jobId}.csv"));
+    }
+
+    [Fact]
+    public async Task EscapesUserInput()
+    {
+        var (cookie, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "<script>x</script>", "<b>x</b>"), cookie);
+
+        var html = await response.TextAsync();
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.DoesNotContain("<script>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<b>", html, StringComparison.Ordinal);
+        Assert.Contains("&lt;script&gt;x&lt;/script&gt;", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RejectsTooManyFields()
+    {
+        var (cookie, token) = await Host.OpenAsync();
+        var form = WebUiForm.Fields(token, "t-6", "x");
+        for (var i = 0; i < 20; i++)
+        {
+            form[$"extra{i}"] = "x";
+        }
+
+        using var response = await Host.PostAsync(form, cookie);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Null(Store.Read("exports/t-6.csv"));
+    }
+
+    [Fact]
+    public async Task HidesStorageErrors()
+    {
+        await using var failing = await WebUiHost.StartAsync(new FailingArtifactStore());
+        var (cookie, token) = await failing.OpenAsync();
+
+        using var response = await failing.PostAsync(WebUiForm.Fields(token, "t-7", "x"), cookie);
+
+        var html = await response.TextAsync();
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Contains("The export could not be saved.", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("disk full", html, StringComparison.Ordinal);
+    }
+}
+
+/// <summary>Cross-site request forgery: the antiforgery token and Fetch Metadata (Sec-Fetch-Site).</summary>
+public sealed class WebUiCsrfTests : WebUiTestBase
+{
+    [Fact]
+    public async Task RejectsAMissingToken()
+    {
+        var (cookie, _) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(new Dictionary<string, string> { ["job_id"] = "t-1", ["content"] = "x" }, cookie);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Null(Store.Read("exports/t-1.csv"));
+    }
+
+    [Fact]
+    public async Task RejectsAMismatchedToken()
+    {
+        var (cookie, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields($"{token}x", "t-2", "x"), cookie);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Null(Store.Read("exports/t-2.csv"));
+    }
+
+    [Fact]
+    public async Task RejectsAPostWithoutTheCookie()
+    {
+        var (_, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-3", "x"), cookie: null);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Null(Store.Read("exports/t-3.csv"));
+    }
+
+    [Fact]
+    public async Task RejectsAPostThatIsNotAForm()
+    {
+        var (cookie, _) = await Host.OpenAsync();
+        using var json = new StringContent("{\"job_id\":\"t-9\",\"content\":\"x\"}", System.Text.Encoding.UTF8, "application/json");
+
+        using var response = await Host.PostAsync(json, cookie);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Null(Store.Read("exports/t-9.csv"));
+    }
+
+    [Theory]
+    [InlineData("cross-site")]
+    [InlineData("same-site")]
+    [InlineData("none")]
+    public async Task RejectsACrossSitePostEvenWithAValidToken(string fetchSite)
+    {
+        var (cookie, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-4", "x"), cookie, fetchSite);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Null(Store.Read("exports/t-4.csv"));
+    }
+
+    [Fact]
+    public async Task AcceptsASameOriginPostWithANullOrigin()
+    {
+        // Chromium sends Origin: null on same-origin form posts under Referrer-Policy: no-referrer.
+        var (cookie, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-5", "x"), cookie, "same-origin", "null");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("x", Store.Read("exports/t-5.csv"));
+    }
+
+    [Fact]
+    public async Task AcceptsAPostWithoutFetchMetadata()
+    {
+        // Older browsers and non-browser clients send no Sec-Fetch-Site: the token alone decides.
+        var (cookie, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-8", "x"), cookie, fetchSite: null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+}
