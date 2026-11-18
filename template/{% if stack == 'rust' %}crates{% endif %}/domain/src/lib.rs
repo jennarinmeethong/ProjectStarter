@@ -144,7 +144,29 @@ mod tests {
 
     #[test]
     fn rejects_blank_artifact_key() {
-        assert_eq!(complete(start(Queued::new("job-1")), "  "), Err(CompleteError::BlankArtifactKey));
+        let error = complete(start(Queued::new("job-1")), "  ").unwrap_err();
+        assert_eq!(error, CompleteError::BlankArtifactKey);
+        assert_eq!(error.to_string(), "export completion requires an artifact key");
+    }
+
+    #[test]
+    fn every_state_reports_its_id() {
+        let queued = Queued::new("job-1");
+        let running = start(queued.clone());
+        let ready = complete(running.clone(), "exports/job-1.csv").unwrap();
+        let failed = Failed::new("job-2", "disk full");
+        assert_eq!(queued.id(), "job-1");
+        assert_eq!(running.id(), "job-1");
+        assert_eq!(failed.id(), "job-2");
+        assert_eq!(failed.reason(), "disk full");
+        for (job, id) in [
+            (ExportJob::Queued(queued), "job-1"),
+            (ExportJob::Running(running), "job-1"),
+            (ExportJob::Ready(ready), "job-1"),
+            (ExportJob::Failed(failed), "job-2"),
+        ] {
+            assert_eq!(job.id(), id);
+        }
     }
 
     proptest! {

@@ -88,7 +88,7 @@ const noHiddenInputs = [
 ];
 
 export default tseslint.config(
-  { ignores: ["node_modules/", "dist/", "coverage/", "playwright-report*/", "test-results/", "*.config.*", ".dependency-cruiser.cjs", "ci/"{% if frontend == 'nextjs' %}, ".next/", "next-env.d.ts"{% endif %}{% if frontend == 'angular' %}, ".angular/"{% endif %}{% if frontend == 'react-native' %}, ".expo/", "index.ts"{% endif %}] },
+  { ignores: ["node_modules/", "dist/", "coverage/", "playwright-report*/", "test-results/", ".stryker-tmp/", "reports/", "*.config.*", ".dependency-cruiser.cjs", "ci/"{% if frontend == 'nextjs' %}, ".next/", "next-env.d.ts"{% endif %}{% if frontend == 'angular' %}, ".angular/"{% endif %}{% if frontend == 'react-native' %}, ".expo/", "index.ts"{% endif %}] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {

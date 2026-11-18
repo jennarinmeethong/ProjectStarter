@@ -3,7 +3,7 @@
 #   1. the generated project passes its own verify command, and
 #   2. the guardrails reject a seeded violation (escape hatch, layer leak, skipped test).
 # Usage: tests/render-all.sh [stack...]      (default: typescript python dotnet go rust)
-# Needs: uv, git, bash >= 4 (associative arrays; Git Bash and Linux are fine, macOS /bin/bash 3.2 is not), Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go; rustup + cargo-deny for rust.
+# Needs: uv, git, bash >= 4 (associative arrays; Git Bash and Linux are fine, macOS /bin/bash 3.2 is not), Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go; rustup + cargo-deny + cargo-mutants for rust.
 set -uo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -396,13 +396,78 @@ default_verify() { # default_verify <stack>: the claude-only render keeps every 
   popd >/dev/null || return
 }
 
+# Mutation testing of the domain (cmd.mutation): the command, the domain file, the line an untested branch goes before,
+# that branch (an off-by-one the tests never pin down), and the output that proves the threshold, not a build error,
+# rejected it.
+declare -A mutation_cmd=(
+  [typescript]="npm run mutation"
+  [python]="uv run mutmut run && uv run mutmut export-cicd-stats && uv run python ci/mutation-gate.py"
+  [dotnet]="cd tests/DemoApp.Domain.Tests && dotnet tool restore && dotnet stryker"
+  [go]="go run github.com/go-gremlins/gremlins/cmd/gremlins@v0.5.1 unleash ./internal/domain"
+  [rust]="cargo mutants -p domain"
+)
+declare -A mutation_file=(
+  [typescript]=src/domain/export-job.ts [python]=src/demo_app/domain/export_job.py
+  [dotnet]=src/DemoApp.Domain/ExportJob.cs [go]=internal/domain/exportjob.go [rust]=crates/domain/src/lib.rs
+)
+declare -A mutation_anchor=(
+  [typescript]='^  if (artifactKey.trim().length === 0) {'
+  [python]='^    if not artifact_key.strip():'
+  [dotnet]='^        return new ExportJob.Ready(job.Id, artifactKey);'
+  [go]='^\tif strings.TrimSpace(artifactKey) == "" {'
+  [rust]='^    if artifact_key.trim().is_empty() {'
+)
+declare -A mutation_gap=(
+  [typescript]='  if (artifactKey.length > 1024) {\n    throw new Error("Artifact key too long");\n  }'
+  [python]='    if len(artifact_key) > 1024:\n        raise ValueError("Artifact key too long")'
+  [dotnet]='        if (artifactKey.Length > 1024)\n        {\n            throw new ArgumentException("Artifact key too long", nameof(artifactKey));\n        }'
+  [go]='\tif len(artifactKey) > 1024 {\n\t\treturn Ready{}, ErrBlankArtifactKey\n\t}'
+  [rust]='    if artifact_key.len() > 1024 {\n        return Err(CompleteError::BlankArtifactKey);\n    }'
+)
+declare -A mutation_rejected=(
+  [typescript]='under breaking threshold' [python]='surviving mutants: uv run mutmut results' [dotnet]='lower than the configured break threshold'
+  [go]='below efficacy-threshold' [rust]='MISSED'
+)
+
+mutation_unsupported_here() { # mutmut, Stryker.NET and gremlins misbehave on Windows; CI (Linux) runs them
+  case "$1:$(uname -s)" in
+    python:MINGW* | python:MSYS* | dotnet:MINGW* | dotnet:MSYS* | go:MINGW* | go:MSYS*)
+      echo "  SKIP mutation ($1): needs Linux/macOS here; CI runs it"; return 0 ;;
+  esac
+  return 1
+}
+
+full_mutation() { # full_mutation <stack>: in the full render (datastores + HTTP API), the domain run still needs no Docker
+  mutation_unsupported_here "$1" && return
+  verify "full render: $1 mutation" "${mutation_cmd[$1]}"
+  rm -rf .stryker-tmp reports mutants tests/DemoApp.Domain.Tests/StrykerOutput mutants.out mutants.out.old
+}
+
+default_mutation() { # default_mutation <stack>: on the default render, mutation passes; an untested branch fails it
+  mutation_unsupported_here "$1" && return
+  pushd "$work/$1-claude" >/dev/null || return
+  local file=${mutation_file[$1]} out
+  verify "defaults: $1 mutation" "${mutation_cmd[$1]}"
+  sed -i "s|${mutation_anchor[$1]}|${mutation_gap[$1]}\n&|" "$file"
+  if out=$(bash -c "${mutation_cmd[$1]}" 2>&1); then
+    fail "mutation: untested branch in the domain (should have failed)"
+  elif grep -q "${mutation_rejected[$1]}" <<<"$out"; then
+    pass "mutation: untested branch in the domain rejected"
+  else
+    fail "mutation: untested branch failed for another reason"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'
+  fi
+  git checkout -q -- "$file"
+  rm -rf .stryker-tmp reports mutants tests/DemoApp.Domain.Tests/StrykerOutput mutants.out mutants.out.old
+  popd >/dev/null || return
+}
+
 for stack in "${stacks[@]}"; do
   echo "== $stack"
 
   # Agent-tool combinations: only the file set changes.
   # The both-tools render also sets a guardrail owner; the others leave it empty (no CODEOWNERS).
   for tools in '["claude"]' '["codex"]' '["claude","codex"]'; do
-    d="$work/$stack-$(echo "$tools" | tr -dc 'a-z,')"
+    d="$work/$stack-$(echo "$tools" | tr -dc 'a-z,' | tr ',' '-')"  # no comma: MSBuild (Stryker.NET's project analysis) breaks on it
     # The both-tools render also wires in every datastore and the HTTP API; it gets the full verification below.
     if [ "$tools" = '["claude","codex"]' ]; then
       owner_args=(-d guardrail_owner=@demo-org/platform -d 'datastores=["postgres","mysql","redis"]' -d http_api=true)
@@ -459,15 +524,17 @@ for stack in "${stacks[@]}"; do
   done
 
   default_verify "$stack"
+  default_mutation "$stack"
 
   # Full verification on the both-tools render.
-  d="$work/$stack-claude,codex"
+  d="$work/$stack-claude-codex"
   cd "$d" || continue
   git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base && git branch -q base
   case "$stack" in
     typescript)
       npm install --no-audit --no-fund >/dev/null 2>&1
       verify "npm run verify" "npm run verify"
+      full_mutation typescript
       # Dependency audit: clean on the render, rejects a known-vulnerable package.
       verify "npm audit (ci/npm-audit.mjs)" "node ci/npm-audit.mjs"
       cp package.json package-lock.json "$work/"
@@ -524,11 +591,13 @@ for stack in "${stacks[@]}"; do
     python)
       uv sync >/dev/null 2>&1
       verify "python verify" "${verify_cmd[python]}"
+      full_mutation python
       # Dependency audit: clean on the render, rejects a known-vulnerable package.
       verify "uv audit" "uv audit --locked --preview-features audit-command"
       cp pyproject.toml uv.lock "$work/"
-      # pyyaml 5.3 has known advisories and no dependencies, so it resolves next to any other package set.
-      uv add --no-sync pyyaml==5.3 >/dev/null 2>&1
+      # pyyaml 5.3 has known advisories and no dependencies. Only below Python 3.14: libcst (via mutmut) needs
+      # pyyaml >= 6.0.3 on 3.14+, so an unconditional pin cannot resolve and the audit would pass.
+      uv add --no-sync "pyyaml==5.3; python_full_version < '3.14'" >/dev/null 2>&1
       expect_fail "uv audit: vulnerable dependency" uv audit --locked --preview-features audit-command
       cp "$work/pyproject.toml" "$work/uv.lock" .
       # Container and secret scanning (docs/security/owasp.md).
@@ -571,6 +640,7 @@ for stack in "${stacks[@]}"; do
       ;;
     dotnet)
       verify "dotnet verify" "${verify_cmd[dotnet]}"
+      full_mutation dotnet
       # Dependency audit (NuGetAudit + TreatWarningsAsErrors): clean, then rejects a known-vulnerable package.
       verify "nuget audit" "dotnet restore --force-evaluate"
       sed -i 's#<PackageVersion Include="xunit.v3"#<PackageVersion Include="Newtonsoft.Json" Version="12.0.1" />\n    &#' Directory.Packages.props
@@ -582,28 +652,29 @@ for stack in "${stacks[@]}"; do
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks dotnet
-      mariadb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      sqlserver_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      oracle_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      mongodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      dynamodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      cosmosdb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      s3_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --filter-trait "Category=Integration"'
+      mariadb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      sqlserver_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      oracle_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      mongodb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      dynamodb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      cosmosdb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      s3_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
-      http_checks dotnet 'dotnet test --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
+      http_checks dotnet 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
       seeded "CA2100: SQL built by concatenation" src/DemoApp.Adapters/PostgresArtifactStore.cs '\npublic static class Unsafe\n{\n    public static NpgsqlCommand Query(NpgsqlConnection connection, string jobId) =>\n        new() { Connection = connection, CommandText = "SELECT body FROM export_artifacts WHERE job_id = \x27" + jobId + "\x27" };\n}\n' dotnet build
       # Design rules (ADR 0002), one violation at a time.
       seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build
       seeded "BannedApi: Guid.NewGuid in Application" src/DemoApp.Application/CompleteExport.cs '\npublic static class Ids\n{\n    public static Guid Next() => Guid.NewGuid();\n}\n' dotnet build
       seeded "naming: async method without Async suffix" src/DemoApp.Adapters/InMemoryArtifactStore.cs '\npublic static class Waits\n{\n    public static async Task Pause() => await Task.CompletedTask.ConfigureAwait(false);\n}\n' dotnet build
-      seeded "NetArchTest: unsealed concrete class" src/DemoApp.Application/CompleteExport.cs '\npublic class Helper\n{\n    public int Value { get; init; }\n}\n' dotnet test --filter-trait "Category=Architecture"
+      seeded "NetArchTest: unsealed concrete class" src/DemoApp.Application/CompleteExport.cs '\npublic class Helper\n{\n    public int Value { get; init; }\n}\n' dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture"
       printf '\npublic static class Leak\n{\n#pragma warning disable CA1823\n    public static string Value = null!;\n}\n' >> src/DemoApp.Domain/ExportJob.cs
       expect_fail "build: TreatWarningsAsErrors" dotnet build
       ;;
     go)
       go mod tidy >/dev/null 2>&1
       verify "go verify" "${verify_cmd[go]}"
+      full_mutation go
       # The property test (rapid) must catch a bug that the example test and fixed inputs miss.
       sed -i 's/artifactKey: artifactKey}/artifactKey: strings.ToLower(artifactKey)}/' internal/domain/exportjob.go
       # Must fail as a rapid property failure, not as a compile error from a stale sed target.
@@ -659,6 +730,7 @@ for stack in "${stacks[@]}"; do
     rust)
       cargo fetch -q >/dev/null 2>&1
       verify "rust verify" "${verify_cmd[rust]}"
+      full_mutation rust
       # Dependency audit: clean, then rejects a crate with a known advisory.
       verify "cargo deny advisories" "cargo deny check advisories"
       cp crates/adapters/Cargo.toml Cargo.lock "$work/"
@@ -703,7 +775,7 @@ for stack in "${stacks[@]}"; do
   case "$stack" in
     typescript) sed -i 's/  it("rejects/  it.skip("rejects/' src/domain/export-job.test.ts ;;
     python) sed -i 's/^def test_rejects/@pytest.mark.skip\ndef test_rejects/' tests/test_export_job.py ;;
-    dotnet) sed -i 's/\[Fact\]/[Fact(Skip = "x")]/' tests/DemoApp.Tests/ExportJobTests.cs ;;
+    dotnet) sed -i 's/\[Fact\]/[Fact(Skip = "x")]/' tests/DemoApp.Domain.Tests/ExportJobTests.cs ;;
     go) sed -i 's/^func TestRejectsBlankArtifactKey(t \*testing.T) {$/&\n\tt.Skip("x")/' internal/domain/exportjob_test.go ;;
     rust) sed -i 's/^#\[tokio::test\]$/&\n#[ignore]/' crates/adapters/tests/in_memory.rs ;;
   esac

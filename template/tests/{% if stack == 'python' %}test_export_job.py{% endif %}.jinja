@@ -19,7 +19,7 @@ def test_completes_running_job_with_artifact_key() -> None:
 
 
 def test_rejects_blank_artifact_key() -> None:
-    with pytest.raises(ValueError, match="artifact key"):
+    with pytest.raises(ValueError, match=r"^Export completion requires an artifact key$"):
         complete_export(RunningExport(id="job-1"), "  ")
 
 

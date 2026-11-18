@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "vitest": { "dir": "src/domain" },
+  "mutate": ["src/domain/**/*.ts", "!src/domain/**/*.test.ts"],
+  "thresholds": { "high": 100, "low": 99, "break": 99 },
+  "reporters": ["clear-text", "progress"],
+  "tempDirName": ".stryker-tmp"
+}

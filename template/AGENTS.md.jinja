@@ -7,6 +7,7 @@
 - Fast checks (types, lint, architecture): `{{ cmd.fast }}`
 - Everything CI runs: `{{ cmd.verify }}`, then `{{ cmd.audit }}` (known-vulnerable dependencies; needs network)
 - Single test: `{{ cmd.test_single }}`
+- Mutation testing of the domain (CI job `mutation`; run it after changing domain logic or its tests): `{{ cmd.mutation }}`
 - Report evidence: paste the commands you ran and their final output in the PR description.
 
 ## Rules are enforced by tools — read the error, fix the cause
