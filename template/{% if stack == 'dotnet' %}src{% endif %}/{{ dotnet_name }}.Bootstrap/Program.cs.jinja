@@ -54,6 +54,14 @@ if (owned is null && !string.IsNullOrEmpty(mongoUrl))
     (store, owned) = (mongo, mongo);
 }
 {%- endif %}
+{%- if 'oracle' in datastores %}
+var oracleUrl = Environment.GetEnvironmentVariable("ORACLE_URL");
+if (owned is null && !string.IsNullOrEmpty(oracleUrl))
+{
+    var oracle = OracleArtifactStore.Create(oracleUrl);
+    (store, owned) = (oracle, oracle);
+}
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
 var sqlServerUrl = Environment.GetEnvironmentVariable("SQLSERVER_URL");
 if (owned is null && !string.IsNullOrEmpty(sqlServerUrl))

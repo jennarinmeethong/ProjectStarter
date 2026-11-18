@@ -1,0 +1,60 @@
+"""Integration test: needs Docker.
+
+Run with `uv run pytest -m integration` (deselected by default).
+"""
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy
+from tests.artifact_store_contract import ArtifactStoreContract, StoreUnderTest
+
+from {{ package_name }}.adapters.oracle_artifact_store import (
+    OracleArtifactStore,
+    connect,
+    open_cursor,
+)
+
+pytestmark = pytest.mark.integration
+
+MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations" / "oracle"
+
+
+def statements(sql: str) -> list[str]:
+    """Splits a migration into statements: Oracle drivers run one statement per call, no ";"."""
+    code = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+    return [part.strip() for part in code.split(";") if part.strip()]
+
+
+@pytest.fixture(scope="module")
+def database_url() -> Iterator[str]:
+    container = (
+        DockerContainer("gvenzl/oracle-free:23-slim-faststart")
+        .with_env("ORACLE_PASSWORD", "sys-test-only")
+        .with_env("APP_USER", "app")
+        .with_env("APP_USER_PASSWORD", "app-test-only")
+        .with_exposed_ports(1521)
+        .waiting_for(LogMessageWaitStrategy("DATABASE IS READY TO USE!"))
+    )
+    with container:
+        host = container.get_container_host_ip()
+        port = container.get_exposed_port(1521)
+        url = f"oracle://app:app-test-only@{host}:{port}/FREEPDB1"
+        # Same order as the compose migrate job: sorted file names.
+        with connect(url) as connection:
+            cursor = open_cursor(connection)
+            for migration in sorted(MIGRATIONS.glob("*.sql")):
+                for statement in statements(migration.read_text(encoding="utf-8")):
+                    cursor.execute(statement)
+            cursor.close()
+        yield url
+
+
+class TestOracleArtifactStore(ArtifactStoreContract):
+    @pytest.fixture
+    def subject(self, database_url: str) -> Iterator[StoreUnderTest]:
+        store = OracleArtifactStore.from_url(database_url)
+        yield StoreUnderTest(store=store, read=store.read)
+        store.close()

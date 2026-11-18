@@ -1,0 +1,28 @@
+# Guardrail config (protected). Same thresholds as the workspace clippy.toml (clippy reads only the nearest
+# file), plus SQL drivers that accept SQL from any string: their query methods are banned except at the audited
+# gateways in src/{% if 'sqlserver' in datastores %}sqlserver.rs{% endif %}{% if 'sqlserver' in datastores and 'oracle' in datastores %} and src/{% endif %}{% if 'oracle' in datastores %}oracle.rs{% endif %}, which only take &'static str (docs/adr/0003-datastores.md).
+too-many-arguments-threshold = 4
+cognitive-complexity-threshold = 15
+too-many-lines-threshold = 60
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+
+disallowed-methods = [
+{%- if 'sqlserver' in datastores %}
+  { path = "tiberius::Client::query", reason = "run SQL through the &'static str gateway in src/sqlserver.rs" },
+  { path = "tiberius::Client::execute", reason = "run SQL through the &'static str gateway in src/sqlserver.rs" },
+  { path = "tiberius::Client::simple_query", reason = "run SQL through the &'static str gateway in src/sqlserver.rs" },
+  { path = "tiberius::Query::new", reason = "run SQL through the &'static str gateway in src/sqlserver.rs" },
+{%- endif %}
+{%- if 'oracle' in datastores %}
+  { path = "oracle_rs::Connection::query", reason = "run SQL through the &'static str gateway in src/oracle.rs" },
+  { path = "oracle_rs::Connection::execute", reason = "run SQL through the &'static str gateway in src/oracle.rs" },
+  { path = "oracle_rs::Connection::execute_dml_sql", reason = "run SQL through the &'static str gateway in src/oracle.rs" },
+  { path = "oracle_rs::Connection::execute_plsql", reason = "run SQL through the &'static str gateway in src/oracle.rs" },
+  { path = "oracle_rs::Connection::open_scrollable_cursor", reason = "run SQL through the &'static str gateway in src/oracle.rs" },
+{%- endif %}
+  { path = "std::string::String::leak", reason = "a leaked String would pass the &'static str SQL gateway" },
+  { path = "std::boxed::Box::leak", reason = "a leaked String would pass the &'static str SQL gateway" },
+]

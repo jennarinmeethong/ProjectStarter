@@ -1,0 +1,82 @@
+"""ArtifactStore on Oracle Database (python-oracledb thin mode, no client libraries).
+
+Schema: migrations/oracle/. Values are always bound (:name), never formatted into SQL (ADR 0003).
+"""
+
+from __future__ import annotations
+
+from typing import Protocol, Self
+from urllib.parse import unquote, urlparse
+
+import oracledb
+
+# The same bind name twice is fine: values are bound by name.
+UPSERT_SQL = (
+    "MERGE INTO export_artifacts t "
+    "USING (SELECT :artifact_key AS artifact_key, :job_id AS job_id FROM dual) s "
+    "ON (t.artifact_key = s.artifact_key) "
+    "WHEN MATCHED THEN UPDATE SET t.body = :body "
+    "WHEN NOT MATCHED THEN INSERT (artifact_key, job_id, body) "
+    "VALUES (s.artifact_key, s.job_id, :body)"
+)
+READ_SQL = "SELECT body FROM export_artifacts WHERE artifact_key = :artifact_key"
+
+
+class Row(Protocol):
+    def __getitem__(self, index: int, /) -> object: ...
+
+
+class Cursor(Protocol):
+    """The typed subset of the driver cursor in use (the driver leaves parameters untyped)."""
+
+    def execute(
+        self, statement: str, parameters: dict[str, str] | None = None, /, *, fetch_lobs: bool = ...
+    ) -> object: ...
+    def fetchone(self) -> Row | None: ...
+    def close(self) -> None: ...
+
+
+def open_cursor(connection: oracledb.Connection) -> Cursor:
+    return connection.cursor()
+
+
+def connect(url: str) -> oracledb.Connection:
+    """Connects to oracle://user:password@host:port/service."""
+    parts = urlparse(url)
+    return oracledb.connect(
+        user=unquote(parts.username or ""),
+        password=unquote(parts.password or ""),
+        dsn=f"{parts.hostname or 'localhost'}:{parts.port or 1521}{parts.path}",
+    )
+
+
+class OracleArtifactStore:
+    def __init__(self, connection: oracledb.Connection) -> None:
+        self._connection = connection
+
+    @classmethod
+    def from_url(cls, url: str) -> Self:
+        return cls(connect(url))
+
+    def save(self, job_id: str, content: str) -> str:
+        key = f"exports/{job_id}.csv"
+        cursor = open_cursor(self._connection)
+        try:
+            cursor.execute(UPSERT_SQL, {"artifact_key": key, "job_id": job_id, "body": content})
+        finally:
+            cursor.close()
+        self._connection.commit()
+        return key
+
+    def read(self, key: str) -> str | None:
+        cursor = open_cursor(self._connection)
+        try:
+            # fetch_lobs=False returns the CLOB as a plain string.
+            cursor.execute(READ_SQL, {"artifact_key": key}, fetch_lobs=False)
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+        return None if row is None else str(row[0])
+
+    def close(self) -> None:
+        self._connection.close()

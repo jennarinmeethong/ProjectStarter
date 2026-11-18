@@ -31,6 +31,9 @@ import (
 {%- if mysql_engine %}
 	"{{ go_module }}/internal/adapters/mysqlstore"
 {%- endif %}
+{%- if 'oracle' in datastores %}
+	"{{ go_module }}/internal/adapters/oraclestore"
+{%- endif %}
 {%- if 'postgres' in datastores %}
 	"{{ go_module }}/internal/adapters/postgres"
 {%- endif %}
@@ -129,6 +132,15 @@ func openStore(ctx context.Context) (application.ArtifactStore, func(), error) {
 			return nil, nil, fmt.Errorf("open mongodb: %w", err)
 		}
 		return store, func() { _ = store.Close(context.WithoutCancel(ctx)) }, nil
+	}
+{%- endif %}
+{%- if 'oracle' in datastores %}
+	if url := os.Getenv("ORACLE_URL"); url != "" {
+		store, err := oraclestore.Open(ctx, url)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open oracle: %w", err)
+		}
+		return store, func() { _ = store.Close() }, nil
 	}
 {%- endif %}
 {%- if 'sqlserver' in datastores %}

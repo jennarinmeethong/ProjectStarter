@@ -23,6 +23,9 @@ services:
 {%- if mysql_engine %}
       MYSQL_URL: mysql://app:${MYSQL_PASSWORD:-local-dev-only}@{{ mysql_engine }}:3306/app
 {%- endif %}
+{%- if 'oracle' in datastores %}
+      ORACLE_URL: oracle://app:${ORACLE_APP_PASSWORD:-local-dev-only}@oracle:1521/FREEPDB1
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
       # Local development only: the container's certificate is self-signed.
       SQLSERVER_URL: sqlserver://sa:${MSSQL_SA_PASSWORD:-Local-dev-only-1}@sqlserver:1433/app?trustServerCertificate=true
@@ -71,6 +74,10 @@ services:
 {%- if mysql_engine %}
       {{ mysql_engine }}:
         condition: service_healthy
+{%- endif %}
+{%- if 'oracle' in datastores %}
+      oracle-migrate:
+        condition: service_completed_successfully
 {%- endif %}
 {%- if 'sqlserver' in datastores %}
       sqlserver-migrate:
@@ -135,6 +142,40 @@ services:
 {%- endif %}
       interval: 2s
       retries: 60
+{%- endif %}
+{%- if 'oracle' in datastores %}
+
+  oracle:
+    # Oracle Database Free (Oracle Free Use Terms; ADR 0003). The image creates the APP_USER schema in FREEPDB1.
+    image: gvenzl/oracle-free:23-slim-faststart
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD:-local-dev-only}
+      APP_USER: app
+      APP_USER_PASSWORD: ${ORACLE_APP_PASSWORD:-local-dev-only}
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 5s
+      retries: 60
+
+  # Applies migrations/oracle in file-name order as the app user (one-shot job, same image for sqlplus).
+  oracle-migrate:
+    image: gvenzl/oracle-free:23-slim-faststart
+    depends_on:
+      oracle:
+        condition: service_healthy
+    environment:
+      APP_USER_PASSWORD: ${ORACLE_APP_PASSWORD:-local-dev-only}
+    volumes:
+      - ./migrations/oracle:/migrations:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        for f in /migrations/*.sql; do
+        { echo 'WHENEVER SQLERROR EXIT FAILURE'; cat "$$f"; echo 'EXIT'; } |
+        sqlplus -s -L "app/$${APP_USER_PASSWORD}@//oracle:1521/FREEPDB1" || exit 1;
+        done
 {%- endif %}
 {%- if 'sqlserver' in datastores %}
 
@@ -262,7 +303,7 @@ services:
     # Published on the host's loopback only.
     ports: ["127.0.0.1:8081:8080"]
 {%- endif %}
-{%- if 'postgres' in datastores or mysql_engine or 'sqlserver' in datastores or 'mongodb' in datastores %}
+{%- if 'postgres' in datastores or mysql_engine or 'sqlserver' in datastores or 'oracle' in datastores or 'mongodb' in datastores %}
 
 volumes:
 {%- if 'postgres' in datastores %}
@@ -270,6 +311,9 @@ volumes:
 {%- endif %}
 {%- if mysql_engine %}
   {{ mysql_engine }}-data:
+{%- endif %}
+{%- if 'oracle' in datastores %}
+  oracle-data:
 {%- endif %}
 {%- if 'sqlserver' in datastores %}
   sqlserver-data:

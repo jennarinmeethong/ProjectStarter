@@ -25,7 +25,7 @@ if [ -n "$application_bad" ]; then
   status=1
 fi
 reject adapters '^bootstrap$' "only bootstrap wires dependencies (ADR 0001)"
-reject bootstrap '^(sqlx|sqlx-[a-z-]+|tokio-postgres|postgres|redis|mongodb|mysql_async|tiberius|aws-sdk-dynamodb|aws-sdk-s3|azure_data_cosmos|oracle)$' \
+reject bootstrap '^(sqlx|sqlx-[a-z-]+|tokio-postgres|postgres|redis|mongodb|mysql_async|tiberius|aws-sdk-dynamodb|aws-sdk-s3|azure_data_cosmos|oracle|oracle-rs)$' \
   "datastore drivers live in adapters; bootstrap passes connection settings (docs/adr/0003-datastores.md)"
 
 [ "$status" -eq 0 ] && echo "check-layers: OK"

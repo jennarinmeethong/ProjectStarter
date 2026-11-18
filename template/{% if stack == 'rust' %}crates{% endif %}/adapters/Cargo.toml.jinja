@@ -23,11 +23,18 @@ domain = { path = "../domain" }
 # sqlx 0.9 only accepts SQL it can prove is not built from strings (SqlSafeStr); see ADR 0003.
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio"{% if 'postgres' in datastores %}, "postgres"{% endif %}{% if mysql_engine %}, "mysql"{% endif %}] }
 {%- endif %}
+{%- if 'oracle' in datastores %}
+# oracle-rs (pure Rust thin driver, pre-1.0: pinned exactly) takes SQL from any string: clippy.toml in this crate
+# funnels it through &'static str gateways (ADR 0003).
+oracle-rs = "=0.1.7"
+{%- endif %}
 {%- if 'sqlserver' in datastores %}
 # tiberius takes SQL from any string: clippy.toml in this crate funnels it through &'static str gateways (ADR 0003).
 tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls"] }
 tokio = { version = "1", features = ["net", "sync"] }
 tokio-util = { version = "0.7", features = ["compat"] }
+{%- endif %}
+{%- if 'sqlserver' in datastores or 'oracle' in datastores %}
 url = "2"
 percent-encoding = "2"
 {%- endif %}

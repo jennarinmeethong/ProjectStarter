@@ -1,0 +1,73 @@
+using System.Text;
+using DotNet.Testcontainers.Builders;
+using DotNet.Testcontainers.Containers;
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Starts Oracle Database Free once per test class and applies migrations/oracle as the app user.</summary>
+public sealed class OracleFixture : IAsyncLifetime
+{
+    private readonly IContainer container = new ContainerBuilder("gvenzl/oracle-free:23-slim-faststart")
+        .WithEnvironment("ORACLE_PASSWORD", "sys-test-only")
+        .WithEnvironment("APP_USER", "app")
+        .WithEnvironment("APP_USER_PASSWORD", "app-test-only")
+        .WithPortBinding(1521, true)
+        .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("DATABASE IS READY TO USE!"))
+        .Build();
+
+    private OracleArtifactStore? store;
+
+    public OracleArtifactStore Store => store ?? throw new InvalidOperationException("Fixture not initialised.");
+
+    public async ValueTask InitializeAsync()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await container.StartAsync(cancellationToken);
+
+        await ApplyMigrationsAsync(cancellationToken);
+        store = OracleArtifactStore.Create($"oracle://app:app-test-only@{container.Hostname}:{container.GetMappedPublicPort(1521)}/FREEPDB1");
+    }
+
+    /// <summary>Same steps as the compose migrate job: sqlplus applies migrations/oracle in file-name order.</summary>
+    private async Task ApplyMigrationsAsync(CancellationToken cancellationToken)
+    {
+        var migrations = Directory.GetFiles(Path.Combine(RepoPaths.Migrations, "oracle"), "*.sql");
+        Array.Sort(migrations, StringComparer.Ordinal);
+        foreach (var migration in migrations)
+        {
+            await RunSqlplusAsync(await File.ReadAllTextAsync(migration, cancellationToken), cancellationToken);
+        }
+    }
+
+    private async Task RunSqlplusAsync(string script, CancellationToken cancellationToken)
+    {
+        await container.CopyAsync(Encoding.UTF8.GetBytes(script), "/tmp/migration.sql", ct: cancellationToken);
+        var result = await container.ExecAsync(
+            ["bash", "-c", "{ echo 'WHENEVER SQLERROR EXIT FAILURE'; cat /tmp/migration.sql; echo EXIT; } | sqlplus -s -L app/app-test-only@//localhost:1521/FREEPDB1"],
+            cancellationToken);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException("Migration failed: " + result.Stdout + result.Stderr);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (store is not null)
+        {
+            await store.DisposeAsync();
+        }
+
+        await container.DisposeAsync();
+    }
+}
+
+/// <summary>Integration test: needs Docker. Run with the Category=Integration filter (excluded from verify).</summary>
+[Trait("Category", "Integration")]
+public sealed class OracleArtifactStoreTests(OracleFixture fixture) : ArtifactStoreContract, IClassFixture<OracleFixture>
+{
+    protected override StoreUnderTest Subject =>
+        new(fixture.Store, key => fixture.Store.ReadAsync(key, TestContext.Current.CancellationToken));
+}

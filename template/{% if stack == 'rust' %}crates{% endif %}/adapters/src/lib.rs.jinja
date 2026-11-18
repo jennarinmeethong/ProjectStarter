@@ -21,6 +21,9 @@ pub mod mongo;
 {%- if mysql_engine %}
 pub mod mysql;
 {%- endif %}
+{%- if 'oracle' in datastores %}
+pub mod oracle;
+{%- endif %}
 {%- if 'postgres' in datastores %}
 pub mod postgres;
 {%- endif %}

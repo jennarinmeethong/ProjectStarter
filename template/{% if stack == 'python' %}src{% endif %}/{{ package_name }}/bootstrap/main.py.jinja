@@ -26,6 +26,9 @@ from {{ package_name }}.adapters.mongo_artifact_store import MongoArtifactStore
 {%- if mysql_engine %}
 from {{ package_name }}.adapters.mysql_artifact_store import MySqlArtifactStore
 {%- endif %}
+{%- if 'oracle' in datastores %}
+from {{ package_name }}.adapters.oracle_artifact_store import OracleArtifactStore
+{%- endif %}
 {%- if 'postgres' in datastores %}
 from {{ package_name }}.adapters.postgres_artifact_store import PostgresArtifactStore
 {%- endif %}
@@ -105,6 +108,16 @@ def open_store() -> Generator[ArtifactStore, None, None]:
             yield mongo
         finally:
             mongo.close()
+        return
+{%- endif %}
+{%- if 'oracle' in datastores %}
+    oracle_url = os.environ.get("ORACLE_URL")
+    if oracle_url:
+        oracle = OracleArtifactStore.from_url(oracle_url)
+        try:
+            yield oracle
+        finally:
+            oracle.close()
         return
 {%- endif %}
 {%- if 'sqlserver' in datastores %}

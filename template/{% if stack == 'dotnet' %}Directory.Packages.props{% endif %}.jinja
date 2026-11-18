@@ -18,12 +18,17 @@
 {%- if 's3' in datastores %}
     <PackageVersion Include="AWSSDK.S3" Version="4.0.104.12" />
 {%- endif %}
-{%- if 'dynamodb' in datastores or 'cosmosdb' in datastores or 's3' in datastores %}
+{%- if 'dynamodb' in datastores or 'cosmosdb' in datastores or 's3' in datastores or 'oracle' in datastores %}
     <PackageVersion Include="Testcontainers" Version="4.16.0" />
 {%- endif %}
 {%- if 'mongodb' in datastores %}
     <PackageVersion Include="MongoDB.Driver" Version="3.13.0" />
     <PackageVersion Include="Testcontainers.MongoDb" Version="4.16.0" />
+{%- endif %}
+{%- if 'oracle' in datastores %}
+    <PackageVersion Include="Oracle.ManagedDataAccess.Core" Version="23.26.400" />
+    <!-- ODP.NET still pulls System.Security.Cryptography.Pkcs 8.0.1 (GHSA-846f-f764-76mx); pin the patched one. -->
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.15" />
 {%- endif %}
 {%- if 'sqlserver' in datastores %}
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.2" />

@@ -40,6 +40,9 @@ forbidden_modules =
 {%- if mysql_engine %}
     pymysql
 {%- endif %}
+{%- if 'oracle' in datastores %}
+    oracledb
+{%- endif %}
 {%- if 'postgres' in datastores %}
     psycopg
 {%- endif %}
