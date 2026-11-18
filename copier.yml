@@ -153,6 +153,7 @@ cmd:
     fast: npm run verify:fast
     verify: npm run verify
     audit: node ci/npm-audit.mjs
+    mutation: npm run mutation
     {%- if datastores %}
     test_integration: npm run test:integration
     {%- endif %}
@@ -174,6 +175,7 @@ cmd:
     fast: uv run pyright && uv run ruff check . && uv run lint-imports
     verify: uv run pyright && uv run ruff check . && uv run ruff format --check . && uv run lint-imports && uv run pytest
     audit: uv audit --locked --preview-features audit-command
+    mutation: uv run mutmut run && uv run mutmut export-cicd-stats && uv run python ci/mutation-gate.py
     {%- if datastores %}
     test_integration: uv run pytest -m integration
     {%- endif %}
@@ -191,6 +193,7 @@ cmd:
     fast: dotnet build
     verify: dotnet build && dotnet format --verify-no-changes --no-restore && dotnet test --no-build{% if datastores %} --filter-not-trait "Category=Integration"{% endif %}{% if http_api %} --filter-not-trait "Category=E2E"{% endif %}
     audit: dotnet restore --force-evaluate
+    mutation: dotnet tool restore && dotnet stryker
     {%- if datastores %}
     test_integration: dotnet test --filter-trait "Category=Integration"
     {%- endif %}
@@ -208,6 +211,7 @@ cmd:
     fast: go vet ./... && go tool golangci-lint run
     verify: go vet ./... && go tool golangci-lint run && go test ./...
     audit: go tool govulncheck ./...
+    mutation: go run github.com/go-gremlins/gremlins/cmd/gremlins@v0.5.1 unleash ./internal/domain
     {%- if datastores %}
     test_integration: go test -tags integration ./...
     {%- endif %}
@@ -225,6 +229,7 @@ cmd:
     fast: cargo clippy --workspace --all-targets -- -D warnings && bash ci/check-layers.sh
     verify: cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && bash ci/check-layers.sh && cargo test --workspace
     audit: cargo deny check advisories
+    mutation: cargo mutants -p domain
     {%- if datastores %}
     test_integration: cargo test -p adapters --features integration
     {%- endif %}
@@ -243,7 +248,7 @@ stk:
   default: |
     {%- if stack == 'typescript' %}
     language: TypeScript
-    guardrail_files: [tsconfig.json, eslint.config.mjs, .dependency-cruiser.cjs, .audit-exceptions.json, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api or frontend != 'none' %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'oracle' in datastores %}, migrations/oracle/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff{% endif %}{% endif %}]
+    guardrail_files: [tsconfig.json, eslint.config.mjs, stryker.config.json, .dependency-cruiser.cjs, .audit-exceptions.json, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api or frontend != 'none' %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'oracle' in datastores %}, migrations/oracle/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff{% endif %}{% endif %}]
     escapes_display: "`eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `as any`, `as unknown as`, `.skip`/`.only`"
     ratchet_patterns: ['eslint-disable', '@ts-ignore', '@ts-expect-error', 'as any\b', 'as unknown as', 'NOSONAR']
     src_globs: ['*.ts', '*.tsx']
@@ -253,7 +258,7 @@ stk:
     layers: {domain: src/domain, application: src/application, adapters: src/adapters, bootstrap: src/bootstrap}
     {%- elif stack == 'python' %}
     language: Python
-    guardrail_files: [pyrightconfig.json, ruff.toml, .importlinter, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'oracle' in datastores %}, migrations/oracle/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff{% endif %}{% endif %}]
+    guardrail_files: [pyrightconfig.json, ruff.toml, ci/mutation-gate.py, .importlinter, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'oracle' in datastores %}, migrations/oracle/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff{% endif %}{% endif %}]
     escapes_display: "`# type: ignore`, `# pyright: ignore`, `# noqa`, `cast(Any, ...)`, `pytest.mark.skip`/`xfail`"
     ratchet_patterns: ['type:[[:space:]]*ignore', 'pyright:[[:space:]]*ignore', 'noqa', 'cast\(Any']
     src_globs: ['*.py']
@@ -263,7 +268,7 @@ stk:
     layers: {domain: "{{ src_root }}/domain", application: "{{ src_root }}/application", adapters: "{{ src_root }}/adapters", bootstrap: "{{ src_root }}/bootstrap"}
     {%- elif stack == 'dotnet' %}
     language: C#
-    guardrail_files: [Directory.Build.props, .editorconfig, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'oracle' in datastores %}, migrations/oracle/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff{% endif %}{% endif %}]
+    guardrail_files: [Directory.Build.props, .editorconfig, stryker-config.json, BannedSymbols.txt, CodeMetricsConfig.txt, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'oracle' in datastores %}, migrations/oracle/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff{% endif %}{% endif %}]
     escapes_display: "`#pragma warning disable`, `[SuppressMessage]`, `null!`/`default!`, `Skip =` on tests"
     ratchet_patterns: ['#pragma warning disable', 'SuppressMessage', 'null!', 'default!']
     src_globs: ['*.cs']
@@ -273,7 +278,7 @@ stk:
     layers: {domain: "src/{{ dotnet_name }}.Domain", application: "src/{{ dotnet_name }}.Application", adapters: "src/{{ dotnet_name }}.Adapters", bootstrap: "src/{{ dotnet_name }}.Bootstrap"}
     {%- elif stack == 'go' %}
     language: Go
-    guardrail_files: [.golangci.yml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'oracle' in datastores %}, migrations/oracle/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff{% endif %}{% endif %}]
+    guardrail_files: [.golangci.yml, .gremlins.yaml, .gitleaks.toml{% if containerize %}, .hadolint.yaml{% if http_api %}, .zap/rules.tsv{% endif %}{% endif %}{% if sql_store %}, .sqlfluff{% if mysql_engine %}, migrations/mysql/.sqlfluff{% endif %}{% if 'oracle' in datastores %}, migrations/oracle/.sqlfluff{% endif %}{% if 'sqlserver' in datastores %}, migrations/sqlserver/.sqlfluff{% endif %}{% endif %}]
     escapes_display: "`//nolint`, `//lint:ignore`, `#nosec`, `unsafe`, `t.Skip`"
     ratchet_patterns: ['//[[:space:]]*nolint', '//lint:ignore', '#nosec', 'unsafe\.']
     src_globs: ['*.go']

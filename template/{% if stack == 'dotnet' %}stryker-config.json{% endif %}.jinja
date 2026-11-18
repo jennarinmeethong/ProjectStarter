@@ -1,0 +1,9 @@
+{
+  "stryker-config": {
+    "solution": "{{ dotnet_name }}.slnx",
+    "project": "{{ dotnet_name }}.Domain.csproj",
+    "test-runner": "mtp",
+    "thresholds": { "high": 100, "low": 99, "break": 99 },
+    "reporters": ["cleartext", "progress"]
+  }
+}

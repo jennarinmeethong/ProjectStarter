@@ -9,3 +9,5 @@ playwright-report-ui/
 next-env.d.ts
 .angular/
 .expo/
+.stryker-tmp/
+reports/mutation/

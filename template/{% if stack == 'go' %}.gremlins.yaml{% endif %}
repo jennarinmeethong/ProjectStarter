@@ -1,0 +1,6 @@
+# Mutation testing of the domain layer: go run github.com/go-gremlins/gremlins/cmd/gremlins@v0.5.1 unleash ./internal/domain
+# 99 means "no surviving mutant" until the domain has more than 100 mutants (gremlins fails at exactly 100 even when
+# every mutant is killed). Raising it is fine; lowering it needs an owner.
+unleash:
+  threshold:
+    efficacy: 99

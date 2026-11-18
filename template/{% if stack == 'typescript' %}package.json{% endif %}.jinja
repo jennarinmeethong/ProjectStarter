@@ -57,6 +57,7 @@
 {%- if http_api %}
     "test:e2e": "playwright test",
 {%- endif %}
+    "mutation": "stryker run",
     "verify:fast": "npm run typecheck && npm run lint && npm run arch",
     "verify": "npm run verify:fast && npm test"
   },
@@ -84,6 +85,8 @@
 {%- if http_api or frontend != 'none' %}
     "@playwright/test": "^1.64.0",
 {%- endif %}
+    "@stryker-mutator/core": "^10.1.1",
+    "@stryker-mutator/vitest-runner": "^10.1.1",
 {%- if 'mongodb' in datastores %}
     "@testcontainers/mongodb": "^12.2.0",
 {%- endif %}
