@@ -2,8 +2,8 @@
 # Render every stack x agent-tool combination, then for each stack:
 #   1. the generated project passes its own verify command, and
 #   2. the guardrails reject a seeded violation (escape hatch, layer leak, skipped test).
-# Usage: tests/render-all.sh [stack...]      (default: typescript python dotnet)
-# Needs: uv, git, bash, Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go; rustup + cargo-deny for rust.
+# Usage: tests/render-all.sh [stack...]      (default: typescript python dotnet go rust)
+# Needs: uv, git, bash >= 4 (associative arrays; Git Bash and Linux are fine, macOS /bin/bash 3.2 is not), Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go; rustup + cargo-deny for rust.
 set -uo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -606,8 +606,10 @@ for stack in "${stacks[@]}"; do
       verify "go verify" "${verify_cmd[go]}"
       # The property test (rapid) must catch a bug that the example test and fixed inputs miss.
       sed -i 's/artifactKey: artifactKey}/artifactKey: strings.ToLower(artifactKey)}/' internal/domain/exportjob.go
-      expect_fail "rapid: property test catches a key-mangling bug" go test -count=1 ./internal/domain/
-      git checkout -q -- internal/domain/exportjob.go
+      # Must fail as a rapid property failure, not as a compile error from a stale sed target.
+      expect_fail "rapid: property test catches a key-mangling bug" \
+        bash -c 'out=$(go test -count=1 ./internal/domain/ 2>&1); ! grep -q "\[rapid\] failed" <<<"$out"'
+      git checkout -q -- internal/domain/exportjob.go && rm -rf internal/domain/testdata/rapid
       # Dependency audit: clean, then rejects a vulnerable function that our code actually calls.
       verify "govulncheck" "go tool govulncheck ./..."
       cp go.mod go.sum "$work/"

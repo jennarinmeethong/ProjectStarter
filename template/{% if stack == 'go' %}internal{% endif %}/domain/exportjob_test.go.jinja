@@ -40,7 +40,7 @@ func TestCompleteKeepsIDAndKey(t *testing.T) {
 }
 
 // FuzzCompleteKeepsIDAndKey runs the same property under Go's coverage-guided fuzzer for long searches:
-// `go test -fuzz=FuzzCompleteKeepsIDAndKey ./internal/domain`. Plain `go test` runs one seed only.
+// `go test -fuzz=FuzzCompleteKeepsIDAndKey ./internal/domain`. Plain `go test` does not exercise it.
 func FuzzCompleteKeepsIDAndKey(f *testing.F) {
 	f.Fuzz(rapid.MakeFuzz(completeKeepsIDAndKey))
 }
