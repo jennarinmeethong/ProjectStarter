@@ -187,7 +187,7 @@ cmd:
     typecheck: dotnet build --no-restore
     lint: dotnet format --verify-no-changes
     lint_file: dotnet format whitespace --folder --verify-no-changes --include
-    arch: dotnet test --filter-trait "Category=Architecture"
+    arch: dotnet test --project tests/{{ dotnet_name }}.Tests --filter-trait "Category=Architecture"
     test: dotnet test
     test_single: 'dotnet test --filter-method "*.ClassName.MethodName"'
     fast: dotnet build
@@ -195,10 +195,10 @@ cmd:
     audit: dotnet restore --force-evaluate
     mutation: cd tests/{{ dotnet_name }}.Domain.Tests && dotnet tool restore && dotnet stryker
     {%- if datastores %}
-    test_integration: dotnet test --filter-trait "Category=Integration"
+    test_integration: dotnet test --project tests/{{ dotnet_name }}.Tests --filter-trait "Category=Integration"
     {%- endif %}
     {%- if http_api %}
-    test_e2e: dotnet test --filter-trait "Category=E2E"
+    test_e2e: dotnet test --project tests/{{ dotnet_name }}.Tests --filter-trait "Category=E2E"
     {%- endif %}
     {%- elif stack == 'go' %}
     install: go mod tidy

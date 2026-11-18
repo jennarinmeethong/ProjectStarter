@@ -467,7 +467,7 @@ for stack in "${stacks[@]}"; do
   # Agent-tool combinations: only the file set changes.
   # The both-tools render also sets a guardrail owner; the others leave it empty (no CODEOWNERS).
   for tools in '["claude"]' '["codex"]' '["claude","codex"]'; do
-    d="$work/$stack-$(echo "$tools" | tr -dc 'a-z,')"
+    d="$work/$stack-$(echo "$tools" | tr -dc 'a-z,' | tr ',' '-')"  # no comma: MSBuild (Stryker.NET's project analysis) breaks on it
     # The both-tools render also wires in every datastore and the HTTP API; it gets the full verification below.
     if [ "$tools" = '["claude","codex"]' ]; then
       owner_args=(-d guardrail_owner=@demo-org/platform -d 'datastores=["postgres","mysql","redis"]' -d http_api=true)
@@ -527,7 +527,7 @@ for stack in "${stacks[@]}"; do
   default_mutation "$stack"
 
   # Full verification on the both-tools render.
-  d="$work/$stack-claude,codex"
+  d="$work/$stack-claude-codex"
   cd "$d" || continue
   git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base && git branch -q base
   case "$stack" in
@@ -652,22 +652,22 @@ for stack in "${stacks[@]}"; do
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks dotnet
-      mariadb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      sqlserver_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      oracle_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      mongodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      dynamodb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      cosmosdb_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      s3_checks dotnet "dotnet build" 'dotnet test --no-build --filter-trait "Category=Integration"'
-      verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --filter-trait "Category=Integration"'
+      mariadb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      sqlserver_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      oracle_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      mongodb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      dynamodb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      cosmosdb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      s3_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+      verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
-      http_checks dotnet 'dotnet test --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
+      http_checks dotnet 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
       seeded "CA2100: SQL built by concatenation" src/DemoApp.Adapters/PostgresArtifactStore.cs '\npublic static class Unsafe\n{\n    public static NpgsqlCommand Query(NpgsqlConnection connection, string jobId) =>\n        new() { Connection = connection, CommandText = "SELECT body FROM export_artifacts WHERE job_id = \x27" + jobId + "\x27" };\n}\n' dotnet build
       # Design rules (ADR 0002), one violation at a time.
       seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build
       seeded "BannedApi: Guid.NewGuid in Application" src/DemoApp.Application/CompleteExport.cs '\npublic static class Ids\n{\n    public static Guid Next() => Guid.NewGuid();\n}\n' dotnet build
       seeded "naming: async method without Async suffix" src/DemoApp.Adapters/InMemoryArtifactStore.cs '\npublic static class Waits\n{\n    public static async Task Pause() => await Task.CompletedTask.ConfigureAwait(false);\n}\n' dotnet build
-      seeded "NetArchTest: unsealed concrete class" src/DemoApp.Application/CompleteExport.cs '\npublic class Helper\n{\n    public int Value { get; init; }\n}\n' dotnet test --filter-trait "Category=Architecture"
+      seeded "NetArchTest: unsealed concrete class" src/DemoApp.Application/CompleteExport.cs '\npublic class Helper\n{\n    public int Value { get; init; }\n}\n' dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture"
       printf '\npublic static class Leak\n{\n#pragma warning disable CA1823\n    public static string Value = null!;\n}\n' >> src/DemoApp.Domain/ExportJob.cs
       expect_fail "build: TreatWarningsAsErrors" dotnet build
       ;;

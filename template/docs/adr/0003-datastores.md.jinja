@@ -44,7 +44,7 @@ Migration ที่ถูกแก้หลัง merge ทำให้ schema �
 {%- else %}
 | driver อยู่ใน adapters | project references: มีแค่ `Adapters` ที่อ้าง `Npgsql`/`StackExchange.Redis` (compiler บังคับ) |
 | SQL ใช้ parameter | `CA2100` เป็น error |
-| contract test | `tests/{{ dotnet_name }}.Tests/ArtifactStoreContract.cs`; integration: `dotnet test --filter-trait "Category=Integration"` |
+| contract test | `tests/{{ dotnet_name }}.Tests/ArtifactStoreContract.cs`; integration: `dotnet test --project tests/{{ dotnet_name }}.Tests --filter-trait "Category=Integration"` |
 {%- endif %}
 | migration append-only | `ci/guardrail-ratchet.sh` (fail เมื่อไฟล์ใน `migrations/` ถูกแก้/ย้าย/ลบ) และ `migrations/` เป็น tier 3 ([risk-tiers](../risk-tiers.md)) |
 | SQL style และคำสงวน | sqlfluff (`.sqlfluff` dialect postgres{% if mysql_engine %}; `migrations/mysql/.sqlfluff` dialect mysql{% endif %}{% if 'sqlserver' in datastores %}; `migrations/sqlserver/.sqlfluff` dialect tsql{% endif %}{% if 'oracle' in datastores %}; `migrations/oracle/.sqlfluff` dialect oracle{% endif %}) — `uvx sqlfluff==4.5.0 lint migrations` |
