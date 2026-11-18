@@ -1,0 +1,94 @@
+//! `ArtifactStore` on Azure Cosmos DB (`NoSQL` API).
+//!
+//! Items are point reads/writes by id; queries, when added, take values as `@parameters` (ADR 0003).
+
+use application::{ArtifactStore, PortError};
+use azure_core::credentials::Secret;
+use azure_data_cosmos::clients::ContainerClient;
+use azure_data_cosmos::models::ContainerProperties;
+use azure_data_cosmos::{AccountEndpoint, AccountReference, CosmosClient, RoutingStrategy};
+use serde::{Deserialize, Serialize};
+
+const CONTAINER: &str = "export_artifacts";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Item {
+    id: String,
+    job_id: String,
+    body: String,
+}
+
+/// Connection settings, read by bootstrap.
+#[derive(Debug, Clone)]
+pub struct CosmosSettings {
+    /// Account endpoint; plain `http://` is accepted only for emulator hosts.
+    pub endpoint: String,
+    /// Account key.
+    pub key: String,
+    /// Database name.
+    pub database: String,
+    /// Azure region to route to first (the SDK orders the account's regions by proximity to it).
+    pub region: String,
+    /// Local only: real accounts get the database and container from infrastructure as code.
+    pub create_if_missing: bool,
+}
+
+/// Keeps artifacts in one container partitioned by `/id`.
+#[derive(Clone)]
+pub struct CosmosArtifactStore {
+    items: ContainerClient,
+}
+
+impl CosmosArtifactStore {
+    /// Connects with an account key.
+    pub async fn connect(settings: &CosmosSettings) -> Result<Self, PortError> {
+        let endpoint: AccountEndpoint = settings.endpoint.parse()?;
+        let account = AccountReference::with_authentication_key(endpoint, Secret::from(settings.key.clone()));
+        let strategy = RoutingStrategy::ProximityTo(settings.region.clone().into());
+        let client = CosmosClient::builder().build(account, strategy).await?;
+        if settings.create_if_missing {
+            ensure_container(&client, &settings.database).await?;
+        }
+        let items = client.database_client(&settings.database).container_client(CONTAINER, None).await?;
+        Ok(Self { items })
+    }
+
+    /// Returns the content stored under `key`, if any.
+    pub async fn read(&self, key: &str) -> Result<Option<String>, PortError> {
+        let id = item_id(key);
+        match self.items.read_item(id.clone(), &id, None).await {
+            Ok(response) => Ok(Some(response.into_model::<Item>()?.body)),
+            Err(error) if error.status().is_not_found() => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+impl ArtifactStore for CosmosArtifactStore {
+    async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
+        let key = format!("exports/{job_id}.csv");
+        let item = Item { id: item_id(&key), job_id: job_id.to_owned(), body: content.to_owned() };
+        self.items.upsert_item(item.id.clone(), &item.id, &item, None).await?;
+        Ok(key)
+    }
+}
+
+/// Cosmos item ids cannot contain "/", so the artifact key maps to an id with "|" instead.
+fn item_id(key: &str) -> String {
+    key.replace('/', "|")
+}
+
+async fn ensure_container(client: &CosmosClient, database: &str) -> Result<(), PortError> {
+    if let Err(error) = client.create_database(database, None).await
+        && !error.status().is_conflict()
+    {
+        return Err(error.into());
+    }
+    let properties = ContainerProperties::new(CONTAINER, "/id".into());
+    if let Err(error) = client.database_client(database).create_container(properties, None).await
+        && !error.status().is_conflict()
+    {
+        return Err(error.into());
+    }
+    Ok(())
+}

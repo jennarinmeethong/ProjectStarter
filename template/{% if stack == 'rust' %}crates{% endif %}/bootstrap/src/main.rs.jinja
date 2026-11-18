@@ -4,7 +4,8 @@
 use std::io::Write as _;
 use std::process::ExitCode;
 
-{% if 'dynamodb' in datastores %}use adapters::dynamo::DynamoArtifactStore;
+{% if 'cosmosdb' in datastores %}use adapters::cosmos::{CosmosArtifactStore, CosmosSettings};
+{% endif %}{% if 'dynamodb' in datastores %}use adapters::dynamo::DynamoArtifactStore;
 {% endif %}{% if http_api %}use adapters::http::router;
 {% endif %}use adapters::in_memory::InMemoryArtifactStore;
 {%- if 'mongodb' in datastores %}
@@ -39,6 +40,9 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// every adapter explicit here.
 #[derive(Clone)]
 enum AnyStore {
+{%- if 'cosmosdb' in datastores %}
+    Cosmos(CosmosArtifactStore),
+{%- endif %}
 {%- if 'dynamodb' in datastores %}
     Dynamo(DynamoArtifactStore),
 {%- endif %}
@@ -63,6 +67,9 @@ enum AnyStore {
 impl ArtifactStore for AnyStore {
     async fn save(&self, job_id: &str, content: &str) -> Result<String, PortError> {
         match self {
+{%- if 'cosmosdb' in datastores %}
+            Self::Cosmos(store) => store.save(job_id, content).await,
+{%- endif %}
 {%- if 'dynamodb' in datastores %}
             Self::Dynamo(store) => store.save(job_id, content).await,
 {%- endif %}
@@ -96,6 +103,18 @@ async fn open_store() -> Result<AnyStore, BoxError> {
 {%- if mysql_engine %}
     if let Ok(url) = std::env::var("MYSQL_URL") {
         return Ok(AnyStore::MySql(MySqlArtifactStore::connect(&url).await?));
+    }
+{%- endif %}
+{%- if 'cosmosdb' in datastores %}
+    if let Ok(endpoint) = std::env::var("COSMOS_ENDPOINT") {
+        let settings = CosmosSettings {
+            endpoint,
+            key: std::env::var("COSMOS_KEY").unwrap_or_default(),
+            database: std::env::var("COSMOS_DATABASE").unwrap_or_else(|_| "app".to_owned()),
+            region: std::env::var("COSMOS_REGION").unwrap_or_else(|_| "eastus".to_owned()),
+            create_if_missing: std::env::var("COSMOS_CREATE_IF_MISSING").is_ok_and(|value| value == "true"),
+        };
+        return Ok(AnyStore::Cosmos(CosmosArtifactStore::connect(&settings).await?));
     }
 {%- endif %}
 {%- if 'dynamodb' in datastores %}

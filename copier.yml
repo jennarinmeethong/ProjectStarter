@@ -71,6 +71,7 @@ datastores:
     SQL Server: sqlserver
     MongoDB: mongodb
     DynamoDB: dynamodb
+    Cosmos DB: cosmosdb
     Redis: redis
   default: []
   validator: >-

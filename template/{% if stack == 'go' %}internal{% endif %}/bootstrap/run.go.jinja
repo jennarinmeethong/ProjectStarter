@@ -18,7 +18,10 @@ import (
 {%- endif %}
 
 {% if http_api %}	"{{ go_module }}/internal/adapters/httpapi"
-{% endif %}{%- if 'dynamodb' in datastores %}
+{% endif %}{%- if 'cosmosdb' in datastores %}
+	"{{ go_module }}/internal/adapters/cosmosstore"
+{%- endif %}
+{%- if 'dynamodb' in datastores %}
 	"{{ go_module }}/internal/adapters/dynamostore"
 {%- endif %}
 	"{{ go_module }}/internal/adapters/inmemory"
@@ -98,6 +101,15 @@ func openStore(ctx context.Context) (application.ArtifactStore, func(), error) {
 		return store, func() { _ = store.Close() }, nil
 	}
 {%- endif %}
+{%- if 'cosmosdb' in datastores %}
+	if endpoint := os.Getenv("COSMOS_ENDPOINT"); endpoint != "" {
+		store, err := openCosmos(ctx, endpoint)
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, func() {}, nil
+	}
+{%- endif %}
 {%- if 'dynamodb' in datastores %}
 	if table := os.Getenv("DYNAMODB_TABLE"); table != "" {
 		store, err := dynamostore.Open(ctx, table, os.Getenv("DYNAMODB_ENDPOINT"))
@@ -170,5 +182,26 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+{%- endif %}
+{%- if 'cosmosdb' in datastores %}
+
+// openCosmos reads the Cosmos DB settings. COSMOS_CREATE_IF_MISSING is for local use only.
+func openCosmos(ctx context.Context, endpoint string) (*cosmosstore.Store, error) {
+	database := os.Getenv("COSMOS_DATABASE")
+	if database == "" {
+		database = "app"
+	}
+	key := os.Getenv("COSMOS_KEY")
+	if os.Getenv("COSMOS_CREATE_IF_MISSING") == "true" {
+		if err := cosmosstore.EnsureContainer(ctx, endpoint, key, database); err != nil {
+			return nil, fmt.Errorf("ensure cosmos container: %w", err)
+		}
+	}
+	store, err := cosmosstore.Open(endpoint, key, database)
+	if err != nil {
+		return nil, fmt.Errorf("open cosmos db: %w", err)
+	}
+	return store, nil
 }
 {%- endif %}

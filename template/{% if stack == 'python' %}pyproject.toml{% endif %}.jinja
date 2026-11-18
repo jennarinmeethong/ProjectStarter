@@ -5,6 +5,7 @@
 {%- if 'sqlserver' in datastores %}{% set _ = deps.append('"mssql-python>=1.10"') %}{% endif -%}
 {%- if 'mongodb' in datastores %}{% set _ = deps.append('"pymongo>=4.10"') %}{% endif -%}
 {%- if 'dynamodb' in datastores %}{% set _ = deps.append('"boto3>=1.40"') %}{% endif -%}
+{%- if 'cosmosdb' in datastores %}{% set _ = deps.append('"azure-cosmos>=4.9"') %}{% endif -%}
 {%- if 'redis' in datastores %}{% set _ = deps.append('"redis>=6.0"') %}{% endif -%}
 {%- set markers = [] -%}
 {%- if datastores %}{% set _ = markers.append('integration') %}{% endif -%}

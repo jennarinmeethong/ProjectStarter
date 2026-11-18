@@ -26,6 +26,18 @@ if (owned is null && !string.IsNullOrEmpty(mysqlUrl))
     (store, owned) = (mysql, mysql);
 }
 {%- endif %}
+{%- if 'cosmosdb' in datastores %}
+var cosmosEndpoint = Environment.GetEnvironmentVariable("COSMOS_ENDPOINT");
+if (owned is null && !string.IsNullOrEmpty(cosmosEndpoint))
+{
+    var cosmos = await CosmosArtifactStore.ConnectAsync(
+        cosmosEndpoint,
+        Environment.GetEnvironmentVariable("COSMOS_KEY") ?? string.Empty,
+        Environment.GetEnvironmentVariable("COSMOS_DATABASE") ?? "app",
+        Environment.GetEnvironmentVariable("COSMOS_CREATE_IF_MISSING") == "true");
+    (store, owned) = (cosmos, cosmos);
+}
+{%- endif %}
 {%- if 'dynamodb' in datastores %}
 var dynamoTable = Environment.GetEnvironmentVariable("DYNAMODB_TABLE");
 if (owned is null && !string.IsNullOrEmpty(dynamoTable))

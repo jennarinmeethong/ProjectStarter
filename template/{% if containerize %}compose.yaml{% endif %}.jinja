@@ -39,6 +39,16 @@ services:
       AWS_ACCESS_KEY_ID: local
       AWS_SECRET_ACCESS_KEY: local
 {%- endif %}
+{%- if 'cosmosdb' in datastores %}
+      COSMOS_ENDPOINT: http://cosmosdb:8081
+      # The emulator's published well-known key, not a secret. Real accounts take the key from a secret store.
+      COSMOS_KEY: C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==
+      COSMOS_DATABASE: app
+      # Local only: real accounts get their database and container from infrastructure as code (ADR 0003).
+      COSMOS_CREATE_IF_MISSING: "true"
+      # Lets the Rust SDK accept plain HTTP for this host (emulator only).
+      AZURE_COSMOS_EMULATOR_HOST: cosmosdb
+{%- endif %}
 {%- if 'redis' in datastores %}
       REDIS_URL: redis://redis:6379/0
 {%- endif %}
@@ -62,6 +72,10 @@ services:
 {%- if 'dynamodb' in datastores %}
       dynamodb-migrate:
         condition: service_completed_successfully
+{%- endif %}
+{%- if 'cosmosdb' in datastores %}
+      cosmosdb:
+        condition: service_healthy
 {%- endif %}
 {%- if 'redis' in datastores %}
       redis:
@@ -184,6 +198,17 @@ services:
         ddb describe-table --table-name "$$(basename "$$f" .json)" >/dev/null 2>&1 ||
         ddb create-table --cli-input-json "file://$$f" >/dev/null || exit 1;
         done
+{%- endif %}
+{%- if 'cosmosdb' in datastores %}
+
+  cosmosdb:
+    # Azure Cosmos DB emulator (vNext, NoSQL API): for development and testing only (ADR 0003).
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview
+    command: ["--protocol", "http"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/ready"]
+      interval: 2s
+      retries: 60
 {%- endif %}
 {%- if 'redis' in datastores %}
 

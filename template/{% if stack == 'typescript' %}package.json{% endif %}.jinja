@@ -5,6 +5,7 @@
 {%- if 'sqlserver' in datastores %}{% set _ = deps.append('"mssql": "^12.7.0"') %}{% endif -%}
 {%- if 'mongodb' in datastores %}{% set _ = deps.append('"mongodb": "^7.0.0"') %}{% endif -%}
 {%- if 'dynamodb' in datastores %}{% set _ = deps.append('"@aws-sdk/client-dynamodb": "^3.1000.0"') %}{% endif -%}
+{%- if 'cosmosdb' in datastores %}{% set _ = deps.append('"@azure/cosmos": "^4.9.0"') %}{% endif -%}
 {%- if frontend == 'nextjs' %}{% set _ = deps.append('"next": "^16.2.0"') %}{% endif -%}
 {%- if frontend == 'react-native' %}{% set _ = deps.append('"@expo/metro-runtime": "^58.0.0"') %}{% set _ = deps.append('"expo": "^58.0.0"') %}{% endif -%}
 {%- if frontend in ['react', 'nextjs', 'react-native'] %}{% set _ = deps.append('"react": "^19.3.0"') %}{% set _ = deps.append('"react-dom": "^19.3.0"') %}{% endif -%}
@@ -141,7 +142,7 @@
 {%- if frontend != 'none' %}
     "jsdom": "^27.0.0",
 {%- endif %}
-{%- if 'dynamodb' in datastores %}
+{%- if 'dynamodb' in datastores or 'cosmosdb' in datastores %}
     "testcontainers": "^12.2.0",
 {%- endif %}
     "tsx": "^4.23.15",

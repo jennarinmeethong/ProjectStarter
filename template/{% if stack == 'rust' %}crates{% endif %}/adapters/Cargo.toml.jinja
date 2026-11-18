@@ -34,6 +34,11 @@ percent-encoding = "2"
 {%- if 'redis' in datastores %}
 redis = { version = "1.8", default-features = false, features = ["tokio-comp"] }
 {%- endif %}
+{%- if 'cosmosdb' in datastores %}
+# The Rust Cosmos DB SDK is still in beta: pinned exactly, because betas change the API.
+azure_core = "1.1"
+azure_data_cosmos = { version = "=1.1.0-beta.2", features = ["key_auth", "control_plane"] }
+{%- endif %}
 {%- if 'dynamodb' in datastores %}
 # Without default features: the defaults also pull the legacy hyper 0.14/rustls 0.21 stack, which has open
 # advisories (cargo deny). default-https-client is hyper 1 + rustls 0.23.
@@ -46,7 +51,7 @@ mongodb = "3"
 {%- if http_api %}
 axum = "0.8"
 {%- endif %}
-{%- if http_api or 'mongodb' in datastores %}
+{%- if http_api or 'mongodb' in datastores or 'cosmosdb' in datastores %}
 serde = { version = "1", features = ["derive"] }
 {%- endif %}
 {%- if http_api %}
@@ -64,4 +69,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 {%- if 'sqlserver' in datastores %}{% set _ = modules.append('"mssql_server"') %}{% endif %}
 {%- if 'redis' in datastores %}{% set _ = modules.append('"redis"') %}{% endif %}
 testcontainers-modules = { version = "0.15", features = [{{ modules | join(', ') }}] }
+{%- endif %}
+{%- if 'cosmosdb' in datastores %}
+# HTTP readiness checks for images without a module (the Cosmos DB emulator).
+testcontainers = { version = "0.27", features = ["http_wait"] }
 {%- endif %}

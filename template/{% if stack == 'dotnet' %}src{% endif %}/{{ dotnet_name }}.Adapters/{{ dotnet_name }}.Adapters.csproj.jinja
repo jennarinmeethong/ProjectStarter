@@ -11,6 +11,10 @@
 {%- endif %}
 {%- if datastores %}
   <ItemGroup>
+{%- if 'cosmosdb' in datastores %}
+    <PackageReference Include="Microsoft.Azure.Cosmos" />
+    <PackageReference Include="Newtonsoft.Json" />
+{%- endif %}
 {%- if 'dynamodb' in datastores %}
     <PackageReference Include="AWSSDK.DynamoDBv2" />
 {%- endif %}

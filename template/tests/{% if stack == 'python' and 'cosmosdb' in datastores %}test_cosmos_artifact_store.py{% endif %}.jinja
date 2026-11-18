@@ -1,0 +1,40 @@
+"""Integration test: needs Docker.
+
+Run with `uv run pytest -m integration` (deselected by default).
+"""
+
+from collections.abc import Iterator
+
+import pytest
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.wait_strategies import HttpWaitStrategy
+from tests.artifact_store_contract import ArtifactStoreContract, StoreUnderTest
+
+from {{ package_name }}.adapters.cosmos_artifact_store import CosmosArtifactStore
+
+pytestmark = pytest.mark.integration
+
+# The emulator's published well-known key: not a secret.
+EMULATOR_KEY = (
+    "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=="
+)
+
+
+@pytest.fixture(scope="module")
+def endpoint() -> Iterator[str]:
+    container = (
+        DockerContainer("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview")
+        .with_command("--protocol http")
+        .with_exposed_ports(8081, 8080)
+        .waiting_for(HttpWaitStrategy(8080, "/ready"))
+    )
+    with container:
+        yield f"http://{container.get_container_host_ip()}:{container.get_exposed_port(8081)}"
+
+
+class TestCosmosArtifactStore(ArtifactStoreContract):
+    @pytest.fixture
+    def subject(self, endpoint: str) -> Iterator[StoreUnderTest]:
+        store = CosmosArtifactStore.connect(endpoint, EMULATOR_KEY, "app", create_if_missing=True)
+        yield StoreUnderTest(store=store, read=store.read)
+        store.close()

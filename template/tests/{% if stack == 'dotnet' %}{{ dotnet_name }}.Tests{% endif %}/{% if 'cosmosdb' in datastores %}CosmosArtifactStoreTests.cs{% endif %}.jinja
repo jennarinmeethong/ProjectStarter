@@ -1,0 +1,49 @@
+using DotNet.Testcontainers.Builders;
+using DotNet.Testcontainers.Containers;
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Starts the Cosmos DB emulator (vNext, plain HTTP) once per test class.</summary>
+public sealed class CosmosFixture : IAsyncLifetime
+{
+    // The emulator's published well-known key: not a secret.
+    private const string EmulatorKey = "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==";
+
+    private readonly IContainer container = new ContainerBuilder("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview")
+        .WithCommand("--protocol", "http")
+        .WithPortBinding(8081, true)
+        .WithPortBinding(8080, true)
+        .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(8080).ForPath("/ready")))
+        .Build();
+
+    private CosmosArtifactStore? store;
+
+    public CosmosArtifactStore Store => store ?? throw new InvalidOperationException("Fixture not initialised.");
+
+    public async ValueTask InitializeAsync()
+    {
+        await container.StartAsync(TestContext.Current.CancellationToken);
+        var endpoint = $"http://{container.Hostname}:{container.GetMappedPublicPort(8081)}";
+        store = await CosmosArtifactStore.ConnectAsync(endpoint, EmulatorKey, "app", createIfMissing: true);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (store is not null)
+        {
+            await store.DisposeAsync();
+        }
+
+        await container.DisposeAsync();
+    }
+}
+
+/// <summary>Integration test: needs Docker. Run with the Category=Integration filter (excluded from verify).</summary>
+[Trait("Category", "Integration")]
+public sealed class CosmosArtifactStoreTests(CosmosFixture fixture) : ArtifactStoreContract, IClassFixture<CosmosFixture>
+{
+    protected override StoreUnderTest Subject =>
+        new(fixture.Store, key => fixture.Store.ReadAsync(key, TestContext.Current.CancellationToken));
+}

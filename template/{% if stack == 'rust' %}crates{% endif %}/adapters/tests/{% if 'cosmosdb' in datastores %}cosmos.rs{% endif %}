@@ -1,0 +1,48 @@
+//! Integration test: needs Docker. Run with `cargo test -p adapters --features integration`.
+#![cfg(feature = "integration")]
+
+mod common;
+
+use std::future::Future;
+
+use adapters::cosmos::{CosmosArtifactStore, CosmosSettings};
+use application::PortError;
+use testcontainers_modules::testcontainers::core::wait::HttpWaitStrategy;
+use testcontainers_modules::testcontainers::core::{IntoContainerPort, WaitFor};
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+use testcontainers_modules::testcontainers::{GenericImage, ImageExt};
+
+/// The emulator's published well-known key: not a secret.
+const EMULATOR_KEY: &str =
+    "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==";
+
+impl common::ReadBack for CosmosArtifactStore {
+    fn read_back(&self, key: &str) -> impl Future<Output = Result<Option<String>, PortError>> + Send {
+        self.read(key)
+    }
+}
+
+#[tokio::test]
+async fn cosmos_store_satisfies_the_contract() -> Result<(), PortError> {
+    let ready = HttpWaitStrategy::new("/ready").with_port(8080.tcp()).with_expected_status_code(200_u16);
+    let container =
+        GenericImage::new("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator", "vnext-preview")
+            .with_exposed_port(8081.tcp())
+            .with_exposed_port(8080.tcp())
+            .with_wait_for(WaitFor::http(ready))
+            .with_cmd(["--protocol", "http"])
+            .start()
+            .await?;
+    let port = container.get_host_port_ipv4(8081).await?;
+    // The Rust SDK accepts plain HTTP only for emulator hosts such as 127.0.0.1.
+    let settings = CosmosSettings {
+        endpoint: format!("http://127.0.0.1:{port}"),
+        key: EMULATOR_KEY.to_owned(),
+        database: "app".to_owned(),
+        region: "westus".to_owned(),
+        create_if_missing: true,
+    };
+    let store = CosmosArtifactStore::connect(&settings).await?;
+
+    common::check_contract(&store).await
+}
