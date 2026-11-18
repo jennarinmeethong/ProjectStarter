@@ -1,0 +1,6 @@
+{
+  "TableName": "export_artifacts",
+  "AttributeDefinitions": [{ "AttributeName": "artifact_key", "AttributeType": "S" }],
+  "KeySchema": [{ "AttributeName": "artifact_key", "KeyType": "HASH" }],
+  "BillingMode": "PAY_PER_REQUEST"
+}

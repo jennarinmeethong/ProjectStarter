@@ -1,0 +1,41 @@
+// Integration test: needs Docker. Run with `npm run test:integration` (excluded from `npm test`).
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
+import { CreateTableCommand, type CreateTableCommandInput, DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
+import { afterAll, beforeAll } from "vitest";
+import { describeArtifactStoreContract } from "../../tests/contracts/artifact-store.ts";
+import { DynamoArtifactStore } from "./dynamo-artifact-store.ts";
+
+const TABLES = "infra/dynamodb";
+
+let container: StartedTestContainer;
+let store: DynamoArtifactStore;
+
+beforeAll(async () => {
+  // DynamoDB Local accepts any credentials.
+  process.env["AWS_REGION"] = "us-east-1";
+  process.env["AWS_ACCESS_KEY_ID"] = "local";
+  process.env["AWS_SECRET_ACCESS_KEY"] = "local";
+  container = await new GenericContainer("amazon/dynamodb-local:2.6.1")
+    .withCommand(["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"])
+    .withExposedPorts(8000)
+    .withWaitStrategy(Wait.forListeningPorts())
+    .start();
+  const endpoint = `http://${container.getHost()}:${String(container.getMappedPort(8000))}`;
+  // Same table definitions the compose migrate job applies.
+  const admin = new DynamoDBClient({ endpoint });
+  for (const name of (await readdir(TABLES)).filter((file) => file.endsWith(".json"))) {
+    const input = JSON.parse(await readFile(join(TABLES, name), "utf8")) as CreateTableCommandInput;
+    await admin.send(new CreateTableCommand(input));
+  }
+  admin.destroy();
+  store = DynamoArtifactStore.create({ table: "export_artifacts", endpoint });
+}, 180_000);
+
+afterAll(async () => {
+  await store.close();
+  await container.stop();
+});
+
+describeArtifactStoreContract("DynamoArtifactStore", () => ({ store, read: (key) => store.read(key) }));

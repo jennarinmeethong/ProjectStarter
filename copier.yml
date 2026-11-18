@@ -70,6 +70,7 @@ datastores:
     MariaDB: mariadb
     SQL Server: sqlserver
     MongoDB: mongodb
+    DynamoDB: dynamodb
     Redis: redis
   default: []
   validator: >-

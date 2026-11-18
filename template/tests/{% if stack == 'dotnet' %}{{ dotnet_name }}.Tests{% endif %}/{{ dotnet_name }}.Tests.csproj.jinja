@@ -10,6 +10,9 @@
 {%- endif %}
     <PackageReference Include="NetArchTest.Rules" />
     <PackageReference Include="xunit.v3" />
+{%- if 'dynamodb' in datastores %}
+    <PackageReference Include="Testcontainers" />
+{%- endif %}
 {%- if 'mongodb' in datastores %}
     <PackageReference Include="Testcontainers.MongoDb" />
 {%- endif %}

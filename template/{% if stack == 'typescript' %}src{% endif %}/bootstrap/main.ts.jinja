@@ -1,3 +1,6 @@
+{%- if 'dynamodb' in datastores %}
+import { DynamoArtifactStore } from "../adapters/dynamo-artifact-store.ts";
+{%- endif %}
 import { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";
 {%- if 'mongodb' in datastores %}
 import { MongoArtifactStore } from "../adapters/mongo-artifact-store.ts";
@@ -54,6 +57,13 @@ function openStore(): Promise<OpenStore> {
   const mongoUrl = process.env.MONGODB_URL;
   if (mongoUrl) {
     return MongoArtifactStore.connect(mongoUrl).then((store) => ({ store, close: () => store.close() }));
+  }
+{%- endif %}
+{%- if 'dynamodb' in datastores %}
+  const dynamoTable = process.env.DYNAMODB_TABLE;
+  if (dynamoTable) {
+    const store = DynamoArtifactStore.create({ table: dynamoTable, endpoint: process.env.DYNAMODB_ENDPOINT });
+    return Promise.resolve({ store, close: () => store.close() });
   }
 {%- endif %}
 {%- if 'redis' in datastores %}

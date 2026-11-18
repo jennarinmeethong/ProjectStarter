@@ -1,0 +1,69 @@
+using System.Net;
+using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2.Model;
+using DotNet.Testcontainers.Builders;
+using DotNet.Testcontainers.Containers;
+using Xunit;
+using {{ dotnet_name }}.Adapters;
+
+namespace {{ dotnet_name }}.Tests;
+
+/// <summary>Starts DynamoDB Local once per test class and creates the table from infra/dynamodb.</summary>
+public sealed class DynamoFixture : IAsyncLifetime
+{
+    private readonly IContainer container = new ContainerBuilder("amazon/dynamodb-local:2.6.1")
+        .WithCommand("-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory")
+        .WithPortBinding(8000, true)
+        // Any HTTP answer means DynamoDB Local is serving (GET / returns 400).
+        .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(8000).ForStatusCode(HttpStatusCode.BadRequest)))
+        .Build();
+
+    private DynamoArtifactStore? store;
+
+    public DynamoArtifactStore Store => store ?? throw new InvalidOperationException("Fixture not initialised.");
+
+    public async ValueTask InitializeAsync()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        // DynamoDB Local accepts any credentials.
+        Environment.SetEnvironmentVariable("AWS_REGION", "us-east-1");
+        Environment.SetEnvironmentVariable("AWS_ACCESS_KEY_ID", "local");
+        Environment.SetEnvironmentVariable("AWS_SECRET_ACCESS_KEY", "local");
+        await container.StartAsync(cancellationToken);
+        var endpoint = $"http://{container.Hostname}:{container.GetMappedPublicPort(8000)}";
+
+        // Mirrors infra/dynamodb/export_artifacts.json, which the compose migrate job applies.
+        using (var admin = new AmazonDynamoDBClient(new AmazonDynamoDBConfig { ServiceURL = endpoint }))
+        {
+            await admin.CreateTableAsync(
+                new CreateTableRequest
+                {
+                    TableName = "export_artifacts",
+                    AttributeDefinitions = [new AttributeDefinition("artifact_key", ScalarAttributeType.S)],
+                    KeySchema = [new KeySchemaElement("artifact_key", KeyType.HASH)],
+                    BillingMode = BillingMode.PAY_PER_REQUEST,
+                },
+                cancellationToken);
+        }
+
+        store = DynamoArtifactStore.Create("export_artifacts", endpoint);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (store is not null)
+        {
+            await store.DisposeAsync();
+        }
+
+        await container.DisposeAsync();
+    }
+}
+
+/// <summary>Integration test: needs Docker. Run with the Category=Integration filter (excluded from verify).</summary>
+[Trait("Category", "Integration")]
+public sealed class DynamoArtifactStoreTests(DynamoFixture fixture) : ArtifactStoreContract, IClassFixture<DynamoFixture>
+{
+    protected override StoreUnderTest Subject =>
+        new(fixture.Store, key => fixture.Store.ReadAsync(key, TestContext.Current.CancellationToken));
+}

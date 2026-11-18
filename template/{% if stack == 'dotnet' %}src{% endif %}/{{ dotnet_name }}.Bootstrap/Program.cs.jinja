@@ -26,6 +26,14 @@ if (owned is null && !string.IsNullOrEmpty(mysqlUrl))
     (store, owned) = (mysql, mysql);
 }
 {%- endif %}
+{%- if 'dynamodb' in datastores %}
+var dynamoTable = Environment.GetEnvironmentVariable("DYNAMODB_TABLE");
+if (owned is null && !string.IsNullOrEmpty(dynamoTable))
+{
+    var dynamo = DynamoArtifactStore.Create(dynamoTable, Environment.GetEnvironmentVariable("DYNAMODB_ENDPOINT"));
+    (store, owned) = (dynamo, dynamo);
+}
+{%- endif %}
 {%- if 'mongodb' in datastores %}
 var mongoUrl = Environment.GetEnvironmentVariable("MONGODB_URL");
 if (owned is null && !string.IsNullOrEmpty(mongoUrl))

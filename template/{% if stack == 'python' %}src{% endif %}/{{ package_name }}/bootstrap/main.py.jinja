@@ -10,6 +10,9 @@ import uvicorn
 {%- endif %}
 
 {% endif -%}
+{%- if 'dynamodb' in datastores -%}
+from {{ package_name }}.adapters.dynamo_artifact_store import DynamoArtifactStore
+{% endif -%}
 {%- if http_api -%}
 from {{ package_name }}.adapters.http.app import create_app
 {% endif -%}
@@ -61,6 +64,16 @@ def open_store() -> Generator[ArtifactStore, None, None]:
             yield mysql
         finally:
             mysql.close()
+        return
+{%- endif %}
+{%- if 'dynamodb' in datastores %}
+    dynamodb_table = os.environ.get("DYNAMODB_TABLE")
+    if dynamodb_table:
+        dynamo = DynamoArtifactStore.create(dynamodb_table, os.environ.get("DYNAMODB_ENDPOINT"))
+        try:
+            yield dynamo
+        finally:
+            dynamo.close()
         return
 {%- endif %}
 {%- if 'mongodb' in datastores %}

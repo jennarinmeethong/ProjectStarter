@@ -34,6 +34,12 @@ percent-encoding = "2"
 {%- if 'redis' in datastores %}
 redis = { version = "1.8", default-features = false, features = ["tokio-comp"] }
 {%- endif %}
+{%- if 'dynamodb' in datastores %}
+# Without default features: the defaults also pull the legacy hyper 0.14/rustls 0.21 stack, which has open
+# advisories (cargo deny). default-https-client is hyper 1 + rustls 0.23.
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client", "credentials-process", "sso"] }
+aws-sdk-dynamodb = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+{%- endif %}
 {%- if 'mongodb' in datastores %}
 mongodb = "3"
 {%- endif %}
@@ -53,6 +59,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 {%- set modules = [] %}
 {%- if mysql_engine %}{% set _ = modules.append('"' ~ mysql_engine ~ '"') %}{% endif %}
 {%- if 'postgres' in datastores %}{% set _ = modules.append('"postgres"') %}{% endif %}
+{%- if 'dynamodb' in datastores %}{% set _ = modules.append('"dynamodb"') %}{% endif %}
 {%- if 'mongodb' in datastores %}{% set _ = modules.append('"mongo"') %}{% endif %}
 {%- if 'sqlserver' in datastores %}{% set _ = modules.append('"mssql_server"') %}{% endif %}
 {%- if 'redis' in datastores %}{% set _ = modules.append('"redis"') %}{% endif %}

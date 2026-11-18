@@ -11,6 +11,9 @@
 {%- endif %}
 {%- if datastores %}
   <ItemGroup>
+{%- if 'dynamodb' in datastores %}
+    <PackageReference Include="AWSSDK.DynamoDBv2" />
+{%- endif %}
 {%- if 'mongodb' in datastores %}
     <PackageReference Include="MongoDB.Driver" />
 {%- endif %}
