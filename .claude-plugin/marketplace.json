@@ -8,7 +8,7 @@
     {
       "name": "project-starter",
       "source": "./",
-      "description": "Scaffold agent-ready projects (TypeScript, Python, C#/.NET) with enforced guardrails for Claude Code and Codex."
+      "description": "Scaffold agent-ready projects (TypeScript, Python, C#/.NET, Go, Rust) with enforced guardrails for Claude Code and Codex."
     }
   ]
 }

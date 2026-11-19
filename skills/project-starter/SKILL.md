@@ -1,6 +1,6 @@
 ---
 name: project-starter
-description: Scaffold a new agent-ready project from the ProjectStarter template (TypeScript, Python or C#/.NET; Claude Code and/or Codex) with AGENTS.md, strict type/lint/architecture guardrails, CI ratchet, optional CODEOWNERS, risk tiers and docs. Use when the user wants to start, create, bootstrap or scaffold a new project/repo, or add these guardrails to an empty folder.
+description: Scaffold a new agent-ready project from the ProjectStarter template (TypeScript, Python, C#/.NET, Go or Rust; Claude Code and/or Codex) with AGENTS.md, strict type/lint/architecture guardrails, CI ratchet, optional CODEOWNERS, risk tiers and docs. Use when the user wants to start, create, bootstrap or scaffold a new project/repo, or add these guardrails to an empty folder.
 ---
 
 # Project Starter
@@ -31,7 +31,7 @@ Use an **absolute** path or a git URL so `copier update` works later.
 | `guardrail_owner` | optional: `@user` or `@org/team` for `.github/CODEOWNERS` | empty = no CODEOWNERS |
 | `risk_paths` | tier-3 paths that always need owner review | `[auth/, payments/, migrations/, infra/]` |
 | `datastores` | any of `postgres`, `mysql` or `mariadb` (not both), `sqlserver` (Developer edition for dev/test), `oracle` (Oracle Database Free), `mongodb` (also Atlas via mongodb+srv), `dynamodb` (DynamoDB Local for dev/test), `cosmosdb` (Cosmos DB emulator for dev/test), `s3` (S3 API: AWS S3 or MinIO; S3Mock locally), `redis`: adapters behind the existing port, migrations, Testcontainers integration tests | `[]`; add only what the user asked for, e.g. `-d 'datastores=["postgres"]'` |
-| `http_api` | serve the use case over HTTP (Hono / FastAPI / ASP.NET Core) with Playwright API tests and, with `containerize`, an OWASP ZAP baseline scan | `false`; `true` when the user builds a web service or API |
+| `http_api` | serve the use case over HTTP (Hono / FastAPI / ASP.NET Core / Go net/http / axum) with Playwright API tests and, with `containerize`, an OWASP ZAP baseline scan | `false`; `true` when the user builds a web service or API |
 | `frontend` | `none`; TypeScript: `react`, `vue` (Vite), `nextjs`, `angular` or `react-native` (Expo; checks run on its web build); Python, .NET, Go, Rust: `ssr` (Jinja2, Razor Pages, `html/template`, askama): UI as a driving adapter, Playwright + axe browser tests (Node.js needed), strict CSP | `none` |
 | `containerize` | Dockerfile (multi-stage, non-root), `compose.yaml`, hadolint and a container CI job | `true`; pass `false` for libraries or when the user does not deploy containers |
 | destination | folder to create | `./<project_name>` |
