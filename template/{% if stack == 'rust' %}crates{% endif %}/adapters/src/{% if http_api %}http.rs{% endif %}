@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use domain::{Queued, start};
 use serde::{Deserialize, Serialize};
+use std::io::Write as _;
 
 const MAX_CONTENT_LENGTH: usize = 1_000_000;
 
@@ -66,13 +67,17 @@ where
     let Some(content) = decode_content(&body) else {
         return problem(StatusCode::BAD_REQUEST, r#"Body must be {"content": "<non-empty string>"}"#);
     };
-    match complete_export(&store, start(Queued::new(id)), &content).await {
+    match complete_export(&store, start(Queued::new(id.as_str())), &content).await {
         Ok(ready) => {
             let response =
                 CompleteResponse { id: ready.id().to_owned(), artifact_key: ready.artifact_key().to_owned() };
             json(StatusCode::CREATED, "application/json", &response)
         }
-        Err(_) => problem(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+        Err(error) => {
+            // The details go to the log, never to the response (ADR 0004).
+            let _ = writeln!(std::io::stderr(), "export {id} failed: {error}");
+            problem(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        }
     }
 }
 

@@ -384,7 +384,14 @@ ssr_checks() { # ssr_checks <stack> <install-cmd> <ui-file> <csp-sed-expression>
   local dir="$work/$1-ssr" image="project-starter-ssr-$1" out
   render "$1" '["claude"]' "$dir" -d frontend=ssr || { fail "render frontend=ssr"; return; }
   pushd "$dir" >/dev/null || return
-  git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base
+  git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base && git branch -q base
+  # The ratchet reads the Playwright specs too, although they are not in the stack's language.
+  sed -i '0,/^test(/s//test.skip(/' e2e-ui/app.spec.ts && git -c user.name=t -c user.email=t@t commit -qam skip
+  if out=$(bash ci/guardrail-ratchet.sh base 2>&1); then fail "ssr: ratchet: skipped Playwright spec (should have failed)"
+  elif grep -q "Skipped/focused Playwright specs" <<<"$out"; then pass "ssr: ratchet: skipped Playwright spec rejected"
+  else fail "ssr: ratchet: skipped Playwright spec failed for another reason"; printf '%s
+' "$out" | tail -n 15 | sed 's/^/      /'; fi
+  git reset -q --hard base
   # Only the two IGNOREs every scan has (10049 no-store, 10109 modern web app): the UI adds none.
   [ -f .zap/rules.tsv ] && grep -q '\.zap/rules\.tsv' AGENTS.md && [ "$(grep -c $'\tIGNORE\t' .zap/rules.tsv)" = 2 ] \
     && [ "$(wc -l < AGENTS.md)" -lt 60 ] && pass "ssr: ZAP rules protected, no new IGNORE, AGENTS.md short" \
@@ -420,15 +427,18 @@ ssr_checks() { # ssr_checks <stack> <install-cmd> <ui-file> <csp-sed-expression>
   popd >/dev/null || return
 }
 
-ssr_api_checks() { # ssr_api_checks <stack> <install-cmd> <e2e-cmd>: the JSON API and the UI share one server
+ssr_api_checks() { # ssr_api_checks <stack> <install-cmd> <e2e-cmd> [<seed-fn> <label> <file> <text> <cmd...>]
+  # The JSON API and the UI share one server, next to a datastore adapter (postgres; the server still runs on the
+  # in-memory store without POSTGRES_URL). The optional seed names the driver in the UI and must be rejected.
   local dir="$work/$1-ssr-api"
-  render "$1" '["codex"]' "$dir" -d frontend=ssr -d http_api=true -d containerize=false || { fail "render frontend=ssr http_api=true"; return; }
+  render "$1" '["codex"]' "$dir" -d frontend=ssr -d http_api=true -d containerize=false -d 'datastores=["postgres"]'     || { fail "render frontend=ssr http_api=true datastores=[postgres]"; return; }
   pushd "$dir" >/dev/null || return
   git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base
   bash -c "$2" >/dev/null 2>&1
-  verify "ssr + api: $1 verify" "${verify_cmd[$1]}"
+  verify "ssr + api + postgres: $1 verify" "${verify_cmd[$1]}"
   verify "ssr + api: API tests against the shared server" "$3"
   verify "ssr + api: browser flows + axe (Playwright)" "$ssr_test_ui"
+  if [ "$#" -gt 3 ]; then "$4" "${@:5}"; fi
   popd >/dev/null || return
 }
 
@@ -530,6 +540,11 @@ default_mutation() { # default_mutation <stack>: on the default render, mutation
   rm -rf .stryker-tmp reports mutants tests/DemoApp.Domain.Tests/StrykerOutput mutants.out mutants.out.old
   popd >/dev/null || return
 }
+
+# The frontend question only offers what each stack implements: copier's validator rejects the rest.
+expect_fail "copier: frontend=react on go" render go '["codex"]' "$work/invalid-go-react" -d frontend=react
+expect_fail "copier: frontend=ssr on typescript" render typescript '["codex"]' "$work/invalid-ts-ssr" -d frontend=ssr
+echo
 
 for stack in "${stacks[@]}"; do
   echo "== $stack"
@@ -699,7 +714,11 @@ for stack in "${stacks[@]}"; do
       # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
       ssr_checks python "uv sync" src/demo_app/adapters/web/templates/index.html '/"Content-Security-Policy":/d' \
         src/demo_app/application/complete_export.py '\nimport jinja2\n\nENGINE = jinja2\n' "uv run lint-imports"
-      ssr_api_checks python "uv sync" "uv run pytest -q -p no:warnings -m e2e"
+      ssr_api_checks python "uv sync" "uv run pytest -q -p no:warnings -m e2e"         seeded "ssr: import-linter: driver imported in the UI" src/demo_app/adapters/web/routes.py '
+import psycopg
+
+DRIVER = psycopg
+' uv run lint-imports
       seeded "ruff: SQL built with an f-string" src/demo_app/adapters/postgres_artifact_store.py '\n\ndef unsafe(connection: psycopg.Connection[TupleRow], job_id: str) -> None:\n    connection.execute(f"SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27")\n' uv run ruff check .
       # Design rules (ADR 0002), one violation at a time.
       seeded "ruff: ambient randomness in domain" src/demo_app/domain/export_job.py '\n\nimport random\n\n\ndef roll() -> float:\n    return random.random()\n' uv run ruff check .
@@ -803,7 +822,10 @@ for stack in "${stacks[@]}"; do
       # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
       ssr_checks go "go mod tidy" internal/adapters/web/templates/index.html '/Content-Security-Policy/d' \
         internal/application/web_leak.go 'package application\n\nimport _ "html/template"\n' "go tool golangci-lint run --enable-only depguard ./internal/application/"
-      ssr_api_checks go "go mod tidy" "go test -tags e2e ./..."
+      ssr_api_checks go "go mod tidy" "go test -tags e2e ./..."         seeded_new "ssr: depguard: driver imported in the UI" internal/adapters/web/driver_leak.go 'package web
+
+import _ "github.com/jackc/pgx/v5/pgxpool"
+' go tool golangci-lint run --enable-only depguard ./internal/adapters/web/
       seeded_new "depguard: net/http imported in application" internal/application/web.go 'package application\n\nimport "net/http"\n\n// Handler leaks HTTP into the application layer.\ntype Handler = http.Handler\n' go tool golangci-lint run --enable-only depguard ./internal/application/
       # Design rules (ADR 0002), one violation at a time.
       seeded_new "forbidigo: ambient clock in domain" internal/domain/clock.go 'package domain\n\nimport "time"\n\n// Now reads the wall clock.\nfunc Now() time.Time { return time.Now() }\n' go tool golangci-lint run ./internal/domain/

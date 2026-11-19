@@ -16,6 +16,7 @@ use axum::routing::get;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use domain::{Queued, start};
+use std::io::Write as _;
 use subtle::ConstantTimeEq as _;
 
 const MAX_CONTENT_LENGTH: usize = 1_000_000;
@@ -94,8 +95,11 @@ where
     }
     match complete_export(&store, start(Queued::new(id)), content).await {
         Ok(ready) => render(StatusCode::OK, &shown(&format!("Saved as {}", ready.artifact_key()))),
-        // The details stay out of the page; the log is the operator's to wire up (ADR 0005).
-        Err(_) => render(StatusCode::INTERNAL_SERVER_ERROR, &shown(SAVE_FAILED_MESSAGE)),
+        // The details go to the log, never to the page (ADR 0005).
+        Err(error) => {
+            log_failure(id, &error);
+            render(StatusCode::INTERNAL_SERVER_ERROR, &shown(SAVE_FAILED_MESSAGE))
+        }
     }
 }
 
@@ -136,6 +140,11 @@ async fn healthz() -> Response {
 async fn not_found() -> Response {
     (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "Not found")
         .into_response()
+}
+
+/// One line on stderr for the operator (print macros are denied workspace-wide; write explicitly).
+fn log_failure(job_id: &str, error: &dyn std::fmt::Display) {
+    let _ = writeln!(std::io::stderr(), "export {job_id} failed: {error}");
 }
 
 /// `^[A-Za-z0-9_-]{1,64}$`
