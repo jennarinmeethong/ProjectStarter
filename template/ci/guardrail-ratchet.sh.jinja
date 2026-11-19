@@ -34,6 +34,20 @@ if git diff "$base" HEAD -- "${test_specs[@]}" | grep -qE '^\+.*({{ stk.skip_reg
   echo "Skipped/focused tests added. Fix or delete the test with owner approval instead." >&2
   status=1
 fi
+{%- if stack != 'typescript' and (frontend == 'ssr' or (stack == 'rust' and http_api)) %}
+
+# Playwright specs are TypeScript whatever the stack's language.
+spec_specs=({% if frontend == 'ssr' %}':(glob)e2e-ui/*.spec.ts' {% endif %}{% if stack == 'rust' and http_api %}':(glob)e2e/*.spec.ts' {% endif %})
+if git diff --diff-filter=D --name-only "$base" HEAD -- "${spec_specs[@]}" | grep -q .; then
+  echo "Playwright specs deleted:" >&2
+  git diff --diff-filter=D --name-only "$base" HEAD -- "${spec_specs[@]}" >&2
+  status=1
+fi
+if git diff "$base" HEAD -- "${spec_specs[@]}" | grep -qE '^\+.*\b(test|describe)\.(skip|only|fixme)\('; then
+  echo "Skipped/focused Playwright specs added. Fix or delete the test with owner approval instead." >&2
+  status=1
+fi
+{%- endif %}
 {%- if sql_store %}
 
 # Migrations are append-only: a merged migration has already run somewhere (docs/adr/0003-datastores.md).

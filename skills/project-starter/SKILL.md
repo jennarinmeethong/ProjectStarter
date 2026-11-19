@@ -41,7 +41,7 @@ Do not guess the stack or the owner; if the user does not name an owner, leave i
 ## 3. Check tools
 
 - Always: `git`, `bash`, and `uv` (Copier runs through `uvx`; install uv from https://docs.astral.sh/uv/ if missing).
-- `typescript`: Node.js ≥ 22.12 and npm. `python`: uv (Python is fetched by uv). `dotnet`: .NET SDK 10. `go`: Go ≥ 1.26. `rust`: rustup and `cargo install cargo-deny` (Node.js too when `http_api`).
+- `typescript`: Node.js ≥ 22.12 and npm. `python`: uv (Python is fetched by uv). `dotnet`: .NET SDK 10. `go`: Go ≥ 1.26. `rust`: rustup and `cargo install cargo-deny` (Node.js too when `http_api`). Any stack with `frontend=ssr` also needs Node.js (Playwright + axe in `e2e-ui/`).
 
 Report missing tools and stop; do not install system tools without the user's approval.
 
