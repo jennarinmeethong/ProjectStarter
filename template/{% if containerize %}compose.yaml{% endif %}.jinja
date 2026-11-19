@@ -15,8 +15,16 @@ services:
     # Published on the host's loopback only.
     ports: ["127.0.0.1:8080:8080"]
 {%- endif %}
-{%- if datastores %}
+{%- if stack == 'dotnet' and frontend == 'ssr' %}
+    # Antiforgery keys outlive the container, so forms opened before a restart still post (ADR 0005).
+    volumes:
+      - dataprotection-keys:/keys
+{%- endif %}
+{%- if datastores or (stack == 'dotnet' and frontend == 'ssr') %}
     environment:
+{%- if stack == 'dotnet' and frontend == 'ssr' %}
+      DATA_PROTECTION_KEYS_DIR: /keys
+{%- endif %}
 {%- if 'postgres' in datastores %}
       DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD:-local-dev-only}@postgres:5432/app
 {%- endif %}
@@ -66,6 +74,8 @@ services:
 {%- if 'redis' in datastores %}
       REDIS_URL: redis://redis:6379/0
 {%- endif %}
+{%- endif %}
+{%- if datastores %}
     depends_on:
 {%- if 'postgres' in datastores %}
       postgres:
@@ -303,9 +313,12 @@ services:
     # Published on the host's loopback only.
     ports: ["127.0.0.1:8081:8080"]
 {%- endif %}
-{%- if 'postgres' in datastores or mysql_engine or 'sqlserver' in datastores or 'oracle' in datastores or 'mongodb' in datastores %}
+{%- if 'postgres' in datastores or mysql_engine or 'sqlserver' in datastores or 'oracle' in datastores or 'mongodb' in datastores or (stack == 'dotnet' and frontend == 'ssr') %}
 
 volumes:
+{%- if stack == 'dotnet' and frontend == 'ssr' %}
+  dataprotection-keys:
+{%- endif %}
 {%- if 'postgres' in datastores %}
   postgres-data:
 {%- endif %}

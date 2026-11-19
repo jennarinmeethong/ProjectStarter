@@ -377,6 +377,23 @@ frontend_seeds_react() {
 
 ssr_test_ui="npm --prefix e2e-ui install --no-audit --no-fund && npm --prefix e2e-ui test"
 
+ssr_key_ring_check() { # .NET: compose keeps the antiforgery key ring in a volume, so a form opened before a restart still posts
+  local c="docker compose -p ps-dpkeys" page cookie token code
+  $c down -v >/dev/null 2>&1
+  if $c up -d --build app >/dev/null 2>&1 && wait_healthz; then
+    page=$(curl -fsS -D - http://127.0.0.1:8080/)
+    cookie=$(grep -i '^set-cookie: __Host-csrf=' <<<"$page" | sed 's/^[^:]*: //; s/;.*//' | tr -d '')
+    token=$(grep -o 'name="csrf_token"[^>]*value="[^"]*"' <<<"$page" | sed 's/.*value="//; s/"$//')
+    $c restart app >/dev/null 2>&1 && wait_healthz
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H 'Sec-Fetch-Site: same-origin'       --data-urlencode "csrf_token=$token" --data-urlencode job_id=restart-1 --data-urlencode content=id http://127.0.0.1:8080/)
+  fi
+  $c down -v >/dev/null 2>&1
+  if [ "${code:-}" = 200 ]; then pass "ssr: compose: form opened before a restart still posts (Data Protection keys)"
+  else fail "ssr: compose: form opened before a restart got ${code:-no answer} (Data Protection keys)"; fi
+}
+
+wait_healthz() { for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
+
 ssr_checks() { # ssr_checks <stack> <install-cmd> <ui-file> <csp-sed-expression> <application-file> <framework-import-text> <arch-cmd>
   # A separate render with the server-rendered UI (frontend=ssr, ADR 0005): verify, browser flows + axe, ZAP from /,
   # then seeded violations: the page CSP removed (sed applied to every tracked source file), the template engine
@@ -402,6 +419,7 @@ ssr_checks() { # ssr_checks <stack> <install-cmd> <ui-file> <csp-sed-expression>
   verify "ssr: browser flows + axe (Playwright)" "$ssr_test_ui"
   export MSYS_NO_PATHCONV=1
   verify "ssr: zap baseline of the UI (from /)" "docker build -q -t $image . && DAST_PATH=/ bash ci/dast.sh $image"
+  if [ "$1" = dotnet ]; then ssr_key_ring_check; fi
   git ls-files -z -- . ':!tests' ':!docs' ':!e2e-ui' ':!ci' ':!.github' ':!*.md' | xargs -0 sed -i "$4"
   if out=$(bash -c "docker build -q -t $image-seed . >/dev/null && DAST_PATH=/ bash ci/dast.sh $image-seed" 2>&1); then
     fail "ssr: zap: missing Content-Security-Policy (should have failed)"

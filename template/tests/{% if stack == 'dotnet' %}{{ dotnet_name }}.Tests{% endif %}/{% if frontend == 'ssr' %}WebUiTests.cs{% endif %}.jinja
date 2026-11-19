@@ -33,9 +33,9 @@ public sealed class WebUiHost : IAsyncDisposable
 
     public HttpClient Client { get; }
 
-    public static async Task<WebUiHost> StartAsync(IArtifactStore store)
+    public static async Task<WebUiHost> StartAsync(IArtifactStore store, string? keysDirectory = null)
     {
-        var app = HttpHost.Build(store, "http://127.0.0.1:0");
+        var app = HttpHost.Build(store, "http://127.0.0.1:0", keysDirectory);
         await app.StartAsync(TestContext.Current.CancellationToken);
 #pragma warning disable CA2000 // The handler is owned and disposed by the client.
         var client = new HttpClient(new SocketsHttpHandler { UseCookies = false, AllowAutoRedirect = false }) { BaseAddress = BoundAddress(app) };
@@ -426,4 +426,31 @@ public sealed class WebUiCsrfTests : WebUiTestBase
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
+}
+
+/// <summary>Data Protection keys (ADR 0005): with a key directory, a token issued before a restart, or by another
+/// instance sharing the directory, is still accepted.</summary>
+public sealed class WebUiKeyRingTests : IDisposable
+{
+    private readonly DirectoryInfo keys = Directory.CreateTempSubdirectory("dp-keys-");
+
+    [Fact]
+    public async Task AcceptsATokenIssuedBeforeARestart()
+    {
+        var store = new InMemoryArtifactStore();
+        string cookie, token;
+        await using (var first = await WebUiHost.StartAsync(store, keys.FullName))
+        {
+            (cookie, token) = await first.OpenAsync();
+        }
+
+        Assert.NotEmpty(keys.GetFiles("key-*.xml"));
+        await using var second = await WebUiHost.StartAsync(store, keys.FullName);
+        using var response = await second.PostAsync(WebUiForm.Fields(token, "restart-1", "id,name"), cookie);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("id,name", store.Read("exports/restart-1.csv"));
+    }
+
+    public void Dispose() => keys.Delete(recursive: true);
 }
