@@ -98,6 +98,11 @@ RUN dotnet publish src/{{ dotnet_name }}.Bootstrap/{{ dotnet_name }}.Bootstrap.c
 FROM mcr.microsoft.com/dotnet/{% if serve_http %}aspnet{% else %}runtime{% endif %}:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app .
+{%- if frontend == 'ssr' %}
+# Mount point for the Data Protection key volume (compose.yaml, ADR 0005). A new named volume takes this owner,
+# so the non-root user can write the key ring.
+RUN mkdir /keys && chown "$APP_UID" /keys
+{%- endif %}
 {%- if serve_http %}
 # The server binds loopback unless told otherwise; inside the container it must listen on all interfaces.
 ENV HOST=0.0.0.0 PORT=8080

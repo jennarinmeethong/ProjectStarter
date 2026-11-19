@@ -92,7 +92,13 @@ if (owned is null && !string.IsNullOrEmpty(redisUrl))
 // Loopback by default; the container image sets HOST=0.0.0.0 explicitly.
 var host = Environment.GetEnvironmentVariable("HOST") ?? "127.0.0.1";
 var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+{%- if frontend == 'ssr' %}
+// Unset: antiforgery keys live in memory inside the container, so open forms fail after a restart (ADR 0005).
+var keysDirectory = Environment.GetEnvironmentVariable("DATA_PROTECTION_KEYS_DIR");
+await using var app = HttpHost.Build(store, $"http://{host}:{port}", string.IsNullOrEmpty(keysDirectory) ? null : keysDirectory);
+{%- else %}
 await using var app = HttpHost.Build(store, $"http://{host}:{port}");
+{%- endif %}
 {%- if datastores %}
 try
 {

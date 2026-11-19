@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 {%- if not http_api %}
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -15,7 +16,7 @@ public sealed record HealthResponse(string Status);
 
 /// <summary>
 /// Server-rendered UI (ADR 0005): Razor Pages under Web/Pages, built-in antiforgery (cookie <c>__Host-csrf</c>, field
-/// <c>csrf_token</c>), a cross-site check before the body is read, and the security headers for every response.
+/// <c>csrf_token</c>; keys in <c>keysDirectory</c> when given), a cross-site check before the body is read, and the security headers for every response.
 /// Bootstrap calls <see cref="AddWebUi"/> and <see cref="MapWebUi"/>; the page reaches storage only through the use case.
 /// </summary>
 public static class WebUi
@@ -24,9 +25,14 @@ public static class WebUi
     internal const int MaxValueBytes = 12 * 1_000_000;
     internal const long MaxBodyBytes = MaxValueBytes + 1024;
 
-    public static IServiceCollection AddWebUi(this IServiceCollection services)
+    public static IServiceCollection AddWebUi(this IServiceCollection services, string? keysDirectory)
     {
         ArgumentNullException.ThrowIfNull(services);
+        if (keysDirectory is not null)
+        {
+            WebUiOptions.PersistKeys(services, keysDirectory);
+        }
+
         services.AddRazorPages(WebUiOptions.ConfigurePages).AddApplicationPart(typeof(WebUi).Assembly);
         services.AddAntiforgery(WebUiOptions.ConfigureAntiforgery);
         return services;
@@ -55,6 +61,13 @@ internal static class WebUiOptions
         options.Conventions.ConfigureFilter(new FormRequestFilter());
         options.Conventions.ConfigureFilter(new AntiforgeryFailureFilter());
     }
+
+    /// <summary>Tokens survive a restart and are accepted by every instance that shares the directory and the
+    /// application name.</summary>
+    public static void PersistKeys(IServiceCollection services, string keysDirectory) =>
+        services.AddDataProtection()
+            .SetApplicationName("{{ project_name | lower }}")
+            .PersistKeysToFileSystem(new DirectoryInfo(keysDirectory));
 
     public static void ConfigureAntiforgery(AntiforgeryOptions options)
     {

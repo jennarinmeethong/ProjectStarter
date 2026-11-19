@@ -7,7 +7,13 @@ namespace {{ dotnet_name }}.Bootstrap;
 /// <summary>Builds the HTTP host. Used by Program and by the end-to-end tests, so both run the same pipeline.</summary>
 public static class HttpHost
 {
+{%- if frontend == 'ssr' %}
+    /// <param name="keysDirectory">Where the UI keeps its Data Protection keys (antiforgery tokens); null keeps the
+    /// framework default, which is lost on restart inside the container (ADR 0005).</param>
+    public static WebApplication Build(IArtifactStore store, string url, string? keysDirectory = null)
+{%- else %}
     public static WebApplication Build(IArtifactStore store, string url)
+{%- endif %}
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls(url);
@@ -16,7 +22,7 @@ public static class HttpHost
         builder.Services.AddSingleton(store);
         builder.Services.AddSingleton<CompleteExport>();
 {%- if frontend == 'ssr' %}
-        builder.Services.AddWebUi();
+        builder.Services.AddWebUi(keysDirectory);
 {%- endif %}
 
         var app = builder.Build();
