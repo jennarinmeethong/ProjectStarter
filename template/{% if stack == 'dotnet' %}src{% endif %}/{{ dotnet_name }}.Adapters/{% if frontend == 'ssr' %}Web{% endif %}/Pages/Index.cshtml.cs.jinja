@@ -11,6 +11,8 @@ namespace {{ dotnet_name }}.Adapters.Web.Pages;
 /// <summary>
 /// The export form (driving adapter, ADR 0005): decodes and validates the form, calls the use case, renders the result.
 /// The cross-site check, the form limits and antiforgery run as filters before the form is bound (FormFilters.cs).
+/// A saved export answers 303 to <c>GET /</c> (Post/Redirect/Get), so reloading the result page does not post again;
+/// the result travels in a one-time <c>__Host-flash</c> cookie.
 /// </summary>
 [RequestSizeLimit(WebUi.MaxBodyBytes)]
 [RequestFormLimits(ValueCountLimit = WebUi.MaxFields, ValueLengthLimit = WebUi.MaxValueBytes, KeyLengthLimit = 64)]
@@ -28,6 +30,14 @@ public sealed partial class IndexModel(CompleteExport useCase, ILogger<IndexMode
 
     public string? Status { get; private set; }
 
+    public void OnGet()
+    {
+        if (FlashCookie.Take(this) is { } key)
+        {
+            Status = $"Saved as {key}";
+        }
+    }
+
     public async Task<IActionResult> OnPostAsync(CancellationToken cancellationToken)
     {
         if (JobId is not { } id || !JobIdPattern().IsMatch(id) || ExportContent is not { Length: > 0 and <= MaxContentLength } content)
@@ -39,8 +49,7 @@ public sealed partial class IndexModel(CompleteExport useCase, ILogger<IndexMode
         try
         {
             var ready = await useCase.ExecuteAsync(ExportTransitions.Start(new ExportJob.Queued(id)), content, cancellationToken).ConfigureAwait(false);
-            Status = $"Saved as {ready.ArtifactKey}";
-            return Page();
+            return FlashCookie.Redirect(this, ready.ArtifactKey);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

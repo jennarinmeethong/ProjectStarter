@@ -1,5 +1,7 @@
 // Package web is the server-rendered UI, a driving adapter like httpapi: it decodes the form, calls the use
 // case and renders the result. Domain and application never see HTTP or templates (ADR 0001, ADR 0005).
+// A saved export answers 303 to GET / (Post/Redirect/Get), so reloading the result page does not post again;
+// the result travels in a one-time __Host-flash cookie.
 package web
 
 import (
@@ -28,11 +30,17 @@ const (
 	expiredMessage    = "The form has expired. Reload the page and try again."
 	saveFailedMessage = "The export could not be saved."
 
+	flashCookie = "__Host-flash"
+	flashMaxAge = 60
+
 	pageCSP = "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
 	apiCSP  = "default-src 'none'; frame-ancestors 'none'"
 )
 
-var jobID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+var (
+	jobID       = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	artifactKey = regexp.MustCompile(`^[A-Za-z0-9_./-]{1,200}$`)
+)
 
 //go:embed templates/index.html
 var indexHTML string
@@ -71,7 +79,14 @@ func NewHandler(store application.ArtifactStore) http.Handler {
 }
 
 func (s *server) show(w http.ResponseWriter, r *http.Request) {
-	s.render(w, http.StatusOK, view{Token: sessionToken(r)})
+	shown := view{Token: sessionToken(r)}
+	if cookie, err := r.Cookie(flashCookie); err == nil {
+		if key, err := url.QueryUnescape(cookie.Value); err == nil && artifactKey.MatchString(key) {
+			shown.Message = "Saved as " + key
+		}
+		http.SetCookie(w, flash("", -1))
+	}
+	s.render(w, http.StatusOK, shown)
 }
 
 // submit checks, in order: where the request came from, the form body, the CSRF token, the input; then saves.
@@ -98,23 +113,38 @@ func (s *server) submit(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusBadRequest, shown)
 		return
 	}
-	status := http.StatusOK
-	shown.Message = s.save(r.Context(), id, content)
-	if shown.Message == saveFailedMessage {
-		status = http.StatusInternalServerError
+	key, ok := s.save(r.Context(), id, content)
+	if !ok {
+		shown.Message = saveFailedMessage
+		s.render(w, http.StatusInternalServerError, shown)
+		return
 	}
-	s.render(w, status, shown)
+	http.SetCookie(w, flash(url.QueryEscape(key), flashMaxAge))
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// save completes the export and returns the message to show. Failure details go to the log, not the page.
-func (s *server) save(ctx context.Context, id, content string) string {
+// save completes the export and returns its artifact key. Failure details go to the log, not the page.
+func (s *server) save(ctx context.Context, id, content string) (string, bool) {
 	job := domain.Start(domain.NewQueued(id))
 	ready, err := application.CompleteExport(ctx, s.store, job, content)
 	if err != nil {
 		slog.ErrorContext(ctx, "saving export failed", "job", id, "error", err)
-		return saveFailedMessage
+		return "", false
 	}
-	return "Saved as " + ready.ArtifactKey()
+	return ready.ArtifactKey(), true
+}
+
+// flash is the one-time result cookie; maxAge -1 deletes it.
+func flash(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name:     flashCookie,
+		Value:    value,
+		Path:     "/",
+		MaxAge:   maxAge,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	}
 }
 
 func (s *server) render(w http.ResponseWriter, status int, data view) {

@@ -3,6 +3,9 @@
 //!
 //! CSRF protection (ADR 0005): a random token in a `__Host-` cookie, repeated in a hidden field and compared
 //! in constant time, plus a Fetch Metadata check: browsers say where a request comes from in `Sec-Fetch-Site`.
+//!
+//! A saved export answers 303 to `GET /` (Post/Redirect/Get), so reloading the result page does not post again;
+//! the result travels in a one-time `__Host-flash` cookie.
 
 use application::{ArtifactStore, complete_export};
 use askama::Template;
@@ -25,6 +28,8 @@ const MAX_FORM_BYTES: usize = 12 * MAX_CONTENT_LENGTH + 1024;
 const MAX_FORM_FIELDS: usize = 10;
 
 const COOKIE_NAME: &str = "__Host-csrf";
+const FLASH_COOKIE: &str = "__Host-flash";
+const FLASH_MAX_AGE: u32 = 60;
 const FIELD_NAME: &str = "csrf_token";
 const TOKEN_BYTES: usize = 32;
 /// 32 bytes as base64url without padding.
@@ -66,10 +71,37 @@ where
 }
 
 async fn show(headers: HeaderMap) -> Response {
-    match session_token(&headers) {
-        Some(token) => render(StatusCode::OK, &Page { token: &token, job_id: "", content: "", message: "" }),
-        None => internal_error(),
+    let Some(token) = session_token(&headers) else { return internal_error() };
+    let Some(flash) = cookie_value(&headers, FLASH_COOKIE) else {
+        return render(StatusCode::OK, &Page { token: &token, job_id: "", content: "", message: "" });
+    };
+    let message = flash_key(flash).map(|key| format!("Saved as {key}")).unwrap_or_default();
+    let mut response =
+        render(StatusCode::OK, &Page { token: &token, job_id: "", content: "", message: &message });
+    let cleared = format!("{FLASH_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict");
+    if let Ok(cleared) = HeaderValue::try_from(cleared) {
+        response.headers_mut().append(header::SET_COOKIE, cleared);
     }
+    response
+}
+
+/// 303 to the form; the next `GET /` shows the result once.
+fn saved(artifact_key: &str) -> Response {
+    let value: String = form_urlencoded::byte_serialize(artifact_key.as_bytes()).collect();
+    let cookie =
+        format!("{FLASH_COOKIE}={value}; Path=/; Max-Age={FLASH_MAX_AGE}; Secure; HttpOnly; SameSite=Strict");
+    let Ok(cookie) = HeaderValue::try_from(cookie) else { return internal_error() };
+    (StatusCode::SEE_OTHER, [(header::LOCATION, HeaderValue::from_static("/")), (header::SET_COOKIE, cookie)])
+        .into_response()
+}
+
+/// The artifact key in the flash cookie, if it is one: `^[A-Za-z0-9_./-]{1,200}$` once percent-decoded.
+fn flash_key(value: &str) -> Option<String> {
+    // The cookie holds one percent-encoded value; parsed as a form it is a single name with no value.
+    let (key, _) = form_urlencoded::parse(value.as_bytes()).next()?;
+    let valid = (1..=200).contains(&key.len())
+        && key.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'/' | b'-'));
+    valid.then(|| key.into_owned())
 }
 
 /// Checks, in order: where the request came from, the form body, the CSRF token, the input; then saves.
@@ -94,7 +126,7 @@ where
         return render(StatusCode::BAD_REQUEST, &shown(INVALID_MESSAGE));
     }
     match complete_export(&store, start(Queued::new(id)), content).await {
-        Ok(ready) => render(StatusCode::OK, &shown(&format!("Saved as {}", ready.artifact_key()))),
+        Ok(ready) => saved(ready.artifact_key()),
         // The details go to the log, never to the page (ADR 0005).
         Err(error) => {
             log_failure(id, &error);
@@ -182,15 +214,20 @@ fn is_token(value: &str) -> bool {
     value.len() == TOKEN_LENGTH && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// The token in the cookie, if it has the right shape.
-fn cookie_token(headers: &HeaderMap) -> Option<String> {
+/// The first value of the named cookie.
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(';'))
         .filter_map(|pair| pair.trim().split_once('='))
-        .find_map(|(name, value)| (name == COOKIE_NAME && is_token(value)).then(|| value.to_owned()))
+        .find_map(|(key, value)| (key == name).then_some(value))
+}
+
+/// The token in the cookie, if it has the right shape.
+fn cookie_token(headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, COOKIE_NAME).filter(|value| is_token(value)).map(str::to_owned)
 }
 
 /// The token already in the cookie, else a new one: open tabs keep working after a refusal.
@@ -389,9 +426,42 @@ mod tests {
         let reply =
             post(&app, &cookie, &[], &[("csrf_token", &token), ("job_id", "job-1"), ("content", "id\n1\n")])
                 .await;
-        assert_eq!(reply.status, StatusCode::OK);
-        assert!(reply.body.contains("<p role=\"status\">Saved as exports/job-1.csv</p>"));
+        assert_eq!(reply.status, StatusCode::SEE_OTHER);
         assert_eq!(store.read("exports/job-1.csv").unwrap().as_deref(), Some("id\n1\n"));
+    }
+
+    /// Post/Redirect/Get: a save answers 303 to the form, which shows the result once.
+    #[tokio::test]
+    async fn redirects_after_a_save_and_shows_the_result_once() {
+        let app = app();
+        let (token, cookie) = open(&app).await;
+        let reply =
+            post(&app, &cookie, &[], &[("csrf_token", &token), ("job_id", "job-8"), ("content", "x")]).await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER);
+        assert_eq!(reply.header("location"), "/");
+        assert_eq!(
+            reply.header("set-cookie"),
+            "__Host-flash=exports%2Fjob-8.csv; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Strict"
+        );
+        let cookies = format!("{cookie}; __Host-flash=exports%2Fjob-8.csv");
+        let shown = send(&app, (Method::GET, "/"), &[("cookie", &cookies)], "").await;
+        assert!(shown.body.contains("<p role=\"status\">Saved as exports/job-8.csv</p>"));
+        let cleared: Vec<&str> =
+            shown.headers.get_all("set-cookie").iter().filter_map(|value| value.to_str().ok()).collect();
+        assert!(
+            cleared.contains(&"__Host-flash=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict"),
+            "{cleared:?}"
+        );
+        let again = send(&app, (Method::GET, "/"), &[("cookie", &cookie)], "").await;
+        assert!(!again.body.contains("Saved as"));
+    }
+
+    #[tokio::test]
+    async fn ignores_a_flash_cookie_that_is_not_an_artifact_key() {
+        let shown =
+            send(&app(), (Method::GET, "/"), &[("cookie", "__Host-flash=%3Cb%3Ex%3C%2Fb%3E")], "").await;
+        assert!(shown.body.contains("<p role=\"status\"></p>"));
+        assert!(!shown.body.contains("<b>"));
     }
 
     #[tokio::test]
@@ -422,7 +492,7 @@ mod tests {
         let id = "a".repeat(64);
         let reply =
             post(&app, &cookie, &[], &[("csrf_token", &token), ("job_id", &id), ("content", &content)]).await;
-        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.status, StatusCode::SEE_OTHER);
     }
 
     #[tokio::test]
@@ -453,7 +523,7 @@ mod tests {
         let many = post(&app, &cookie, &[], &fields).await;
         assert_eq!(many.status, StatusCode::BAD_REQUEST);
         let ten = post(&app, &cookie, &[], &fields[..MAX_FORM_FIELDS]).await;
-        assert_eq!(ten.status, StatusCode::OK);
+        assert_eq!(ten.status, StatusCode::SEE_OTHER);
     }
 
     #[tokio::test]
@@ -529,7 +599,7 @@ mod tests {
         let cookies = format!("theme=dark; {cookie}; other=1");
         let reply =
             post(&app, &cookies, &[], &[("csrf_token", &token), ("job_id", "a"), ("content", "x")]).await;
-        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.status, StatusCode::SEE_OTHER);
     }
 
     #[tokio::test]
@@ -569,7 +639,7 @@ mod tests {
             &fields,
         )
         .await;
-        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.status, StatusCode::SEE_OTHER);
     }
 
     #[tokio::test]
@@ -579,7 +649,7 @@ mod tests {
         let fields = [("csrf_token", token.as_str()), ("job_id", "a"), ("content", "x")];
         let reply =
             post(&app, &cookie, &[("host", "app.test"), ("origin", "https://app.test")], &fields).await;
-        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.status, StatusCode::SEE_OTHER);
     }
 
     #[tokio::test]
@@ -606,7 +676,9 @@ mod tests {
         assert_eq!(again.token(), token);
         let sent =
             post(&app, &cookie, &[], &[("csrf_token", &token), ("job_id", "a"), ("content", "x")]).await;
-        assert_eq!(sent.token(), token);
+        assert_eq!(sent.status, StatusCode::SEE_OTHER);
+        let after = send(&app, (Method::GET, "/"), &[("cookie", &cookie)], "").await;
+        assert_eq!(after.token(), token);
     }
 
     #[tokio::test]

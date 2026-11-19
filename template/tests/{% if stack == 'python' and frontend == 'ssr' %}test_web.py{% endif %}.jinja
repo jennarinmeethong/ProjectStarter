@@ -68,6 +68,29 @@ def test_completes_an_export(client: TestClient, store: InMemoryArtifactStore) -
     assert store.read("exports/ui-1.csv") == "id,name"
 
 
+def test_redirects_after_a_save_and_shows_the_result_once(client: TestClient) -> None:
+    response = client.post(
+        "/",
+        data={"csrf_token": token_from(client), "job_id": "ui-8", "content": "x"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    cookie = response.headers["set-cookie"]
+    assert cookie.startswith("__Host-flash=")
+    for attribute in ("Path=/", "Secure", "HttpOnly", "SameSite=strict", "Max-Age=60"):
+        assert attribute.lower() in cookie.lower()
+    assert "Saved as exports/ui-8.csv" in client.get("/").text
+    assert "Saved as" not in client.get("/").text
+
+
+def test_ignores_a_flash_cookie_that_is_not_an_artifact_key(client: TestClient) -> None:
+    client.cookies.set("__Host-flash", "%3Cb%3Ex%3C%2Fb%3E")
+    page = client.get("/")
+    assert "Saved as" not in page.text
+    assert "<b>" not in page.text
+
+
 @pytest.mark.parametrize(
     ("job_id", "content"),
     [("not valid", "x"), ("ok", ""), ("x" * 65, "x"), ("ok", "x" * 1_000_001), ("ok\n", "x")],

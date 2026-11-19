@@ -388,7 +388,7 @@ ssr_key_ring_check() { # .NET: compose keeps the antiforgery key ring in a volum
     code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H 'Sec-Fetch-Site: same-origin'       --data-urlencode "csrf_token=$token" --data-urlencode job_id=restart-1 --data-urlencode content=id http://127.0.0.1:8080/)
   fi
   $c down -v >/dev/null 2>&1
-  if [ "${code:-}" = 200 ]; then pass "ssr: compose: form opened before a restart still posts (Data Protection keys)"
+  if [ "${code:-}" = 303 ]; then pass "ssr: compose: form opened before a restart still posts (Data Protection keys)"
   else fail "ssr: compose: form opened before a restart got ${code:-no answer} (Data Protection keys)"; fi
 }
 

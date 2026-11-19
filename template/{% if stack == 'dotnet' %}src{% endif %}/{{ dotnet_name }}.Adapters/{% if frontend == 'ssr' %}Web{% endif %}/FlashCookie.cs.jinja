@@ -1,0 +1,39 @@
+using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.RazorPages;
+
+namespace {{ dotnet_name }}.Adapters.Web;
+
+/// <summary>Post/Redirect/Get (ADR 0005): the result of a save travels to the next <c>GET /</c> in a one-time cookie.
+/// The cookie API percent-encodes the value on write and decodes it on read.</summary>
+internal static partial class FlashCookie
+{
+    private const string Name = "__Host-flash";
+
+    /// <summary>Sets the cookie and answers 303 to the form.</summary>
+    public static IActionResult Redirect(PageModel page, string artifactKey)
+    {
+        page.Response.Cookies.Append(Name, artifactKey, Options(TimeSpan.FromSeconds(60)));
+        page.Response.Headers.Location = "/";
+        return new StatusCodeResult(StatusCodes.Status303SeeOther);
+    }
+
+    /// <summary>The artifact key in the cookie, if it is one; the cookie is cleared either way.</summary>
+    public static string? Take(PageModel page)
+    {
+        if (page.Request.Cookies[Name] is not { } key)
+        {
+            return null;
+        }
+
+        page.Response.Cookies.Delete(Name, Options(TimeSpan.Zero));
+        return ArtifactKey().IsMatch(key) ? key : null;
+    }
+
+    private static CookieOptions Options(TimeSpan maxAge) =>
+        new() { Path = "/", Secure = true, HttpOnly = true, SameSite = SameSiteMode.Strict, MaxAge = maxAge };
+
+    [GeneratedRegex("^[A-Za-z0-9_./-]{1,200}\\z")]
+    private static partial Regex ArtifactKey();
+}
