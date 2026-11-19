@@ -29,11 +29,12 @@ func (failingStore) Save(_ context.Context, jobID, content string) (string, erro
 	return "", errors.New("disk full while saving " + jobID + " (" + content + ")")
 }
 
-// session is one browser: it keeps the CSRF cookie between requests.
+// session is one browser: it keeps the CSRF and flash cookies between requests.
 type session struct {
 	t       *testing.T
 	handler http.Handler
 	cookie  *http.Cookie
+	flash   *http.Cookie
 }
 
 func newSession(t *testing.T, store application.ArtifactStore) *session {
@@ -56,14 +57,21 @@ func (s *session) do(method, path string, form url.Values, headers map[string]st
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
-	if s.cookie != nil {
-		request.AddCookie(s.cookie)
+	for _, cookie := range []*http.Cookie{s.cookie, s.flash} {
+		if cookie != nil {
+			request.AddCookie(cookie)
+		}
 	}
 	recorder := httptest.NewRecorder()
 	s.handler.ServeHTTP(recorder, request)
 	for _, cookie := range recorder.Result().Cookies() {
-		if cookie.Name == "__Host-csrf" {
+		switch {
+		case cookie.Name == "__Host-csrf":
 			s.cookie = cookie
+		case cookie.Name == "__Host-flash" && cookie.MaxAge < 0:
+			s.flash = nil
+		case cookie.Name == "__Host-flash":
+			s.flash = cookie
 		}
 	}
 	return recorder
@@ -152,10 +160,39 @@ func TestCompletesAnExport(t *testing.T) {
 	store := inmemory.New()
 	s := newSession(t, store)
 	response := s.post(map[string]string{"csrf_token": s.token(), "job_id": "ui-1", "content": "id,name"}, nil)
-	expectStatus(t, response, http.StatusOK)
-	expectBody(t, response, "Saved as exports/ui-1.csv")
+	expectStatus(t, response, http.StatusSeeOther)
 	if got, err := store.Read(t.Context(), "exports/ui-1.csv"); err != nil || got != "id,name" {
 		t.Fatalf("stored %q, err %v", got, err)
+	}
+}
+
+// Post/Redirect/Get: a save answers 303 to the form, which shows the result once.
+func TestRedirectsAfterASaveAndShowsTheResultOnce(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	response := s.post(map[string]string{"csrf_token": s.token(), "job_id": "ui-8", "content": "x"}, nil)
+	expectStatus(t, response, http.StatusSeeOther)
+	if got := response.Header().Get("Location"); got != "/" {
+		t.Errorf("location = %q, want /", got)
+	}
+	flash := s.flash
+	if flash == nil {
+		t.Fatal("no __Host-flash cookie")
+	}
+	if !flash.Secure || !flash.HttpOnly || flash.SameSite != http.SameSiteStrictMode || flash.Path != "/" || flash.MaxAge != 60 {
+		t.Errorf("flash cookie attributes: %+v", flash)
+	}
+	expectBody(t, s.do(http.MethodGet, "/", nil, nil), "Saved as exports/ui-8.csv")
+	if strings.Contains(s.do(http.MethodGet, "/", nil, nil).Body.String(), "Saved as") {
+		t.Error("the result is shown twice")
+	}
+}
+
+func TestIgnoresAFlashCookieThatIsNotAnArtifactKey(t *testing.T) {
+	s := newSession(t, inmemory.New())
+	s.flash = &http.Cookie{Name: "__Host-flash", Value: "%3Cb%3Ex%3C%2Fb%3E", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode}
+	body := s.do(http.MethodGet, "/", nil, nil).Body.String()
+	if strings.Contains(body, "Saved as") || strings.Contains(body, "<b>") {
+		t.Errorf("unexpected flash message: %s", body)
 	}
 }
 
@@ -179,7 +216,7 @@ func TestAcceptsContentOfExactlyOneMillionMultibyteCharacters(t *testing.T) {
 	s := newSession(t, inmemory.New())
 	content := strings.Repeat("€", 1_000_000)
 	response := s.post(map[string]string{"csrf_token": s.token(), "job_id": "big", "content": content}, nil)
-	expectStatus(t, response, http.StatusOK)
+	expectStatus(t, response, http.StatusSeeOther)
 }
 
 func TestRejectsABodyOverTheByteCap(t *testing.T) {
@@ -272,7 +309,7 @@ func TestRejectsAPostWithAnotherOrigin(t *testing.T) {
 func TestAcceptsASameOriginPost(t *testing.T) {
 	s := newSession(t, inmemory.New())
 	fields := map[string]string{"csrf_token": s.token(), "job_id": "ui-5", "content": "x"}
-	expectStatus(t, s.post(fields, map[string]string{"Sec-Fetch-Site": "same-origin"}), http.StatusOK)
+	expectStatus(t, s.post(fields, map[string]string{"Sec-Fetch-Site": "same-origin"}), http.StatusSeeOther)
 }
 
 func TestKeepsTheTokenWhileValidAndAfterARefusal(t *testing.T) {
@@ -283,7 +320,7 @@ func TestKeepsTheTokenWhileValidAndAfterARefusal(t *testing.T) {
 		t.Errorf("token rotated from %q to %q", token, got)
 	}
 	response := s.post(map[string]string{"csrf_token": token, "job_id": "ui-7", "content": "x"}, nil)
-	expectStatus(t, response, http.StatusOK)
+	expectStatus(t, response, http.StatusSeeOther)
 }
 
 func TestReportsAStorageFailureWithoutDetails(t *testing.T) {

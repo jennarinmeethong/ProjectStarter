@@ -1,5 +1,8 @@
 """Web UI routes: the export form (`GET /`, `POST /`) and its stylesheet.
 
+A saved export answers 303 to `GET /` (Post/Redirect/Get), so reloading the result page does not
+post again; the result travels in a one-time `__Host-flash` cookie (ADR 0005).
+
 Jinja2 autoescapes everything the page echoes back. The page CSP allows only this server's
 stylesheet and form target: no scripts, no inline styles (ADR 0005).
 """
@@ -8,10 +11,10 @@ import logging
 import re
 from http import HTTPStatus
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote, unquote
 
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader
 
 from {{ package_name }}.adapters.web.csrf import (
@@ -27,6 +30,9 @@ from {{ package_name }}.domain.export_job import QueuedExport, start_export
 
 HERE = Path(__file__).parent
 JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+FLASH_COOKIE = "__Host-flash"
+FLASH_MAX_AGE = 60
+ARTIFACT_KEY = re.compile(r"[A-Za-z0-9_./-]{1,200}")
 MAX_CONTENT_LENGTH = 1_000_000
 # Worst case for the form body: every character is 4 UTF-8 bytes, each percent-encoded as 3.
 MAX_FORM_BYTES = 12 * MAX_CONTENT_LENGTH + 1024
@@ -62,6 +68,27 @@ def render(token: str, status: HTTPStatus, form: dict[str, str], message: str = 
     return response
 
 
+def saved(artifact_key: str) -> Response:
+    """303 to the form; the next `GET /` shows the result once."""
+    response = RedirectResponse("/", status_code=HTTPStatus.SEE_OTHER, headers=PAGE_HEADERS)
+    response.set_cookie(
+        FLASH_COOKIE,
+        quote(artifact_key, safe=""),
+        max_age=FLASH_MAX_AGE,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+    return response
+
+
+def flash_message(request: Request) -> str:
+    """The result of the last save, if the flash cookie holds an artifact key."""
+    key = unquote(request.cookies.get(FLASH_COOKIE, ""))
+    return f"Saved as {key}" if ARTIFACT_KEY.fullmatch(key) else ""
+
+
 async def read_form(request: Request) -> dict[str, str] | None:
     """The urlencoded body as single-valued fields, or None when it is too large or malformed."""
     body = bytearray()
@@ -94,7 +121,12 @@ def create_router(store: ArtifactStore) -> APIRouter:
 
     @router.get("/")
     def show(request: Request) -> Response:
-        return render(session_token(request), HTTPStatus.OK, {})
+        response = render(session_token(request), HTTPStatus.OK, {}, flash_message(request))
+        if FLASH_COOKIE in request.cookies:
+            response.delete_cookie(
+                FLASH_COOKIE, path="/", secure=True, httponly=True, samesite="strict"
+            )
+        return response
 
     @router.post("/")
     async def submit(request: Request) -> Response:
@@ -115,7 +147,7 @@ def create_router(store: ArtifactStore) -> APIRouter:
         except Exception:
             logger.exception("Saving export %s failed", form["job_id"])
             return render(token, HTTPStatus.INTERNAL_SERVER_ERROR, form, SAVE_FAILED)
-        return render(token, HTTPStatus.OK, form, f"Saved as {ready.artifact_key}")
+        return saved(ready.artifact_key)
 
     @router.get("/static/app.css")
     def styles() -> Response:

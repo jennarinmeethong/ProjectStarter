@@ -45,7 +45,22 @@ test("rejects a cross-site post and a mismatched token", async ({ page }) => {
   expect(crossSite.status()).toBe(403);
   const mismatched = await page.request.post("/", { form: { ...form, csrf_token: `${token}x` } });
   expect(mismatched.status()).toBe(403);
-  const sameOrigin = await page.request.post("/", { headers: { "Sec-Fetch-Site": "same-origin" }, form });
-  expect(sameOrigin.status()).toBe(200);
+  const sameOrigin = await page.request.post("/", { headers: { "Sec-Fetch-Site": "same-origin" }, form, maxRedirects: 0 });
+  expect(sameOrigin.status()).toBe(303);
+});
+
+test("redirects after a save, so a reload does not post again", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Job id").fill("ui-prg");
+  await page.getByLabel("Content").fill("x");
+  const posts: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST") posts.push(request.url());
+  });
+  await page.getByRole("button", { name: "Complete export" }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved as exports/ui-prg.csv");
+  await page.reload();
+  await expect(page.getByRole("status")).toHaveText("");
+  expect(posts).toHaveLength(1);
 });
 {%- endif %}

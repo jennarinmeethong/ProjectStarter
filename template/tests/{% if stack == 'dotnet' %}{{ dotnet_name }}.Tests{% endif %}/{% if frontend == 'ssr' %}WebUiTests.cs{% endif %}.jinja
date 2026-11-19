@@ -50,6 +50,13 @@ public sealed class WebUiHost : IAsyncDisposable
     public async Task<HttpResponseMessage> GetAsync(string path) =>
         await Client.GetAsync(new Uri(path, UriKind.Relative), TestContext.Current.CancellationToken);
 
+    public async Task<HttpResponseMessage> GetAsync(string path, string cookie)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(path, UriKind.Relative));
+        request.Headers.Add("Cookie", cookie);
+        return await Client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         Client.Dispose();
@@ -69,6 +76,9 @@ public static partial class WebUiForm
 
     public static string CookieFrom(HttpResponseMessage response) =>
         response.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-csrf=", StringComparison.Ordinal));
+
+    public static string FlashFrom(HttpResponseMessage response) =>
+        response.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("__Host-flash=", StringComparison.Ordinal));
 
     private static string TokenFrom(string html)
     {
@@ -236,8 +246,7 @@ public sealed class WebUiFormTests : WebUiTestBase
 
         using var response = await Host.PostAsync(WebUiForm.Fields(token, "ui-1", "id,name"), cookie);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains("Saved as exports/ui-1.csv", await response.TextAsync(), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
         Assert.Equal("id,name", Store.Read("exports/ui-1.csv"));
     }
 
@@ -323,7 +332,7 @@ public sealed class WebUiFormTests : WebUiTestBase
 
         using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-13", content), cookie);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
         Assert.Equal(content, Store.Read("exports/t-13.csv"));
     }
 
@@ -412,7 +421,7 @@ public sealed class WebUiCsrfTests : WebUiTestBase
 
         using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-5", "x"), cookie, "same-origin", "null");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
         Assert.Equal("x", Store.Read("exports/t-5.csv"));
     }
 
@@ -424,7 +433,7 @@ public sealed class WebUiCsrfTests : WebUiTestBase
 
         using var response = await Host.PostAsync(WebUiForm.Fields(token, "t-8", "x"), cookie, fetchSite: null);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
     }
 }
 
@@ -448,9 +457,54 @@ public sealed class WebUiKeyRingTests : IDisposable
         await using var second = await WebUiHost.StartAsync(store, keys.FullName);
         using var response = await second.PostAsync(WebUiForm.Fields(token, "restart-1", "id,name"), cookie);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
         Assert.Equal("id,name", store.Read("exports/restart-1.csv"));
     }
 
     public void Dispose() => keys.Delete(recursive: true);
+}
+
+/// <summary>Post/Redirect/Get: a save answers 303 to the form, which shows the result once (ADR 0005).</summary>
+public sealed class WebUiRedirectTests : WebUiTestBase
+{
+    [Fact]
+    public async Task RedirectsAfterASaveWithAOneTimeResultCookie()
+    {
+        var (cookie, token) = await Host.OpenAsync();
+
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "ui-8", "x"), cookie);
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        Assert.Equal("/", response.Headers.Location?.OriginalString);
+        var flash = WebUiForm.FlashFrom(response);
+        Assert.StartsWith("__Host-flash=exports%2Fui-8.csv;", flash, StringComparison.Ordinal);
+        foreach (var attribute in new[] { "path=/", "secure", "httponly", "samesite=strict", "max-age=60" })
+        {
+            Assert.Contains(attribute, flash, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task ShowsTheResultOnce()
+    {
+        var (cookie, token) = await Host.OpenAsync();
+        using var response = await Host.PostAsync(WebUiForm.Fields(token, "ui-9", "x"), cookie);
+
+        using var shown = await Host.GetAsync("/", $"{cookie}; {WebUiForm.FlashFrom(response).Split(';')[0]}");
+
+        Assert.Contains("Saved as exports/ui-9.csv", await shown.TextAsync(), StringComparison.Ordinal);
+        Assert.StartsWith("__Host-flash=;", WebUiForm.FlashFrom(shown), StringComparison.Ordinal);
+        using var again = await Host.GetAsync("/", cookie);
+        Assert.DoesNotContain("Saved as", await again.TextAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IgnoresAFlashCookieThatIsNotAnArtifactKey()
+    {
+        using var shown = await Host.GetAsync("/", "__Host-flash=%3Cb%3Ex%3C%2Fb%3E");
+        var html = await shown.TextAsync();
+
+        Assert.DoesNotContain("Saved as", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<b>", html, StringComparison.Ordinal);
+    }
 }
