@@ -582,6 +582,26 @@ model_check_checks() { # in the full render (model_check=true): TLC passes the m
   git checkout -q -- "$model"
 }
 
+task_checks() { # in the full render (both tools, git repo on main): scripts/new-task.sh and scripts/end-task.sh
+  local tasks
+  tasks="../$(basename "$PWD")-tasks"
+  if bash scripts/new-task.sh a >/dev/null && bash scripts/new-task.sh b >/dev/null \
+    && grep -q '^export TASK_SLOT=1$' "$tasks/a/.task/env" && grep -q '^export E2E_PORT=20102$' "$tasks/a/.task/env" \
+    && grep -q '^export TASK_SLOT=2$' "$tasks/b/.task/env" && grep -q '^export E2E_PORT=20202$' "$tasks/b/.task/env"; then
+    pass "new-task: two tasks, distinct ports"
+  else
+    fail "new-task: two tasks, distinct ports"
+  fi
+  (cd "$tasks/a" && bash scripts/new-task.sh c >/dev/null) && [ -f "$tasks/c/.task/env" ] && [ ! -e "$tasks/a-tasks" ] \
+    && pass "new-task: from a task worktree" || fail "new-task: from a task worktree"
+  expect_fail "new-task: fourth task over MAX_TASKS=3" bash scripts/new-task.sh d
+  expect_fail "new-task: bad name" bash scripts/new-task.sh Bad_Name
+  [ -z "$(git -C "$tasks/a" status --porcelain)" ] && pass "new-task: task files ignored" || fail "new-task: task files show in git status"
+  grep -q '"E2E_PORT": "20102"' "$tasks/a/.claude/settings.local.json" && pass "new-task: claude env" || fail "new-task: claude env"
+  grep -q "$(git rev-parse main)" "$tasks/a/.task/brief.md" && grep -q 'COMPOSE_PROJECT_NAME=demo-app-a' "$tasks/a/.task/env" \
+    && pass "new-task: brief has base SHA, compose project per task" || fail "new-task: brief or compose project"
+}
+
 automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by path, and the workflow lints clean
   local first case want got file
   first=$(sed -n 's/.*"Edit(\/\([^*)]*\))".*/\1/p' .claude/settings.json | head -1)
@@ -806,6 +826,7 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
   git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base && git branch -q base
   model_check_checks
   automerge_checks
+  task_checks
   case "$stack" in
     typescript)
       npm install --no-audit --no-fund >/dev/null 2>&1

@@ -3,6 +3,9 @@
 coverage.out
 *.test
 .env
+# Task worktrees (scripts/new-task.sh)
+.task/
+.claude/settings.local.json
 # rapid writes a failfile per failing property test; rerun with the -rapid.seed it prints instead.
 **/testdata/rapid/
 {%- if frontend == 'ssr' %}
