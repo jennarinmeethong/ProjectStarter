@@ -3,6 +3,9 @@
 #   1. the generated project passes its own verify command, and
 #   2. the guardrails reject a seeded violation (escape hatch, layer leak, skipped test).
 # Usage: tests/render-all.sh [stack...]      (default: typescript python dotnet go rust)
+#   SHARD=core|datastores|ui runs one part of each stack (default: all). core: the agent-tool renders, the defaults
+#   and the full render; datastores: one render per extra datastore; ui: the frontend/ssr renders. CI runs each part
+#   as its own job.
 # The renders go to a temp folder that is deleted when every check passes; it is kept on a failure,
 # or always with KEEP_WORK=1, and its path is printed at the end.
 # Needs: uv, git, bash >= 4 (associative arrays; Git Bash and Linux are fine, macOS /bin/bash 3.2 is not), Docker (running); node/npm for typescript; .NET 10 SDK for dotnet; Go >= 1.26 for go; rustup + cargo-deny + cargo-mutants for rust.
@@ -27,6 +30,8 @@ trap cleanup EXIT
 
 pass() { echo "  PASS $*"; }
 fail() { echo "  FAIL $*"; failures=$((failures + 1)); }
+part() { [ "${SHARD:-all}" = all ] || [ "$SHARD" = "$1" ]; }
+case "${SHARD:-all}" in all | core | datastores | ui) ;; *) echo "SHARD must be all, core, datastores or ui" >&2; exit 2 ;; esac
 
 render() { # render <stack> <tools-json> <dest> [extra copier args...]
   uvx copier copy --trust --defaults --quiet \
@@ -564,7 +569,127 @@ expect_fail "copier: frontend=react on go" render go '["codex"]' "$work/invalid-
 expect_fail "copier: frontend=ssr on typescript" render typescript '["codex"]' "$work/invalid-ts-ssr" -d frontend=ssr
 echo
 
-for stack in "${stacks[@]}"; do
+# Checks that each use their own render, grouped so CI can run them as separate jobs (SHARD, see the header).
+datastores_extras_typescript() {
+  mariadb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
+  sqlserver_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
+  oracle_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
+  cosmosdb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
+  s3_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
+    seeded_new "dependency-cruiser: S3 SDK in application" src/application/s3-leak.ts \
+    'import "@aws-sdk/client-s3";\n' npx depcruise src --config .dependency-cruiser.cjs
+  dynamodb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
+    seeded "eslint: DynamoDB expression built from a value" src/adapters/dynamo-artifact-store.ts \
+    '\nexport const seeded = (id: string) => ({ KeyConditionExpression: `job_id = ${id}` });\n' \
+    npx eslint src/adapters/dynamo-artifact-store.ts
+  mongodb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
+    seeded "eslint: MongoDB \$where" src/adapters/mongo-artifact-store.ts \
+    '\nexport const seeded = { $where: "this.a == 1" };\n' npx eslint src/adapters/mongo-artifact-store.ts
+}
+ui_extras_typescript() {
+  frontend_checks react
+  frontend_checks vue
+  frontend_checks nextjs
+  frontend_checks angular
+  frontend_checks react-native
+}
+datastores_extras_python() {
+  mariadb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
+  sqlserver_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
+  oracle_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
+    seeded_new "import-linter: Oracle driver in application" src/demo_app/application/oracle_leak.py \
+    'import oracledb\n' uv run lint-imports
+  s3_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
+  cosmosdb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
+    seeded_new "import-linter: Cosmos DB SDK in application" src/demo_app/application/cosmos_leak.py \
+    'import azure.cosmos\n' uv run lint-imports
+  dynamodb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
+    seeded_new "import-linter: AWS SDK in application" src/demo_app/application/dynamo_leak.py \
+    'import boto3\n' uv run lint-imports
+  mongodb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
+    seeded_new "import-linter: MongoDB driver in application" src/demo_app/application/mongo_leak.py \
+    'import pymongo\n' uv run lint-imports
+}
+ui_extras_python() {
+  ssr_checks python "uv sync" src/demo_app/adapters/web/templates/index.html '/"Content-Security-Policy":/d' \
+    src/demo_app/application/complete_export.py '\nimport jinja2\n\nENGINE = jinja2\n' "uv run lint-imports"
+  ssr_api_checks python "uv sync" "uv run pytest -q -p no:warnings -m e2e"         seeded "ssr: import-linter: driver imported in the UI" src/demo_app/adapters/web/routes.py '
+import psycopg
+
+DRIVER = psycopg
+' uv run lint-imports
+}
+datastores_extras_dotnet() {
+  mariadb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+  sqlserver_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+  oracle_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+  mongodb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+  dynamodb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+  cosmosdb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+  s3_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
+}
+ui_extras_dotnet() {
+  ssr_checks dotnet "dotnet restore" src/DemoApp.Adapters/Web/Pages/Index.cshtml '/headers.ContentSecurityPolicy = /d' \
+    src/DemoApp.Application/CompleteExport.cs '\npublic static class PageLeak\n{\n    public static Microsoft.AspNetCore.Html.HtmlString Render() => new("x");\n}\n' \
+    'sed -i "s#</Project>#  <ItemGroup><FrameworkReference Include=\"Microsoft.AspNetCore.App\" /></ItemGroup>\n</Project>#" src/DemoApp.Application/DemoApp.Application.csproj; out=$(dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture" 2>&1); git checkout -q -- src/DemoApp.Application/DemoApp.Application.csproj; ! grep -q "Domain/Application must not touch I/O" <<<"$out"' \
+    src/DemoApp.Adapters/Web/Pages/Index.cshtml.cs '\npublic static class DriverLeak\n{\n    public static System.Data.Common.DbConnection? Connection { get; set; }\n}\n' \
+    'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture"'
+  ssr_api_checks dotnet "dotnet restore" 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=E2E"'
+}
+datastores_extras_go() {
+  mariadb_checks go "go mod tidy" "go test -tags integration ./..."
+  s3_checks go "go mod tidy" "go test -tags integration ./..." \
+    seeded_new "depguard: S3 SDK outside adapters" internal/application/s3_leak.go \
+    'package application\n\nimport _ "github.com/aws/aws-sdk-go-v2/service/s3"\n' go tool golangci-lint run
+  cosmosdb_checks go "go mod tidy" "go test -tags integration ./..." \
+    seeded_new "depguard: Cosmos DB SDK outside adapters" internal/application/cosmos_leak.go \
+    'package application\n\nimport _ "github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"\n' go tool golangci-lint run
+  dynamodb_checks go "go mod tidy" "go test -tags integration ./..." \
+    seeded_new "depguard: DynamoDB SDK outside adapters" internal/application/dynamo_leak.go \
+    'package application\n\nimport _ "github.com/aws/aws-sdk-go-v2/service/dynamodb"\n' go tool golangci-lint run
+  mongodb_checks go "go mod tidy" "go test -tags integration ./..." \
+    seeded_new "ruleguard: MongoDB \$where" internal/adapters/mongostore/seeded.go \
+    'package mongostore\n\nimport "go.mongodb.org/mongo-driver/v2/bson"\n\nvar seeded = bson.M{"$where": "this.a == 1"}\n' \
+    go tool golangci-lint run
+  oracle_checks go "go mod tidy" "go test -tags integration ./..." \
+    seeded_new "depguard: Oracle driver outside adapters" internal/application/oracle_leak.go \
+    'package application\n\nimport _ "github.com/sijms/go-ora/v2"\n' go tool golangci-lint run
+  sqlserver_checks go "go mod tidy" "go test -tags integration ./..." \
+    seeded_new "depguard: SQL Server driver outside adapters" internal/application/sqlserver_driver.go \
+    'package application\n\nimport _ "github.com/microsoft/go-mssqldb"\n' go tool golangci-lint run
+}
+ui_extras_go() {
+  ssr_checks go "go mod tidy" internal/adapters/web/templates/index.html '/Content-Security-Policy/d' \
+    internal/application/web_leak.go 'package application\n\nimport _ "html/template"\n' "go tool golangci-lint run --enable-only depguard ./internal/application/"
+  ssr_api_checks go "go mod tidy" "go test -tags e2e ./..."         seeded_new "ssr: depguard: driver imported in the UI" internal/adapters/web/driver_leak.go 'package web
+
+import _ "github.com/jackc/pgx/v5/pgxpool"
+' go tool golangci-lint run --enable-only depguard ./internal/adapters/web/
+}
+datastores_extras_rust() {
+  mariadb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
+  mongodb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
+  dynamodb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
+  cosmosdb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
+  s3_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
+    seeded "check-layers: S3 SDK in bootstrap" crates/bootstrap/Cargo.toml 'aws-sdk-s3 = "1"\n' bash ci/check-layers.sh
+  oracle_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
+    seeded "clippy: oracle-rs query outside the static-SQL gateway" crates/adapters/src/oracle.rs \
+    '\n/// Builds SQL from a value.\npub async fn unsafe_delete(connection: &Connection, table: &str) -> oracle_rs::Result<QueryResult> {\n    connection.execute(&format!("DELETE FROM {table}"), &[]).await\n}\n' \
+    cargo clippy -p adapters -- -D warnings
+  sqlserver_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
+    seeded "clippy: tiberius query outside the static-SQL gateway" crates/adapters/src/sqlserver.rs \
+    '\n/// Builds SQL from a value.\npub async fn unsafe_delete(client: &mut Connection, table: &str) -> tiberius::Result<u64> {\n    Ok(client.execute(format!("DELETE FROM {table}"), &[]).await?.total())\n}\n' \
+    cargo clippy -p adapters -- -D warnings
+}
+ui_extras_rust() {
+  ssr_checks rust "cargo fetch -q" crates/adapters/templates/index.html '/CONTENT_SECURITY_POLICY, PAGE_CSP/d' \
+    crates/application/Cargo.toml 'askama = "0.16"\n' "bash ci/check-layers.sh" \
+    crates/adapters/src/web.rs '\nuse redis::Client;\n' "bash ci/check-layers.sh"
+  ssr_api_checks rust "cargo fetch -q" "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test"
+}
+
+core_checks() { # the agent-tool renders, the defaults, and the full render of $stack
   echo "== $stack"
 
   # Agent-tool combinations: only the file set changes.
@@ -631,7 +756,7 @@ for stack in "${stacks[@]}"; do
 
   # Full verification on the both-tools render.
   d="$work/$stack-claude-codex"
-  cd "$d" || continue
+  cd "$d" || return
   git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base && git branch -q base
   case "$stack" in
     typescript)
@@ -652,20 +777,6 @@ for stack in "${stacks[@]}"; do
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks typescript
-      mariadb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
-      sqlserver_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
-      oracle_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
-      cosmosdb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration"
-      s3_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
-        seeded_new "dependency-cruiser: S3 SDK in application" src/application/s3-leak.ts \
-        'import "@aws-sdk/client-s3";\n' npx depcruise src --config .dependency-cruiser.cjs
-      dynamodb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
-        seeded "eslint: DynamoDB expression built from a value" src/adapters/dynamo-artifact-store.ts \
-        '\nexport const seeded = (id: string) => ({ KeyConditionExpression: `job_id = ${id}` });\n' \
-        npx eslint src/adapters/dynamo-artifact-store.ts
-      mongodb_checks typescript "npm install --no-audit --no-fund" "npm run test:integration" \
-        seeded "eslint: MongoDB \$where" src/adapters/mongo-artifact-store.ts \
-        '\nexport const seeded = { $where: "this.a == 1" };\n' npx eslint src/adapters/mongo-artifact-store.ts
       verify "integration: adapter contracts on real PostgreSQL + Redis" "npm run test:integration"
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks typescript "npm run test:e2e" src/adapters/http/app.ts 's/      xFrameOptions: "DENY",/&\n      xContentTypeOptions: false,/'
@@ -682,11 +793,6 @@ for stack in "${stacks[@]}"; do
       seeded "depcruise: npm package in domain" src/domain/export-job.ts '\nimport fc from "fast-check";\nexport const gen = fc;\n' npm run arch
       seeded "depcruise: node built-in in application" src/application/complete-export.ts '\nimport { readFileSync } from "node:fs";\nexport const read = readFileSync;\n' npm run arch
       # Frontends (ADR 0005), each in its own render.
-      frontend_checks react
-      frontend_checks vue
-      frontend_checks nextjs
-      frontend_checks angular
-      frontend_checks react-native
       printf '\nimport { InMemoryArtifactStore } from "../adapters/in-memory-artifact-store.ts";\nexport const leak = new InMemoryArtifactStore() as any;\n' >> src/domain/export-job.ts
       expect_fail "eslint: as any" npm run lint
       expect_fail "depcruise: domain -> adapters" npm run arch
@@ -708,21 +814,6 @@ for stack in "${stacks[@]}"; do
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks python
-      mariadb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
-      sqlserver_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
-      oracle_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
-        seeded_new "import-linter: Oracle driver in application" src/demo_app/application/oracle_leak.py \
-        'import oracledb\n' uv run lint-imports
-      s3_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration"
-      cosmosdb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
-        seeded_new "import-linter: Cosmos DB SDK in application" src/demo_app/application/cosmos_leak.py \
-        'import azure.cosmos\n' uv run lint-imports
-      dynamodb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
-        seeded_new "import-linter: AWS SDK in application" src/demo_app/application/dynamo_leak.py \
-        'import boto3\n' uv run lint-imports
-      mongodb_checks python "uv sync" "uv run pytest -q -p no:warnings -m integration" \
-        seeded_new "import-linter: MongoDB driver in application" src/demo_app/application/mongo_leak.py \
-        'import pymongo\n' uv run lint-imports
       verify "integration: adapter contracts on real PostgreSQL + Redis" "uv run pytest -q -p no:warnings -m integration"
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks python "uv run pytest -q -p no:warnings -m e2e" src/demo_app/adapters/http/app.py '/"X-Content-Type-Options": "nosniff",/d'
@@ -730,13 +821,6 @@ for stack in "${stacks[@]}"; do
       seeded "import-linter: driver imported in application" src/demo_app/application/complete_export.py '\nimport psycopg\n\nDRIVER = psycopg\n' uv run lint-imports
       seeded "import-linter: driver imported in bootstrap" src/demo_app/bootstrap/main.py '\nimport redis\n\nDRIVER = redis\n' uv run lint-imports
       # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
-      ssr_checks python "uv sync" src/demo_app/adapters/web/templates/index.html '/"Content-Security-Policy":/d' \
-        src/demo_app/application/complete_export.py '\nimport jinja2\n\nENGINE = jinja2\n' "uv run lint-imports"
-      ssr_api_checks python "uv sync" "uv run pytest -q -p no:warnings -m e2e"         seeded "ssr: import-linter: driver imported in the UI" src/demo_app/adapters/web/routes.py '
-import psycopg
-
-DRIVER = psycopg
-' uv run lint-imports
       seeded "ruff: SQL built with an f-string" src/demo_app/adapters/postgres_artifact_store.py '\n\ndef unsafe(connection: psycopg.Connection[TupleRow], job_id: str) -> None:\n    connection.execute(f"SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27")\n' uv run ruff check .
       # Design rules (ADR 0002), one violation at a time.
       seeded "ruff: ambient randomness in domain" src/demo_app/domain/export_job.py '\n\nimport random\n\n\ndef roll() -> float:\n    return random.random()\n' uv run ruff check .
@@ -763,24 +847,11 @@ DRIVER = psycopg
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks dotnet
-      mariadb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
-      sqlserver_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
-      oracle_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
-      mongodb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
-      dynamodb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
-      cosmosdb_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
-      s3_checks dotnet "dotnet build" 'dotnet test --project tests/DemoApp.Tests --no-build --filter-trait "Category=Integration"'
       verify "integration: adapter contracts on real PostgreSQL + Redis" 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Integration"'
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks dotnet 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=E2E"' src/DemoApp.Adapters/Http/ExportEndpoints.cs '/headers.XContentTypeOptions = "nosniff";/d'
       # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API. The Application seed adds the
       # framework reference too (without it the seed would only fail to compile) and must be caught by the arch test.
-      ssr_checks dotnet "dotnet restore" src/DemoApp.Adapters/Web/Pages/Index.cshtml '/headers.ContentSecurityPolicy = /d' \
-        src/DemoApp.Application/CompleteExport.cs '\npublic static class PageLeak\n{\n    public static Microsoft.AspNetCore.Html.HtmlString Render() => new("x");\n}\n' \
-        'sed -i "s#</Project>#  <ItemGroup><FrameworkReference Include=\"Microsoft.AspNetCore.App\" /></ItemGroup>\n</Project>#" src/DemoApp.Application/DemoApp.Application.csproj; out=$(dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture" 2>&1); git checkout -q -- src/DemoApp.Application/DemoApp.Application.csproj; ! grep -q "Domain/Application must not touch I/O" <<<"$out"' \
-        src/DemoApp.Adapters/Web/Pages/Index.cshtml.cs '\npublic static class DriverLeak\n{\n    public static System.Data.Common.DbConnection? Connection { get; set; }\n}\n' \
-        'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=Architecture"'
-      ssr_api_checks dotnet "dotnet restore" 'dotnet test --project tests/DemoApp.Tests --filter-trait "Category=E2E"'
       seeded "CA2100: SQL built by concatenation" src/DemoApp.Adapters/PostgresArtifactStore.cs '\npublic static class Unsafe\n{\n    public static NpgsqlCommand Query(NpgsqlConnection connection, string jobId) =>\n        new() { Connection = connection, CommandText = "SELECT body FROM export_artifacts WHERE job_id = \x27" + jobId + "\x27" };\n}\n' dotnet build
       # Design rules (ADR 0002), one violation at a time.
       seeded "BannedApi: ambient clock in Domain" src/DemoApp.Domain/ExportJob.cs '\npublic static class Clock\n{\n    public static DateTime Now() => DateTime.UtcNow;\n}\n' dotnet build
@@ -812,38 +883,12 @@ DRIVER = psycopg
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks go
-      mariadb_checks go "go mod tidy" "go test -tags integration ./..."
-      s3_checks go "go mod tidy" "go test -tags integration ./..." \
-        seeded_new "depguard: S3 SDK outside adapters" internal/application/s3_leak.go \
-        'package application\n\nimport _ "github.com/aws/aws-sdk-go-v2/service/s3"\n' go tool golangci-lint run
-      cosmosdb_checks go "go mod tidy" "go test -tags integration ./..." \
-        seeded_new "depguard: Cosmos DB SDK outside adapters" internal/application/cosmos_leak.go \
-        'package application\n\nimport _ "github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"\n' go tool golangci-lint run
-      dynamodb_checks go "go mod tidy" "go test -tags integration ./..." \
-        seeded_new "depguard: DynamoDB SDK outside adapters" internal/application/dynamo_leak.go \
-        'package application\n\nimport _ "github.com/aws/aws-sdk-go-v2/service/dynamodb"\n' go tool golangci-lint run
-      mongodb_checks go "go mod tidy" "go test -tags integration ./..." \
-        seeded_new "ruleguard: MongoDB \$where" internal/adapters/mongostore/seeded.go \
-        'package mongostore\n\nimport "go.mongodb.org/mongo-driver/v2/bson"\n\nvar seeded = bson.M{"$where": "this.a == 1"}\n' \
-        go tool golangci-lint run
-      oracle_checks go "go mod tidy" "go test -tags integration ./..." \
-        seeded_new "depguard: Oracle driver outside adapters" internal/application/oracle_leak.go \
-        'package application\n\nimport _ "github.com/sijms/go-ora/v2"\n' go tool golangci-lint run
-      sqlserver_checks go "go mod tidy" "go test -tags integration ./..." \
-        seeded_new "depguard: SQL Server driver outside adapters" internal/application/sqlserver_driver.go \
-        'package application\n\nimport _ "github.com/microsoft/go-mssqldb"\n' go tool golangci-lint run
       verify "integration: adapter contracts on real PostgreSQL + Redis" "go test -tags integration ./..."
       seeded_new "ruleguard: SQL built by concatenation" internal/adapters/postgres/unsafe.go 'package postgres\n\nimport "context"\n\n// Unsafe builds SQL from a value.\nfunc (s *Store) Unsafe(ctx context.Context, jobID string) error {\n\t_, err := s.pool.Exec(ctx, "SELECT body FROM export_artifacts WHERE job_id = \x27"+jobID+"\x27")\n\treturn err //nolint:wrapcheck // seeded\n}\n' go tool golangci-lint run ./internal/adapters/postgres/
       seeded_new "depguard: driver imported in application" internal/application/driver.go 'package application\n\nimport "github.com/jackc/pgx/v5/pgxpool"\n\n// Pool leaks the driver into the application layer.\ntype Pool = pgxpool.Pool\n' go tool golangci-lint run --enable-only depguard ./internal/application/
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks go "go test -tags e2e ./..." internal/adapters/httpapi/handler.go '/headers.Set("X-Content-Type-Options", "nosniff")/d'
       # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
-      ssr_checks go "go mod tidy" internal/adapters/web/templates/index.html '/Content-Security-Policy/d' \
-        internal/application/web_leak.go 'package application\n\nimport _ "html/template"\n' "go tool golangci-lint run --enable-only depguard ./internal/application/"
-      ssr_api_checks go "go mod tidy" "go test -tags e2e ./..."         seeded_new "ssr: depguard: driver imported in the UI" internal/adapters/web/driver_leak.go 'package web
-
-import _ "github.com/jackc/pgx/v5/pgxpool"
-' go tool golangci-lint run --enable-only depguard ./internal/adapters/web/
       seeded_new "depguard: net/http imported in application" internal/application/web.go 'package application\n\nimport "net/http"\n\n// Handler leaks HTTP into the application layer.\ntype Handler = http.Handler\n' go tool golangci-lint run --enable-only depguard ./internal/application/
       # Design rules (ADR 0002), one violation at a time.
       seeded_new "forbidigo: ambient clock in domain" internal/domain/clock.go 'package domain\n\nimport "time"\n\n// Now reads the wall clock.\nfunc Now() time.Time { return time.Now() }\n' go tool golangci-lint run ./internal/domain/
@@ -868,30 +913,12 @@ import _ "github.com/jackc/pgx/v5/pgxpool"
       secret_checks
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks rust
-      mariadb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
-      mongodb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
-      dynamodb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
-      cosmosdb_checks rust "cargo fetch" "cargo test -p adapters --features integration"
-      s3_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
-        seeded "check-layers: S3 SDK in bootstrap" crates/bootstrap/Cargo.toml 'aws-sdk-s3 = "1"\n' bash ci/check-layers.sh
-      oracle_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
-        seeded "clippy: oracle-rs query outside the static-SQL gateway" crates/adapters/src/oracle.rs \
-        '\n/// Builds SQL from a value.\npub async fn unsafe_delete(connection: &Connection, table: &str) -> oracle_rs::Result<QueryResult> {\n    connection.execute(&format!("DELETE FROM {table}"), &[]).await\n}\n' \
-        cargo clippy -p adapters -- -D warnings
-      sqlserver_checks rust "cargo fetch" "cargo test -p adapters --features integration" \
-        seeded "clippy: tiberius query outside the static-SQL gateway" crates/adapters/src/sqlserver.rs \
-        '\n/// Builds SQL from a value.\npub async fn unsafe_delete(client: &mut Connection, table: &str) -> tiberius::Result<u64> {\n    Ok(client.execute(format!("DELETE FROM {table}"), &[]).await?.total())\n}\n' \
-        cargo clippy -p adapters -- -D warnings
       verify "integration: adapter contracts on real PostgreSQL + Redis" "cargo test -p adapters --features integration"
       seeded "sqlx: SQL built from a string does not compile" crates/adapters/src/postgres.rs '\n/// Builds SQL from a value.\npub async fn unsafe_read(pool: &PgPool, job_id: &str) -> Result<(), PortError> {\n    let sql = format!("SELECT body FROM export_artifacts WHERE job_id = \x27{job_id}\x27");\n    sqlx::query(&sql).execute(pool).await?;\n    Ok(())\n}\n' cargo check -p adapters
       seeded "check-layers: driver in bootstrap" crates/bootstrap/Cargo.toml 'redis = "1.8"\n' bash ci/check-layers.sh
       # HTTP API (docs/adr/0004-http-api.md).
       http_checks rust "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test" crates/adapters/src/http.rs '/X_CONTENT_TYPE_OPTIONS/d'
       # Server-rendered UI (ADR 0005), alone and sharing the server with the JSON API.
-      ssr_checks rust "cargo fetch -q" crates/adapters/templates/index.html '/CONTENT_SECURITY_POLICY, PAGE_CSP/d' \
-        crates/application/Cargo.toml 'askama = "0.16"\n' "bash ci/check-layers.sh" \
-        crates/adapters/src/web.rs '\nuse redis::Client;\n' "bash ci/check-layers.sh"
-      ssr_api_checks rust "cargo fetch -q" "npm --prefix e2e install --no-audit --no-fund && npm --prefix e2e test"
       seeded "check-layers: web framework in application" crates/application/Cargo.toml 'axum = "0.8"\n' bash ci/check-layers.sh
       # Design rules (ADR 0002), one violation at a time.
       seeded "clippy: ambient clock in domain" crates/domain/src/lib.rs '\n/// Reads the wall clock.\npub fn now() -> std::time::SystemTime {\n    std::time::SystemTime::now()\n}\n' cargo clippy -p domain -- -D warnings
@@ -919,6 +946,13 @@ import _ "github.com/jackc/pgx/v5/pgxpool"
     echo "{\"tool_input\":{\"file_path\":\"$first\"}}" | CLAUDE_PROJECT_DIR="$d" bash .claude/hooks/protect-guardrails.sh 2>/dev/null
     [ $? -eq 2 ] && pass "hook blocks edit of $first" || fail "hook did not block $first"
   fi
+  cd "$repo" || exit 1
+}
+
+for stack in "${stacks[@]}"; do
+  part core && core_checks
+  part datastores && { echo "== $stack (datastores)"; "datastores_extras_$stack"; }
+  part ui && { echo "== $stack (ui)"; "ui_extras_$stack"; }
   cd "$repo" || exit 1
 done
 

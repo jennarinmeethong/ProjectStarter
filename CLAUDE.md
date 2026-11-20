@@ -18,7 +18,8 @@ Requires `git`, `bash` ≥ 4, `uv`; Node.js ≥ 22.12 for TypeScript renders and
 - Render one project: `uvx copier copy --trust --defaults -d project_name=demo -d stack=<typescript|python|dotnet|go|rust> . <dest>` (renders the working tree, including uncommitted changes)
 - Full test (renders every stack × agent combination, runs each project's verify, then seeds violations that must be rejected): `bash tests/render-all.sh`
 - One stack: `bash tests/render-all.sh python`
-- CI (`.github/workflows/render-all.yml`) runs `tests/render-all.sh` for every stack in parallel on each PR into `main`; locally, run only the stacks you changed.
+- One part of a stack: `SHARD=core bash tests/render-all.sh python` (`core`, `datastores` or `ui`; the default `all` runs every part)
+- CI (`.github/workflows/render-all.yml`) runs `tests/render-all.sh` for every stack and part in parallel on each PR into `main`; locally, run only the stacks you changed.
 - Validate the plugin manifests: `claude plugin validate .`
 - `git diff --check` — whitespace errors
 
