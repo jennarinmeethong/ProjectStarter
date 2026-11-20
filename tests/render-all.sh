@@ -600,6 +600,19 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
   grep -q '"E2E_PORT": "20102"' "$tasks/a/.claude/settings.local.json" && pass "new-task: claude env" || fail "new-task: claude env"
   grep -q "$(git rev-parse main)" "$tasks/a/.task/brief.md" && grep -q 'COMPOSE_PROJECT_NAME=demo-app-a' "$tasks/a/.task/env" \
     && pass "new-task: brief has base SHA, compose project per task" || fail "new-task: brief or compose project"
+
+  touch "$tasks/a/x.txt"
+  expect_fail "end-task: dirty worktree" bash scripts/end-task.sh a
+  rm -f "$tasks/a/x.txt"
+  (cd "$tasks/b" && echo b > b.txt && git add b.txt && git -c user.name=t -c user.email=t@t commit -qm b)
+  expect_fail "end-task: unmerged branch" bash scripts/end-task.sh b
+  bash scripts/end-task.sh b --force >/dev/null && [ ! -e "$tasks/b" ] && ! git show-ref -q --verify refs/heads/task/b \
+    && pass "end-task: --force" || fail "end-task: --force"
+  bash scripts/end-task.sh a >/dev/null && bash scripts/new-task.sh e >/dev/null && grep -q '^export TASK_SLOT=1$' "$tasks/e/.task/env" \
+    && pass "end-task: slot reused" || fail "end-task: slot reused"
+  expect_fail "end-task: from inside the task" bash -c "cd $tasks/c && bash scripts/end-task.sh c"
+  bash scripts/end-task.sh c >/dev/null && bash scripts/end-task.sh e >/dev/null && [ -z "$(git worktree list | sed 1d)" ] \
+    && pass "end-task: all tasks removed" || fail "end-task: tasks left behind"
 }
 
 automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by path, and the workflow lints clean
