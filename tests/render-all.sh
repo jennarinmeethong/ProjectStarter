@@ -584,6 +584,8 @@ model_check_checks() { # in the full render (model_check=true): TLC passes the m
 
 task_checks() { # in the full render (both tools, git repo on main): scripts/new-task.sh and scripts/end-task.sh
   local tasks
+  grep -q 'scripts/new-task.sh' AGENTS.md && grep -q 'scripts/new-task.sh' docs/engineering/parallel-work.md \
+    && grep -qF -- '- [x] worktree' docs/roadmap.md && pass "parallel work documented" || fail "parallel work docs missing"
   tasks="../$(basename "$PWD")-tasks"
   if bash scripts/new-task.sh a >/dev/null && bash scripts/new-task.sh b >/dev/null \
     && grep -q '^export TASK_SLOT=1$' "$tasks/a/.task/env" && grep -q '^export E2E_PORT=20102$' "$tasks/a/.task/env" \

@@ -1,0 +1,42 @@
+# ทำงานขนานด้วย worktree
+
+หลัก: **หนึ่งงาน หนึ่ง worktree หนึ่ง branch หนึ่ง PR** แต่ละงานต้องมี port, test data และ container ของตัวเอง เพื่อให้ agent หลายตัวรัน test พร้อมกันได้โดยไม่ชนกัน (ที่มา: `docs/combined.md` H5 และหัวข้อเรื่อง worktree)
+
+## เริ่มเมื่อไร
+
+ไว้ใจก่อน แล้วค่อยขนาน: เพิ่มจำนวน agent เมื่อ inner loop เชื่อถือได้แล้ว คือมีตัวชี้วัดของระยะ 0 และ guardrail ของระยะ 1–4 ใน `docs/roadmap.md` ผ่านแล้ว ถ้าเปิด agent หลายตัวก่อนถึงจุดนั้น จะได้ PR ที่ต้องแก้ซ้ำมากขึ้น ไม่ได้งานเพิ่มขึ้น เมื่อเริ่มแล้วให้วัดว่าตัวชี้วัดเสถียรภาพ (revert, incident) ไม่แย่ลงเมื่อจำนวนงานเพิ่ม
+
+## แบ่งงาน
+
+- แบ่งตามไฟล์ งานที่ขนานกันต้องไม่แก้ไฟล์เดียวกัน ถ้าต้องแก้ shared interface (port, schema, public API) ให้ทำงานนั้นก่อนแล้ว merge จากนั้นงานที่พึ่งมันจึงเริ่มจาก commit ใหม่
+- งานที่ต้องรอ PR อื่นให้ระบุใน *Depends on PRs* ของ brief และใน PR description
+- จำนวนงานที่เปิดพร้อมกันถูกจำกัดที่ 3 (`MAX_TASKS`) เพราะงานที่ค้างมากกว่าคิว review และ CI ที่รับไหว ทำให้รอนานขึ้นและ conflict เพิ่มขึ้น ปรับค่าได้เมื่อตัวชี้วัดบอกว่ารับไหว
+
+## คำสั่ง
+
+```bash
+bash scripts/new-task.sh <name> [base-ref]   # worktree ที่ ../<repo>-tasks/<name>, branch task/<name>
+bash scripts/end-task.sh <name> [--force]    # หลัง PR merge แล้ว: ลบ worktree, branch และ container ของงาน
+```
+
+`new-task.sh` เขียนไฟล์เหล่านี้ใน worktree ใหม่ (ไม่ถูก commit):
+
+- `.task/env`: port ของงาน (`PORT`, `APP_PORT`, `E2E_PORT`, `UI_PORT`, `WEB_PORT`) และ `COMPOSE_PROJECT_NAME` แต่ละงานได้ช่วง port `20000 + slot*100` ที่ไม่ซ้ำกัน checkout หลักที่ไม่มีไฟล์นี้ใช้ port ปกติ
+- `.task/brief.md`: base SHA, branch และหัวข้อ *Scope*, *Acceptance tests*, *Depends on PRs*, *Owner* ให้กรอกก่อนเริ่มงาน แล้วใช้เป็นจุดเริ่มของ PR description
+{%- if 'claude' in agent_tools %}
+- `.claude/settings.local.json`: env ชุดเดียวกัน ให้ Claude Code ใช้กับทุกคำสั่งที่รันใน worktree นี้
+{%- endif %}
+
+`end-task.sh` ไม่ยอมลบงานที่ยังมีไฟล์ไม่ได้ commit และไม่ยอมลบ branch ที่ยังมี commit ที่ไม่อยู่ใน default branch (ใช้ `--force` เมื่อตั้งใจทิ้งงานนั้น) และต้องรันจากนอก worktree ของงาน
+{%- if 'claude' in agent_tools %}
+
+## Claude Code
+
+รัน `claude` ใน worktree ของงาน (`cd ../<repo>-tasks/<name> && claude`) hook, deny rules และ Stop hook ทำงานเหมือนใน checkout หลัก `claude --worktree` ใช้กับงานทดลองที่ทิ้งได้ แต่จะไม่ได้ port ของงาน
+{%- endif %}
+{%- if 'codex' in agent_tools %}
+
+## Codex
+
+Codex cloud รันแต่ละงานใน sandbox ของตัวเองอยู่แล้ว จึงไม่มีปัญหา port ชนกัน ใช้ `{{ cmd.install }}` เป็น setup script ของ environment สำหรับ Codex CLI ในเครื่องให้ `source .task/env` ใน worktree ของงานก่อนเริ่ม
+{%- endif %}
