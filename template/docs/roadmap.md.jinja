@@ -1,6 +1,6 @@
 # Roadmap: นำแนวทาง agent engineering มาใช้เป็นระยะ
 
-เกณฑ์ผ่านแต่ละระยะสำคัญกว่าเวลา (ที่มา: `docs/combined.md` ส่วนที่ 1 หัวข้อ 6.7) ProjectStarter ติดตั้งของระยะ 0–2 มาให้แล้ว ให้ทำเครื่องหมายเมื่อยืนยันว่าใช้งานได้จริงใน repo นี้
+เกณฑ์ผ่านแต่ละระยะสำคัญกว่าเวลา (ที่มา: `docs/combined.md` ส่วนที่ 1 หัวข้อ 6.7) ProjectStarter ติดตั้งของระยะ 0–2 และบางส่วนของระยะ 4 มาให้แล้ว ให้ทำเครื่องหมายเมื่อยืนยันว่าใช้งานได้จริงใน repo นี้
 
 ## ระยะ 0 — วัดฐาน
 - [ ] นิยาม change failure rate, revert rate และ incident ของทีม
@@ -42,9 +42,10 @@
 **ผ่านเมื่อ:** ความผิดพลาดซ้ำที่ encode ได้ ถูก encode ภายใน 2 sprint
 
 ## ระยะ 4 — Verification
-- [ ] property / model-based test ในโมดูล tier 2
-- [ ] runtime verification (Playwright) ผ่าน CLI + feature map
-- [x] mutation testing ของ domain ในทุก PR (CI job `mutation`, threshold 99%) — ขยาย scope ไป application เมื่อ domain นิ่ง
+- [x] property-based test ของ domain (ตัวอย่างใน test ของ `ExportJob`) — ขยายไปโมดูล tier 2 อื่น และเพิ่ม model-based test เมื่อมี state machine
+{% if frontend != 'none' %}- [x] runtime verification (Playwright + axe ใน `e2e-ui/`) — ผูก flow เข้ากับ `docs/feature-map.md`
+{% else %}- [ ] runtime verification (Playwright) ผ่าน CLI + feature map
+{% endif %}- [x] mutation testing ของ domain ในทุก PR (CI job `mutation`, threshold 99%) — ขยาย scope ไป application เมื่อ domain นิ่ง
 - [ ] model check เฉพาะ protocol วิกฤต
 
 **ผ่านเมื่อ:** PR tier 1–2 แนบหลักฐานครบ และ mutation score ไม่ลดลง
