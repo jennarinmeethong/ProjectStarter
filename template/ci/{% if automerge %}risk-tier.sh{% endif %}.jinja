@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# ci/risk-tier.sh — print the risk tier (docs/risk-tiers.md) of the change from <base> to <head>, judged by path only.
+#   0  every changed file is documentation (docs/ or *.md), and none of it is policy
+#   3  any changed file is on a tier-3 path: risk paths, guardrail configs, ci/, .github/, tests/acceptance/, agent rules
+#   1  anything else: a human reviews it and decides between tier 1 and 2
+# .github/workflows/automerge.yml acts on 0 only. Usage: ci/risk-tier.sh <base> [head]   (head defaults to HEAD)
+set -euo pipefail
+
+base_ref=${1:?usage: ci/risk-tier.sh <base> [head]}
+head_ref=${2:-HEAD}
+base=$(git merge-base "$base_ref" "$head_ref")
+
+# Tier-3 prefixes. A risk path such as auth/ matches at any depth, as in CODEOWNERS.
+risk_paths=({% for p in risk_paths %}'{{ p }}' {% endfor %})
+tier3=({% for f in stk.guardrail_files %}'{{ f }}' {% endfor %}'ci/' '.github/' 'tests/acceptance/' 'AGENTS.md'{% if 'claude' in agent_tools %} 'CLAUDE.md' '.claude/'{% endif %}{% if model_check %} 'models/'{% endif %} 'docs/risk-tiers.md')
+
+is_tier3() {
+  local f=$1 p
+  for p in "${tier3[@]}"; do
+    if [ "${p%/}" != "$p" ]; then # a directory: everything under it
+      case "$f" in "$p"*) return 0 ;; esac
+    elif [ "$f" = "$p" ]; then
+      return 0
+    fi
+  done
+  for p in "${risk_paths[@]}"; do
+    case "$f" in "$p"* | */"$p"*) return 0 ;; esac
+  done
+  return 1
+}
+
+is_doc() {
+  case "$1" in docs/* | *.md) return 0 ;; *) return 1 ;; esac
+}
+
+tier=0
+changed=0
+# --no-renames: a rename counts as a delete plus an add, so both paths are judged.
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  changed=1
+  if is_tier3 "$f"; then
+    echo 3
+    exit 0
+  fi
+  is_doc "$f" || tier=1
+done < <(git diff --no-renames --name-only "$base" "$head_ref")
+[ "$changed" = 1 ] || tier=1 # an empty diff is not a tier-0 change to merge
+echo "$tier"

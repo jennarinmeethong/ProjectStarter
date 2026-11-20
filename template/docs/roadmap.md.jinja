@@ -46,12 +46,16 @@
 {% if frontend != 'none' %}- [x] runtime verification (Playwright + axe ใน `e2e-ui/`) — ผูก flow เข้ากับ `docs/feature-map.md`
 {% else %}- [ ] runtime verification (Playwright) ผ่าน CLI + feature map
 {% endif %}- [x] mutation testing ของ domain ในทุก PR (CI job `mutation`, threshold 99%) — ขยาย scope ไป application เมื่อ domain นิ่ง
-- [ ] model check เฉพาะ protocol วิกฤต
-
+{% if model_check %}- [x] model check เฉพาะ protocol วิกฤต (`models/ExportWorkers.tla`, CI job `model-check`) — เขียน model ของ protocol จริงของโปรเจคแทนตัวอย่าง
+{% else %}- [ ] model check เฉพาะ protocol วิกฤต (รัน `copier update` แล้วตอบ `model_check` เพื่อได้ TLA+ model และ CI job)
+{% endif %}
 **ผ่านเมื่อ:** PR tier 1–2 แนบหลักฐานครบ และ mutation score ไม่ลดลง
 
 ## ระยะ 5 — Risk-based review
-- [ ] ใช้ `docs/risk-tiers.md` จริง, automerge tier 0 ก่อน แล้วค่อยเปิด tier 1 ตามเกณฑ์
+{% if automerge %}- [x] automerge tier 0 (`.github/workflows/automerge.yml` + `ci/risk-tier.sh`)
+- [ ] เปิด "Allow auto-merge" และ branch protection ที่มี required status checks (ถ้าไม่มี required checks GitHub จะ merge ทันที)
+{% else %}- [ ] automerge tier 0 (รัน `copier update` แล้วตอบ `automerge` หลังมีตัวชี้วัดของระยะ 0)
+{% endif %}- [ ] ใช้ `docs/risk-tiers.md` จริง แล้วค่อยเปิด tier 1 ตามเกณฑ์
 
 **ผ่านเมื่อ:** revert/incident ของ tier ที่ผ่อนลงคงที่ตามเกณฑ์ที่กำหนดไว้ล่วงหน้า
 

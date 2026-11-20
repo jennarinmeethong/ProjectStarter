@@ -7,9 +7,19 @@
 | 0 ต่ำมาก | docs, เพิ่ม test (ไม่แก้ test เดิม), แก้ lint, dependency patch | CI เขียวทั้งหมด, ratchet ไม่เพิ่ม | ไม่ต้อง | ได้ (เมื่อเปิดใช้ตาม roadmap ระยะ 5) |
 | 1 ต่ำ | product code ใน `{{ src_root }}/` ที่อยู่หลัง feature flag และไม่แตะ type ที่ใช้ร่วม | ข้างบน + runtime artifact (trace/screenshot) ของ feature ID ที่แตะ | ดู artifact แบบเร็ว | ได้ หลังผ่านเกณฑ์เลื่อนขั้น |
 | 2 กลาง | domain logic, data model, public API, shared type, performance | ข้างบน + property/model-based test + spec ที่อนุมัติ + ตอบ [security checklist](security/owasp.md) | review โค้ดเต็มรูปแบบ 1 คน | ไม่ได้ |
-| 3 สูง | {% for p in risk_paths %}`{{ p }}`, {% endfor %}`.github/`{% if 'claude' in agent_tools %}, `.claude/`{% endif %}, config ของ guardrail, `tests/acceptance/` | ข้างบน + owner{% if guardrail_owner %} ตาม CODEOWNERS{% endif %} + แผน rollback | owner + reviewer อีก 1 คน | ไม่ได้เด็ดขาด |
+| 3 สูง | {% for p in risk_paths %}`{{ p }}`, {% endfor %}`.github/`{% if 'claude' in agent_tools %}, `.claude/`{% endif %}{% if model_check %}, `models/`{% endif %}, config ของ guardrail, `tests/acceptance/`, `ci/`, `AGENTS.md`, `docs/risk-tiers.md` | ข้างบน + owner{% if guardrail_owner %} ตาม CODEOWNERS{% endif %} + แผน rollback | owner + reviewer อีก 1 คน | ไม่ได้เด็ดขาด |
 
-## เกณฑ์เลื่อนหรือลด tier
+{% if automerge %}## Automerge tier 0
+
+`.github/workflows/automerge.yml` รัน `ci/risk-tier.sh` (ฉบับใน base branch) กับทุก PR จาก repo เดียวกัน:
+
+- ได้ 0 (ทุกไฟล์เป็น `docs/` หรือ `*.md` และไม่ใช่ไฟล์ tier 3) → เปิด GitHub auto-merge ซึ่ง merge เมื่อ required status checks ผ่าน
+- ได้ 1 หรือ 3 → ปิด auto-merge ให้คน review ตามตารางข้างบน
+- ตอนนี้ script จัดเฉพาะ docs เป็น tier 0 ส่วน "เพิ่ม test" และ "dependency patch" ยังต้องมีคน review จนกว่าจะวัดตามเกณฑ์ด้านล่างแล้วจึงขยาย
+- ต้องเปิด "Allow auto-merge" และ branch protection ที่มี required status checks ก่อน ถ้าไม่มี required checks GitHub จะ merge ทันที
+- merge ที่ทำด้วย `GITHUB_TOKEN` ไม่ trigger workflow `push` ของ commit นั้น ผลของ CI ที่เชื่อได้คือผลบน PR
+
+{% endif %}## เกณฑ์เลื่อนหรือลด tier
 
 - tier จะผ่อนลง (เช่น tier 1 เปิด automerge) ได้เฉพาะเมื่อวัดแล้วว่า change failure rate และ revert rate ของ PR ประเภทนั้นคงที่ในช่วงเวลาที่กำหนดไว้ล่วงหน้า
 - นิยาม "revert" ให้ชัดก่อนวัด: <นิยามของทีม>

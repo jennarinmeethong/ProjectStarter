@@ -115,6 +115,20 @@ frontend:
       validator: "{% if stack == 'typescript' %}Python, .NET, Go and Rust only{% endif %}"
   default: none
 
+model_check:
+  type: bool
+  help: >-
+    Add a TLA+ model of the export queue (leases, fenced completion) checked by TLC in Docker (CI job model-check).
+    For projects with a concurrent protocol worth modelling (roadmap phase 4)
+  default: false
+
+automerge:
+  type: bool
+  help: >-
+    Add a workflow that turns on GitHub auto-merge for documentation-only PRs (risk tier 0) and off for everything
+    else. Turn it on after phase 0 metrics exist; it also needs required status checks (roadmap phase 5)
+  default: false
+
 # ---------- computed values (never asked) ----------
 # An HTTP server runs: the JSON API, the server-rendered UI, or both on one server. Guards server infrastructure
 # (dependencies, bootstrap, container port, DAST); `http_api` alone still guards the JSON routes and their tests.

@@ -39,6 +39,9 @@
 - UI: a driving adapter over the same use cases; accessibility is a gate (`docs/adr/0005-frontend.md`).
   Browser tests (Playwright + axe): `{{ cmd.test_ui }}`
 {%- endif %}
+{%- if model_check %}
+- Concurrent protocols: TLA+ models in `models/`, checked by `bash ci/model-check.sh` (`docs/adr/0006-model-check.md`).
+{%- endif %}
 - Why rules exist: `docs/adr/` · Where a new rule belongs: `docs/engineering/where-rules-live.md`
 - Specs for risk tier 2–3 work: copy `SPEC.template.md` to `docs/specs/<feature-id>.md`
 
@@ -47,5 +50,5 @@
 - Keep comments for reasons the code cannot show (ordering, provider limits, compatibility).
 
 ## Risk
-- Changes under {% for p in risk_paths %}`{{ p }}`, {% endfor %}`.github/`{% if 'claude' in agent_tools %}, `.claude/`{% endif %} or guardrail configs need owner review
-  (`docs/risk-tiers.md`); never mark them ready for automerge.
+- Changes under {% for p in risk_paths %}`{{ p }}`, {% endfor %}`.github/`{% if 'claude' in agent_tools %}, `.claude/`{% endif %}{% if model_check %}, `models/`{% endif %} or guardrail configs need owner review
+  (`docs/risk-tiers.md`); never mark them ready for automerge.{% if automerge %} Only docs-only PRs (`ci/risk-tier.sh` → 0) auto-merge.{% endif %}
