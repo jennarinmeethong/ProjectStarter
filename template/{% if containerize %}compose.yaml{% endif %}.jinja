@@ -13,7 +13,7 @@ services:
     tmpfs: [/tmp]
 {%- if serve_http %}
     # Published on the host's loopback only.
-    ports: ["127.0.0.1:8080:8080"]
+    ports: ["127.0.0.1:${APP_PORT:-8080}:8080"]
 {%- endif %}
 {%- if stack == 'dotnet' and frontend == 'ssr' %}
     # Antiforgery keys outlive the container, so forms opened before a restart still post (ADR 0005).
@@ -311,7 +311,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     tmpfs: [/tmp]
     # Published on the host's loopback only.
-    ports: ["127.0.0.1:8081:8080"]
+    ports: ["127.0.0.1:${WEB_PORT:-8081}:8080"]
 {%- endif %}
 {%- if 'postgres' in datastores or mysql_engine or 'sqlserver' in datastores or 'oracle' in datastores or 'mongodb' in datastores or (stack == 'dotnet' and frontend == 'ssr') %}
 

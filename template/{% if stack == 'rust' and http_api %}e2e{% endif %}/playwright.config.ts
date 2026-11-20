@@ -2,7 +2,7 @@
 // needed until there is a UI; add browser projects here when one exists.
 import { defineConfig } from "@playwright/test";
 
-const port = 8787;
+const port = Number(process.env.E2E_PORT ?? "8787");
 
 export default defineConfig({
   testDir: ".",

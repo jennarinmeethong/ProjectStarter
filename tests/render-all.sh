@@ -826,7 +826,10 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks typescript
       verify "integration: adapter contracts on real PostgreSQL + Redis" "npm run test:integration"
-      # HTTP API (docs/adr/0004-http-api.md).
+      # HTTP API (docs/adr/0004-http-api.md). A task worktree moves the test port (docs/engineering/parallel-work.md).
+      grep -q 'process.env.E2E_PORT' playwright.config.ts && grep -q 'APP_PORT:-8080' compose.yaml \
+        && pass "ports read the environment" || fail "test or compose ports are fixed"
+      verify "playwright: API tests on E2E_PORT=28702" "E2E_PORT=28702 npm run test:e2e"
       http_checks typescript "npm run test:e2e" src/adapters/http/app.ts 's/      xFrameOptions: "DENY",/&\n      xContentTypeOptions: false,/'
       seeded "depcruise: web framework imported in application" src/application/complete-export.ts '\nimport { Hono } from "hono";\nexport const framework = Hono;\n' npm run arch
       seeded "depcruise: driver imported in application" src/application/complete-export.ts '\nimport pg from "pg";\nexport const driver = pg;\n' npm run arch
