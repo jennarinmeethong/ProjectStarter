@@ -1,4 +1,5 @@
-# Runs tests/render-all.sh for every stack in parallel (phase 5a).
+# Runs tests/render-all.sh for every stack in parallel (phase 5a), each stack split into three parts (SHARD: core,
+# datastores, ui) so the slowest job is one part of a stack, not a whole stack.
 # The workflow only installs toolchains; all checks live in the script, so CI and a local run stay the same.
 name: render-all
 
@@ -21,12 +22,15 @@ concurrency:
 jobs:
   render-all:
     runs-on: ubuntu-latest
-    # TypeScript runs five frontend renders (image build + two ZAP scans each) on top of every datastore.
-    timeout-minutes: 180
+    # The longest part, TypeScript ui, runs five frontend renders (image build + two ZAP scans each).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         stack: [typescript, python, dotnet, go, rust]
+        shard: [core, datastores, ui]
+    env:
+      SHARD: ${{ matrix.shard }}
     steps:
       # Each job pulls every datastore image and builds several renders (Rust: one target/ per render); make room first.
       - name: Free disk space
@@ -54,6 +58,9 @@ jobs:
       # System libraries for the Playwright browser checks of the frontend renders.
       - if: matrix.stack == 'typescript'
         run: npx --yes playwright@1.64 install-deps chromium # same minor as the template's @playwright/test
+      # Rust renders in one job share a target dir, so dependencies compile once. Not in core: cargo-mutants runs there.
+      - if: matrix.stack == 'rust' && matrix.shard != 'core'
+        run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
       - run: bash tests/render-all.sh ${{ matrix.stack }}
 
   whitespace:

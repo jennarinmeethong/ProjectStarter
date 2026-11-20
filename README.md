@@ -92,7 +92,13 @@ bash tests/render-all.sh
 bash tests/render-all.sh python
 ```
 
-CI (`.github/workflows/render-all.yml`) รัน `tests/render-all.sh` ทุก stack ขนานกันในทุก PR เข้า `main` จึงไม่จำเป็นต้องรันครบทุก stack ในเครื่อง ระหว่างพัฒนาให้รันเฉพาะ stack ที่แก้
+ทดสอบเฉพาะส่วนของ stack ด้วย `SHARD=core`, `SHARD=datastores` หรือ `SHARD=ui` (ค่าเริ่มต้น `all` รันทุกส่วน):
+
+```bash
+SHARD=ui bash tests/render-all.sh python
+```
+
+CI (`.github/workflows/render-all.yml`) รัน `tests/render-all.sh` ทุก stack และทุกส่วนขนานกัน (15 job) ในทุก PR เข้า `main` จึงไม่จำเป็นต้องรันครบทุก stack ในเครื่อง ระหว่างพัฒนาให้รันเฉพาะ stack ที่แก้
 
 ## เพิ่ม stack ใหม่
 
