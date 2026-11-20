@@ -612,9 +612,26 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
     && pass "end-task: --force" || fail "end-task: --force"
   bash scripts/end-task.sh a >/dev/null && bash scripts/new-task.sh e >/dev/null && grep -q '^export TASK_SLOT=1$' "$tasks/e/.task/env" \
     && pass "end-task: slot reused" || fail "end-task: slot reused"
-  expect_fail "end-task: from inside the task" bash -c "cd $tasks/c && bash scripts/end-task.sh c"
+  expect_fail "end-task: from inside the task" bash -c "cd '$tasks/c' && bash scripts/end-task.sh c"
   bash scripts/end-task.sh c >/dev/null && bash scripts/end-task.sh e >/dev/null && [ -z "$(git worktree list | sed 1d)" ] \
     && pass "end-task: all tasks removed" || fail "end-task: tasks left behind"
+  # A squash merge (what automerge does) leaves the task's own commits out of main; the change is in, so it is merged.
+  bash scripts/new-task.sh s >/dev/null
+  (cd "$tasks/s" && echo s > s.txt && git add s.txt && git -c user.name=t -c user.email=t@t commit -qm s)
+  git merge -q --squash task/s && git -c user.name=t -c user.email=t@t commit -qm "squash s"
+  bash scripts/end-task.sh s >/dev/null && pass "end-task: squash-merged task" || fail "end-task: squash-merged task refused"
+  # No origin/HEAD and no local main: the default branch is the main checkout's branch.
+  bash scripts/new-task.sh t >/dev/null && git branch -q -m main trunk
+  bash scripts/end-task.sh t >/dev/null && pass "end-task: default branch without origin/HEAD or main" \
+    || fail "end-task: default branch without origin/HEAD or main"
+  git branch -q -m trunk main
+  # Each task builds its own image tag, so one task's build cannot replace another's.
+  if [ -f compose.yaml ]; then
+    bash scripts/new-task.sh i >/dev/null
+    grep -q 'IMAGE_TAG:-local' compose.yaml && grep -q '^export IMAGE_TAG=task-i$' "$tasks/i/.task/env" \
+      && pass "new-task: image tag per task" || fail "new-task: image tag per task"
+    bash scripts/end-task.sh i >/dev/null
+  fi
 }
 
 automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by path, and the workflow lints clean

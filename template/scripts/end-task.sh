@@ -22,9 +22,26 @@ here=$(git rev-parse --show-toplevel | tr '[:upper:]' '[:lower:]')
 
 [ -z "$(git -C "$path" status --porcelain)" ] || die "$path has uncommitted changes; commit or discard them first"
 
-default=$(git symbolic-ref -q --short refs/remotes/origin/HEAD || echo main)
-if [ "$force" != --force ] && ! git merge-base --is-ancestor "$branch" "$default"; then
-  die "$branch has commits that are not in $default. Merge its PR first, or pass --force to drop them"
+# Merged into what: origin's default branch (fetched first, so a PR merged on GitHub counts), else the main checkout's branch.
+merged() {
+  local default mb squashed
+  if git remote | grep -qx origin; then
+    GIT_TERMINAL_PROMPT=0 git fetch -q origin 2>/dev/null || echo "end-task: could not fetch origin; using what is already fetched" >&2
+  fi
+  default=$(git symbolic-ref -q --short refs/remotes/origin/HEAD \
+    || git worktree list --porcelain | sed -n '1,/^$/s/^branch refs\/heads\///p')
+  git rev-parse --verify -q "${default:-HEAD}^{commit}" >/dev/null && [ -n "$default" ] \
+    || die "cannot find the default branch; run 'git remote set-head origin -a', or pass --force"
+  git merge-base --is-ancestor "$branch" "$default" && return 0
+  # Squash or rebase merge: the branch's commits are not in the default branch, but the same change is.
+  mb=$(git merge-base "$default" "$branch") || return 1
+  squashed=$(git commit-tree "$branch^{tree}" -p "$mb" -m squash)
+  [[ "$(git cherry "$default" "$squashed")" == -* ]] && return 0
+  echo "end-task: $branch has changes that are not in $default" >&2
+  return 1
+}
+if [ "$force" != --force ] && ! merged; then
+  die "merge its PR first (and fetch), or pass --force to drop the work"
 fi
 
 # Stop the task's containers, if any (best effort: Docker may not be installed or running).

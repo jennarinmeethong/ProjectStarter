@@ -6,7 +6,7 @@
 services:
   app:
     build: .
-    image: {{ project_name | lower }}:local
+    image: {{ project_name | lower }}:${IMAGE_TAG:-local}
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -305,7 +305,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
-    image: {{ project_name | lower }}-web:local
+    image: {{ project_name | lower }}-web:${IMAGE_TAG:-local}
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]

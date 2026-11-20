@@ -21,13 +21,13 @@ bash scripts/end-task.sh <name> [--force]    # หลัง PR merge แล้�
 
 `new-task.sh` เขียนไฟล์เหล่านี้ใน worktree ใหม่ (ไม่ถูก commit):
 
-- `.task/env`: port ของงาน (`PORT`, `APP_PORT`, `E2E_PORT`, `UI_PORT`, `WEB_PORT`) และ `COMPOSE_PROJECT_NAME` แต่ละงานได้ช่วง port `20000 + slot*100` ที่ไม่ซ้ำกัน checkout หลักที่ไม่มีไฟล์นี้ใช้ port ปกติ
+- `.task/env`: port ของงาน (`PORT`, `APP_PORT`, `E2E_PORT`, `UI_PORT`, `WEB_PORT`), `COMPOSE_PROJECT_NAME` และ `IMAGE_TAG` (image ที่ build ใน compose) แต่ละงานได้ช่วง port `20000 + slot*100` ที่ไม่ซ้ำกัน checkout หลักที่ไม่มีไฟล์นี้ใช้ port ปกติ
 - `.task/brief.md`: base SHA, branch และหัวข้อ *Scope*, *Acceptance tests*, *Depends on PRs*, *Owner* ให้กรอกก่อนเริ่มงาน แล้วใช้เป็นจุดเริ่มของ PR description
 {%- if 'claude' in agent_tools %}
 - `.claude/settings.local.json`: env ชุดเดียวกัน ให้ Claude Code ใช้กับทุกคำสั่งที่รันใน worktree นี้
 {%- endif %}
 
-`end-task.sh` ไม่ยอมลบงานที่ยังมีไฟล์ไม่ได้ commit และไม่ยอมลบ branch ที่ยังมี commit ที่ไม่อยู่ใน default branch (ใช้ `--force` เมื่อตั้งใจทิ้งงานนั้น) และต้องรันจากนอก worktree ของงาน
+`end-task.sh` fetch จาก origin ก่อน ไม่ยอมลบงานที่ยังมีไฟล์ไม่ได้ commit และไม่ยอมลบ branch ที่มีการเปลี่ยนแปลงที่ยังไม่อยู่ใน default branch (squash merge นับว่า merge แล้ว) (ใช้ `--force` เมื่อตั้งใจทิ้งงานนั้น) และต้องรันจากนอก worktree ของงาน
 {%- if 'claude' in agent_tools %}
 
 ## Claude Code
