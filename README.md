@@ -52,6 +52,11 @@ uvx copier copy --trust <path-to-ProjectStarter> ../my-app
 uvx copier copy --trust --defaults -d project_name=my-app -d stack=python -d 'agent_tools=["claude","codex"]' <path-to-ProjectStarter> ../my-app
 ```
 
+คำถามที่ปิดไว้เป็นค่าเริ่มต้น (เปิดด้วย `-d <ชื่อ>=true` หรือ `copier update`):
+
+- `model_check`: TLA+ model ของคิว export (lease ที่หมดอายุ, การ complete ที่ต้องเป็นเจ้าของงาน) ตรวจด้วย TLC ใน Docker ผ่าน `bash ci/model-check.sh` และ CI job `model-check` (ADR 0006) เหมาะกับโปรเจคที่มี protocol แบบ concurrent
+- `automerge`: workflow ที่เปิด GitHub auto-merge ให้ PR ที่แก้แต่เอกสาร (risk tier 0 ตาม `ci/risk-tier.sh`) และปิดให้ PR อื่นทั้งหมด ต้องเปิด "Allow auto-merge" และ branch protection ที่มี required status checks ก่อน ไม่อย่างนั้น GitHub จะ merge ทันที
+
 `.github/CODEOWNERS` สร้างเฉพาะเมื่อระบุ `guardrail_owner` (เช่น `-d guardrail_owner=@my-org/platform`) ถ้าไม่ระบุจะไม่มีไฟล์นี้ และเพิ่มภายหลังได้ด้วย `copier update`
 
 ดึงการปรับปรุง template เข้าโปรเจคที่สร้างไปแล้ว (รันในโฟลเดอร์โปรเจค):

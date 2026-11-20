@@ -13,3 +13,6 @@
 {%- for p in risk_paths %}
 {{ p }}    {{ guardrail_owner }}
 {%- endfor %}
+{%- if model_check %}
+/models/    {{ guardrail_owner }}
+{%- endif %}

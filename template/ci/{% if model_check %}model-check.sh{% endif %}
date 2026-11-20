@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Model-checks every models/<Name>.tla that has a models/<Name>.cfg with TLC (TLA+ tools), in Docker.
+# The tools jar is pinned by version and sha256 and cached outside the repo (TLA_CACHE, default ~/.cache/tla); Docker
+# runs Java, so the host needs only Docker.
+# A violated invariant fails with TLC's counterexample trace (the shortest path to the bad state).
+set -euo pipefail
+
+version=1.7.4
+sha256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
+image=eclipse-temurin:21-jre@sha256:ca73b4d3961703d6d7830a4361f49ef0478f8f28b39defc07bb72f4cc7f834f6
+cache=${TLA_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/tla}
+jar=$cache/tla2tools-$version.jar
+
+hash_of() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+
+if [ ! -f "$jar" ] || [ "$(hash_of "$jar")" != "$sha256" ]; then
+  mkdir -p "$(dirname "$jar")"
+  curl -fsSL -o "$jar.part" "https://github.com/tlaplus/tlaplus/releases/download/v$version/tla2tools.jar"
+  got=$(hash_of "$jar.part")
+  if [ "$got" != "$sha256" ]; then
+    rm -f "$jar.part"
+    echo "model-check: tla2tools.jar checksum mismatch (got $got)" >&2
+    exit 1
+  fi
+  mv "$jar.part" "$jar"
+fi
+
+host_path() { (cd "$1" && { pwd -W 2>/dev/null || pwd; }); } # Git Bash on Windows: docker needs C:/...
+vol=$(host_path .)
+tla=$(host_path "$cache")
+export MSYS_NO_PATHCONV=1
+status=0
+found=0
+for cfg in models/*.cfg; do
+  [ -e "$cfg" ] || continue
+  found=1
+  spec=${cfg%.cfg}.tla
+  echo "model-check: $spec"
+  if ! docker run --rm -v "$vol:/w" -v "$tla:/tla:ro" -w /w "$image" \
+    java -XX:+UseParallelGC -cp "/tla/tla2tools-$version.jar" tlc2.TLC -workers auto -metadir /tmp/tlc -cleanup -config "$cfg" "$spec"; then
+    echo "model-check: FAILED $spec" >&2
+    status=1
+  fi
+done
+[ "$found" = 1 ] || { echo "model-check: no models/*.cfg" >&2; exit 1; }
+exit "$status"

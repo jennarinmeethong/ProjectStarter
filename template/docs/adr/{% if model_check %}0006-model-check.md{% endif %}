@@ -1,0 +1,29 @@
+# ADR 0006: Model checking for critical protocols (TLA+ / TLC)
+
+Status: accepted (ProjectStarter, `model_check=true`)
+
+## Context
+
+Example and property-based tests run one interleaving at a time. A protocol with concurrent actors (workers, leases,
+retries, devices that sync) can fail only in a rare ordering, which the tests may never produce. A model checker
+explores every interleaving of a small, finite model and returns the shortest path to a bad state as a counterexample
+(source: `docs/combined.md`, part 1, sections 6.6–6.8: "TLA+ only for critical protocols").
+
+## Decision
+
+- Models live in `models/<Name>.tla` with the bounds in `models/<Name>.cfg`. `bash ci/model-check.sh` runs TLC on
+  every pair, in Docker (pinned tools jar, checked by sha256). CI job: `model-check`.
+- The starting model, `models/ExportWorkers.tla`, covers the export queue: workers claim jobs under a lease, a lease
+  can expire while its worker is still running, and completion is fenced (only the current owner may commit).
+  Invariants: `ReadyHasWriter` and `ReadyWrittenByOwner`. Remove the owner check from `CanCommit` to see TLC's
+  counterexample: a worker whose lease expired completes the job that another worker now owns.
+- Model only what is both concurrent and costly to get wrong. Most code needs types, tests and property tests, not a
+  model.
+- A model is a tier-3 file (`docs/risk-tiers.md`). Change its invariants or bounds with an owner's review.
+
+## Consequences
+
+- A passing run proves the invariants for the model and its bounds only (here: two workers, two jobs). It does not
+  prove that the code matches the model. Keep them aligned: name each invariant in the code (a test or a type) and
+  check the same property with a property-based test.
+- Docker and network access (once, to fetch the jar into `~/.cache/tla`) are needed to run it locally.

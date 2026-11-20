@@ -34,6 +34,8 @@ Use an **absolute** path or a git URL so `copier update` works later.
 | `http_api` | serve the use case over HTTP (Hono / FastAPI / ASP.NET Core / Go net/http / axum) with Playwright API tests and, with `containerize`, an OWASP ZAP baseline scan | `false`; `true` when the user builds a web service or API |
 | `frontend` | `none`; TypeScript: `react`, `vue` (Vite), `nextjs`, `angular` or `react-native` (Expo; checks run on its web build); Python, .NET, Go, Rust: `ssr` (Jinja2, Razor Pages, `html/template`, askama): UI as a driving adapter, Playwright + axe browser tests (Node.js needed), strict CSP | `none` |
 | `containerize` | Dockerfile (multi-stage, non-root), `compose.yaml`, hadolint and a container CI job | `true`; pass `false` for libraries or when the user does not deploy containers |
+| `model_check` | TLA+ model of the export queue (leases, fenced completion) checked by TLC in Docker, CI job `model-check` (ADR 0006) | `false`; `true` only when the user has a concurrent protocol worth modelling |
+| `automerge` | workflow that turns on GitHub auto-merge for docs-only PRs (risk tier 0, `ci/risk-tier.sh`) | `false`; `true` only when the user asks for it |
 | destination | folder to create | `./<project_name>` |
 
 Do not guess the stack or the owner; if the user does not name an owner, leave it empty (no CODEOWNERS is generated). If the destination exists and is not empty, ask before writing into it.
@@ -94,5 +96,7 @@ Tell the user, briefly:
 - GitHub settings only they can turn on: branch protection on `main`, required status check `ci / verify`,
   and "Require review from Code Owners" if CODEOWNERS was generated (otherwise: it can be added later by
   running `uvx copier update --trust` and answering `guardrail_owner`);
+- with `automerge`: auto-merge waits only for required status checks, so turn on "Allow auto-merge" and branch
+  protection with required checks first, or docs-only PRs merge at once;
 - next phase in `docs/roadmap.md` (phase 3: correction records when an agent repeats a mistake);
 - to pull later template improvements: `uvx copier update --trust` inside the project.

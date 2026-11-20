@@ -1,0 +1,48 @@
+# Tier-0 automerge (docs/risk-tiers.md, roadmap phase 5): a PR that only changes documentation gets GitHub auto-merge,
+# which merges it once every required status check passes. Anything else has auto-merge turned off.
+# pull_request_target runs this file and ci/risk-tier.sh as they are on the base branch; the PR's code is fetched for
+# `git diff` only and never checked out or run, so a PR cannot change how it is judged.
+# Needs, in the repository settings: "Allow auto-merge", and branch protection on the default branch with required
+# status checks. Without required checks GitHub would merge at once.
+name: automerge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: automerge-${{ '{{' }} github.event.pull_request.number {{ '}}' }}
+  cancel-in-progress: true
+
+jobs:
+  tier:
+    # Same-repository PRs only: a fork's PR is always reviewed by a person.
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ '{{' }} github.token {{ '}}' }}
+      PR: ${{ '{{' }} github.event.pull_request.html_url {{ '}}' }}
+      BASE_SHA: ${{ '{{' }} github.event.pull_request.base.sha {{ '}}' }}
+      HEAD_SHA: ${{ '{{' }} github.event.pull_request.head.sha {{ '}}' }}
+    steps:
+      - uses: actions/checkout@v4 # the base branch
+        with:
+          fetch-depth: 0
+      - name: Fetch the PR head for diffing (not checked out)
+        run: git fetch --no-tags origin "$HEAD_SHA"
+      - id: tier
+        name: Risk tier by path
+        run: |
+          tier=$(bash ci/risk-tier.sh "$BASE_SHA" "$HEAD_SHA")
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "Risk tier: $tier" >> "$GITHUB_STEP_SUMMARY"
+      - name: Enable auto-merge (tier 0)
+        if: steps.tier.outputs.tier == '0'
+        run: gh pr merge --auto --squash "$PR"
+      - name: Disable auto-merge (tier 1 or higher)
+        if: steps.tier.outputs.tier != '0'
+        run: gh pr merge --disable-auto "$PR" || true # fails when auto-merge was never on

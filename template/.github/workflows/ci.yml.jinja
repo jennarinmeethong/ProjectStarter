@@ -172,6 +172,19 @@ jobs:
           fetch-depth: 0
       - name: Secret scan (gitleaks, full history)
         run: docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.30.1 git --config .gitleaks.toml --redact --exit-code 1 /repo
+{%- if model_check %}
+
+  model-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/tla
+          key: tla-${{ '{{' }} hashFiles('ci/model-check.sh') {{ '}}' }}
+      - name: Model check (TLA+ / TLC, docs/adr/0006-model-check.md)
+        run: bash ci/model-check.sh
+{%- endif %}
 {%- if containerize %}
 
   container:
