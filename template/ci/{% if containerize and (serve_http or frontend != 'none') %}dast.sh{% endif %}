@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # ci/dast.sh — run the image hardened (read-only, no capabilities), wait for /healthz, then scan the running
 # service with the OWASP ZAP baseline (passive) scan. Rules and their FAIL/IGNORE levels: .zap/rules.tsv.
-# Usage: ci/dast.sh <image> [--smoke]      --smoke: only check that the container starts and answers /healthz
+# Usage: ci/dast.sh <image> [--smoke|--full]
+#        --smoke: only check that the container starts and answers /healthz
+#        --full:  the full (active) scan, run by the release check (.github/workflows/release-check.yml). It attacks
+#                 the service, reports warnings and fails only on FAIL-level rules; promote a rule to FAIL in
+#                 .zap/rules.tsv once the team decides it matters. Capped by DAST_SPIDER_MINUTES (default 1) and
+#                 DAST_MAX_MINUTES (default 10).
 #        DAST_PATH=/ ci/dast.sh <image>     start the scan at / instead of /healthz (web UI images)
 # See docs/security/owasp.md.
 set -euo pipefail
 
-image="${1:?usage: ci/dast.sh <image> [--smoke]}"
+image="${1:?usage: ci/dast.sh <image> [--smoke|--full]}"
 mode="${2:-scan}"
+case "$mode" in scan | --smoke | --full) ;; *) echo "dast: unknown option '$mode'" >&2; exit 2 ;; esac
 zap="zaproxy/zap-stable:2.17.0"
 id="dast-$$-$RANDOM"
 net="$id-net"
@@ -49,6 +55,13 @@ chmod -R a+rwX "$work"
 host_work=$(cd "$work" && (pwd -W 2>/dev/null || pwd))
 # Start at /healthz by default: several header rules skip 4xx/5xx responses, so the scan needs a 200 to
 # judge. A web UI sets DAST_PATH=/ so the HTML page and its assets are scanned too.
-# Warnings fail the scan too (no -I): every rule is either fixed or explicitly IGNOREd with a reason.
+target="http://$app:8080${DAST_PATH:-/healthz}"
+if [ "$mode" = "--full" ]; then
+  # Active rules not listed in rules.tsv default to WARN; -I reports them without failing the release check.
+  docker run --rm --network "$net" -v "$host_work:/zap/wrk:rw" "$zap" \
+    zap-full-scan.py -t "$target" -c rules.tsv -m "${DAST_SPIDER_MINUTES:-1}" -T "${DAST_MAX_MINUTES:-10}" -I -s
+  exit
+fi
+# Warnings fail the baseline scan too (no -I): every rule is either fixed or explicitly IGNOREd with a reason.
 docker run --rm --network "$net" -v "$host_work:/zap/wrk:rw" "$zap" \
-  zap-baseline.py -t "http://$app:8080${DAST_PATH:-/healthz}" -c rules.tsv -m 1 -s
+  zap-baseline.py -t "$target" -c rules.tsv -m 1 -s

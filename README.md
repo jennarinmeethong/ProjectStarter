@@ -14,6 +14,7 @@
 | Generator | `copier.yml` | คำถามและค่าคำนวณ (Copier) |
 | Skill / plugin | `skills/project-starter/SKILL.md`, `.claude-plugin/` | skill เดียวใช้ได้ทั้ง Claude Code และ Codex |
 | งานขนาน | `template/scripts/`, `template/docs/engineering/parallel-work.md.jinja` | `new-task.sh` / `end-task.sh`: worktree, branch และ port ต่องาน พร้อมจำกัดจำนวนงานที่เปิดค้าง |
+| Release routine | `template/.github/workflows/release-check.yml.jinja`, `template/ci/release-report.sh`, `release-fuzz` (ตัวเลือก `release_fuzz`), `template/docs/engineering/release-routine.md.jinja` | ตอน push tag `v*`: property test รอบยาวและ ZAP full scan แล้วเปิด issue ต่อ job ที่ fail; ถ้าเปิด `release_fuzz` agent ลองใช้ app แล้วเสนอ draft PR ที่คนต้อง review |
 | Tests | `tests/render-all.sh` | render ทุกชุด stack × agent แล้ว verify และใส่การละเมิดเพื่อตรวจว่า guardrail จับได้ |
 
 ### เครื่องมือต่อ stack

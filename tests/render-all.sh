@@ -278,9 +278,13 @@ http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: ren
   local image="project-starter-$1"
   verify "playwright: API tests against the real server" "$2"
   verify "zap: baseline scan of the running container" "bash ci/dast.sh $image"
-  # Drop one security header: the ZAP scan must fail the build.
+  # The release check's full (active) scan, time-capped here; it reports warnings and fails on FAIL-level rules.
+  # The active rules run too: ZAP 2.17 checks ~67 rules in the baseline and ~140 in the full scan.
+  verify "zap: full scan of the running container" "DAST_MAX_MINUTES=3 bash ci/dast.sh $image --full | tee /dev/stderr | grep -qE 'PASS: [1-9][0-9]{2,}'"
+  # Drop one security header: the ZAP scan must fail the build, in both modes.
   sed -i "$4" "$3"
   expect_fail "zap: missing X-Content-Type-Options" bash -c "docker build -q -t $image-seed . >/dev/null && bash ci/dast.sh $image-seed"
+  expect_fail "zap full: missing X-Content-Type-Options" bash -c "DAST_MAX_MINUTES=3 bash ci/dast.sh $image-seed --full"
   git checkout -q -- "$3"
 }
 
@@ -387,7 +391,8 @@ ssr_key_ring_check() { # .NET: compose keeps the antiforgery key ring in a volum
   $c down -v >/dev/null 2>&1
   if $c up -d --build app >/dev/null 2>&1 && wait_healthz; then
     page=$(curl -fsS -D - http://127.0.0.1:8080/)
-    cookie=$(grep -i '^set-cookie: __Host-csrf=' <<<"$page" | sed 's/^[^:]*: //; s/;.*//' | tr -d '')
+    cookie=$(grep -i '^set-cookie: __Host-csrf=' <<<"$page" | sed 's/^[^:]*: //; s/;.*//' | tr -d '
+')
     token=$(grep -o 'name="csrf_token"[^>]*value="[^"]*"' <<<"$page" | sed 's/.*value="//; s/"$//')
     $c restart app >/dev/null 2>&1 && wait_healthz
     code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H 'Sec-Fetch-Site: same-origin'       --data-urlencode "csrf_token=$token" --data-urlencode job_id=restart-1 --data-urlencode content=id http://127.0.0.1:8080/)
@@ -532,6 +537,60 @@ declare -A mutation_rejected=(
   [go]='below efficacy-threshold' [rust]='MISSED'
 )
 
+# Property-test run count (PROPERTY_RUNS, raised by .github/workflows/release-check.yml): the command that runs only the
+# property test, and a seed that makes the property fail from its 501st case. With PROPERTY_RUNS=1000 the seeded test
+# must fail on that seed; unset, the framework default (100) never reaches it.
+declare -A property_cmd=(
+  [typescript]="npx vitest run src/domain/export-job.test.ts"
+  [python]='uv run pytest tests/test_export_job.py -q -p no:cacheprovider ${PROPERTY_RUNS:+--property-runs=$PROPERTY_RUNS}'
+  [dotnet]="dotnet test --project tests/DemoApp.Domain.Tests"
+  [go]='go test -count=1 ./internal/domain -run TestCompleteKeepsIDAndKey ${PROPERTY_RUNS:+-rapid.checks=$PROPERTY_RUNS}'
+  [rust]='env ${PROPERTY_RUNS:+PROPTEST_CASES=$PROPERTY_RUNS} cargo test -q -p domain keeps_id_and_key'
+)
+declare -A property_file=(
+  [typescript]=src/domain/export-job.test.ts [python]=tests/test_export_job.py
+  [dotnet]=tests/DemoApp.Domain.Tests/ExportJobTests.cs [go]=internal/domain/exportjob_test.go [rust]=crates/domain/src/lib.rs
+)
+declare -A property_anchor=(
+  [typescript]='^          const ready = completeExport'
+  [python]='^    ready = complete_export(RunningExport(id=job_id), key)'
+  [dotnet]='^            var ready = ExportTransitions.Complete(new ExportJob.Running(id.Get), key.Get);'
+  [go]='^\tready, err := domain.Complete(domain.Start(domain.NewQueued(id)), key)'
+  [rust]='^            let ready = complete(start(Queued::new(id.clone())), \&key).unwrap();'
+)
+declare -A property_seed=(
+  [typescript]='          const g = globalThis as { seedCalls?: number };\n          g.seedCalls = (g.seedCalls ?? 0) + 1;\n          if (g.seedCalls > 500) throw new Error("seed: past 500 cases");'
+  [python]='    global _seed_calls\n    _seed_calls = globals().get("_seed_calls", 0) + 1\n    assert _seed_calls <= 500, "seed: past 500 cases"'
+  [dotnet]='        if (SeedCalls.Next() > 500)\n        {\n            throw new System.InvalidOperationException("seed: past 500 cases");\n        }'
+  [go]='\tseedCalls++\n\tif seedCalls > 500 {\n\t\tt.Fatalf("seed: past 500 cases")\n\t}'
+  [rust]='            static SEED_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n            prop_assert!(SEED_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 500, "seed: past 500 cases");'
+)
+
+property_runs_check() { # property_runs_check <stack>: in the claude-only render (installed by default_verify)
+  pushd "$work/$1-claude" >/dev/null || return
+  local file=${property_file[$1]} out
+  sed -i "s|${property_anchor[$1]}|${property_seed[$1]}\n&|" "$file"
+  case "$1" in
+    dotnet) printf '\ninternal static class SeedCalls\n{\n    private static int s_count;\n\n    public static int Next() => System.Threading.Interlocked.Increment(ref s_count);\n}\n' >> "$file" ;;
+    go) printf '\nvar seedCalls int\n' >> "$file" ;;
+  esac
+  if out=$(PROPERTY_RUNS=1000 bash -c "${property_cmd[$1]}" 2>&1); then
+    fail "property runs: PROPERTY_RUNS=1000 ignored ($1)"
+  elif grep -q 'seed: past 500 cases' <<<"$out"; then
+    pass "property runs: PROPERTY_RUNS honoured ($1)"
+  else
+    fail "property runs: failed for another reason ($1)"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'
+  fi
+  if out=$(env -u PROPERTY_RUNS bash -c "${property_cmd[$1]}" 2>&1); then
+    pass "property runs: default unchanged ($1)"
+  else
+    fail "property runs: default run reached the seed ($1)"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'
+  fi
+  git checkout -q -- "$file"
+  rm -rf .hypothesis crates/domain/proptest-regressions
+  popd >/dev/null || return
+}
+
 mutation_unsupported_here() { # mutmut, Stryker.NET and gremlins misbehave on Windows; CI (Linux) runs them
   case "$1:$(uname -s)" in
     python:MINGW* | python:MSYS* | dotnet:MINGW* | dotnet:MSYS* | go:MINGW* | go:MSYS*)
@@ -635,13 +694,181 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
   fi
 }
 
+release_check_files() { # release_check_files <render-dir> <tools>: the release check exists in every render
+  local wf="$1/.github/workflows/release-check.yml"
+  if [ -f "$wf" ] && [ -f "$1/ci/release-report.sh" ] && ! grep -q 'pull_request' "$wf" && grep -q "tags: \[\"v\*\"\]" "$wf" \
+    && grep -q 'PROPERTY_RUNS: "10000"' "$wf" && grep -q 'no v\* tag' "$wf"; then
+    pass "release check workflow ($2)"
+  else
+    fail "release check workflow missing, or runs on pull requests ($2)"
+  fi
+  [ -f "$1/docs/engineering/release-routine.md" ] && grep -qF -- '- [x] routine ตอน release' "$1/docs/roadmap.md" \
+    && grep -q 'release-fix/' "$1/docs/risk-tiers.md" && grep -q 'release routine' "$1/docs/engineering/where-rules-live.md" \
+    && pass "release routine docs ($2)" || fail "release routine docs missing ($2)"
+  # The full scan runs exactly where the per-PR baseline scan does.
+  if [ -f "$1/ci/dast.sh" ] && grep -q '^  dast-full:' "$wf"; then
+    pass "release check: full scan with a container ($2)"
+  elif [ ! -f "$1/ci/dast.sh" ] && ! grep -q 'dast-full' "$wf"; then
+    pass "release check: no full scan without a scanned container ($2)"
+  else
+    fail "release check: dast-full does not match ci/dast.sh ($2)"
+  fi
+}
+
+gh_stub() { # gh_stub <dir>: a fake gh on PATH that logs its arguments to $GH_LOG ($GH_EXISTING: an open issue number)
+  mkdir -p "$1"
+  cat >"$1/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GH_LOG"
+case "$1 $2" in
+  "issue list") [ -z "${GH_EXISTING:-}" ] || echo "$GH_EXISTING" ;;
+  "issue create") echo "https://github.com/o/r/issues/41" ;;
+  "pr create") case " $* " in *" --draft "*) [ -z "${GH_NO_DRAFT:-}" ] || exit 1 ;; esac; echo "https://github.com/o/r/pull/42" ;;
+esac
+EOF
+  chmod +x "$1/gh"
+}
+
+release_check_checks() { # in the full render: actionlint, and ci/release-report.sh files one issue per failing job
+  local vol stub log
+  vol=$(docker_vol)
+  MSYS_NO_PATHCONV=1 verify "actionlint: release-check workflow" \
+    "docker run --rm -v '$vol:/repo' -w /repo rhysd/actionlint:1.7.7 .github/workflows/release-check.yml"
+  stub="$work/gh-stub" log="$work/gh.log"
+  gh_stub "$stub"
+  : >"$log"
+  PATH="$stub:$PATH" GH_LOG="$log" bash ci/release-report.sh property v1.2.0 abc123 https://ci/run/1 >/dev/null 2>&1
+  grep -q '^issue create .*--label release-check' "$log" && grep -q 'release-check: property failed on v1.2.0' "$log" \
+    && pass "release-report: new issue" || fail "release-report: no issue created ($(tr '\n' ';' <"$log"))"
+  : >"$log"
+  PATH="$stub:$PATH" GH_LOG="$log" GH_EXISTING=7 bash ci/release-report.sh property v1.3.0 def456 https://ci/run/2 >/dev/null 2>&1
+  grep -q '^issue comment 7 ' "$log" && ! grep -q '^issue create' "$log" \
+    && pass "release-report: comments on the open issue" || fail "release-report: duplicate issue ($(tr '\n' ';' <"$log"))"
+  # The search index lags behind new issues; two tags released together must still find each other's issue.
+  ! grep -q -- '--search' "$log" && awk '/^  report:/,0' .github/workflows/release-check.yml | grep -q 'concurrency:' \
+    && pass "release-report: lists issues directly, one report at a time" || fail "release-report: relies on search, or reports run in parallel"
+}
+
+fuzz_finding() { # fuzz_finding <out-dir> <n> <title> <report> [patch-file]: one finding in the agent's output format
+  mkdir -p "$1/$2"
+  printf '%s\n' "$3" >"$1/$2/title.txt"
+  printf '%s\n' "$4" >"$1/$2/report.md"
+  [ -z "${5:-}" ] || cp "$5" "$1/$2/fix.patch"
+}
+
+fuzz_patch() { # fuzz_patch <dest> <shell command that changes the tree>: the diff that command makes, as a patch
+  (eval "$2") && git add -A && git diff --cached -M >"$1" && git reset -q --hard
+}
+
+release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's split, and ci/release-fuzz-publish.sh
+  local wf=.github/workflows/release-fuzz.yml vol stub log out p origin
+  vol=$(docker_vol)
+  MSYS_NO_PATHCONV=1 verify "actionlint: release-fuzz workflow" \
+    "docker run --rm -v '$vol:/repo' -w /repo rhysd/actionlint:1.7.7 $wf"
+  # explore runs the agent on the app's output with a read-only token; publish writes, with no agent and no API key.
+  if [ -f .github/release-fuzz.md ] && grep -q 'anthropics/claude-code-action' "$wf" \
+    && awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'contents: read' \
+    && ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -qE ': write' \
+    && ! awk '/^  publish:/,0' "$wf" | grep -q 'secrets\.'; then
+    pass "release-fuzz: explore reads, publish writes without the key"
+  else
+    fail "release-fuzz: workflow split or prompt missing"
+  fi
+
+  stub="$work/gh-stub" log="$work/gh.log" out="$work/fuzz-out" p="$work/fuzz-patches" origin="$work/origin.git"
+  gh_stub "$stub"
+  mkdir -p "$p"
+  git init -q --bare "$origin" && git remote add origin "$origin" && git push -q origin main
+  fuzz_patch "$p/ok.patch" 'printf "fixed\n" > notes.txt'
+  fuzz_patch "$p/tier3.patch" 'mkdir -p .github && printf "x\n" > .github/x.yml'
+  fuzz_patch "$p/rename3.patch" 'mkdir -p .github && git mv README.md .github/README.md'
+  fuzz_patch "$p/ratchet.patch" 'printf "#!/usr/bin/env bash\necho 0\n" > ci/risk-tier.sh && printf "x\n" > .github/y.yml'
+  printf -- '--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-no such line in the readme\n+changed\n' >"$p/stale.patch"
+  # git quotes a non-ASCII path ("\303\274") unless asked for raw names: the quote must not hide a tier-3 prefix.
+  fuzz_patch "$p/unicode3.patch" 'mkdir -p ".claude/skills/ü" && printf "x\n" > ".claude/skills/ü/SKILL.md"'
+  # A symlink (mode 120000) or .gitattributes (linguist-generated collapses a diff) can hide code from the reviewer.
+  fuzz_patch "$p/symlink.patch" 'git update-index --add --cacheinfo "120000,$(printf /etc/passwd | git hash-object -w --stdin),notes-link"'
+  fuzz_patch "$p/attributes.patch" 'printf "*.ts linguist-generated\n" > .gitattributes'
+  # The explore job must not save caches that trusted CI restores later.
+  if ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -qE 'cache: npm|Swatinem/rust-cache' \
+    && { ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'setup-go' || awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'cache: false'; } \
+    && { ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'setup-uv' || awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'enable-cache: false'; } \
+    && grep -q 'retention-days: 7' "$wf"; then
+    pass "release-fuzz: explore saves no cache"
+  else
+    fail "release-fuzz: explore can save a cache, or keeps the artifact too long"
+  fi
+
+  publish() { # publish <expected-exit>: run the script on $out against the stub; log in $log
+    : >"$log"
+    PATH="$stub:$PATH" GH_LOG="$log" bash ci/release-fuzz-publish.sh "$out" v1.0.0 main >/dev/null 2>&1
+    local rc=$?
+    git switch -q main 2>/dev/null; git reset -q --hard
+    [ "$rc" = "$1" ]
+  }
+
+  rm -rf "$out" && fuzz_finding "$out" 1 "Export accepts a blank key, ping @someone" "Steps..." "$p/ok.patch"
+  publish 0 && grep -q '^issue create .*--label release-fuzz' "$log" && grep -q '^pr create .*--draft' "$log" \
+    && git ls-remote --exit-code "$origin" refs/heads/release-fix/v1.0.0-1 >/dev/null \
+    && pass "publish: issue and draft PR" || fail "publish: no issue, draft PR or branch ($(tr '\n' ';' <"$log"))"
+  grep -q '^issue create' "$log" && ! grep -q '@someone' "$log" && pass "publish: mentions neutralised" || fail "publish: @mention posted as is"
+
+  # The agent's text is shown, never acted on: a fenced report, no references in titles, nothing of it in the commit.
+  rm -rf "$out" && fuzz_finding "$out" 1 "Fixes #3 crash on o/r#1" $'See o/r#1.\n```\ncode\n```' "$p/ok.patch"
+  git push -q "$origin" --delete release-fix/v1.0.0-1 2>/dev/null
+  publish 0 && grep -q '^````' "$log" && ! grep -qE 'Fixes #3|o/r#1' <(grep '^issue create\|^pr create' "$log") \
+    && ! git --git-dir="$origin" log -1 --format=%B release-fix/v1.0.0-1 | grep -q 'Fixes' \
+    && pass "publish: agent text fenced, no references acted on" || fail "publish: agent text can act on GitHub ($(tr '\n' ';' <"$log"))"
+
+  # A secret in the agent's output (it can read the API key) is never published.
+  rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "token: ghp_$(printf 'Zx9Qw3Er5Ty7Ui1Op4As6Df8Gh2Jk0Lm3Nb5V' | head -c 36)"
+  publish 2 && [ ! -s "$log" ] && pass "publish: rejects output that contains a secret" || fail "publish: published a secret ($(tr '\n' ';' <"$log"))"
+
+  for case in tier3:"tier-3 patch" rename3:"rename into tier 3" ratchet:"patch rewriting ci/risk-tier.sh" stale:"patch that does not apply" \
+    unicode3:"non-ASCII path in tier 3" symlink:"symlink in the patch" attributes:".gitattributes in the patch"; do
+    rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "Report" "$p/${case%%:*}.patch"
+    git push -q "$origin" --delete release-fix/v1.0.0-1 2>/dev/null
+    publish 0 && grep -q '^issue create' "$log" && ! grep -q '^pr create' "$log" \
+      && ! git ls-remote --exit-code "$origin" refs/heads/release-fix/v1.0.0-1 >/dev/null \
+      && pass "publish: ${case#*:} -> issue only" || fail "publish: ${case#*:} opened a PR or pushed ($(tr '\n' ';' <"$log"))"
+  done
+
+  rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "Report" "$p/ok.patch"
+  git push -q "$origin" --delete release-fix/v1.0.0-1 2>/dev/null
+  GH_NO_DRAFT=1 publish 0 && [ "$(grep -c '^pr create' "$log")" = 2 ] && grep '^pr create' "$log" | tail -1 | grep -vq -- '--draft' \
+    && pass "publish: no draft support -> normal PR" || fail "publish: no fallback to a normal PR ($(tr '\n' ';' <"$log"))"
+
+  # Output that is not the agreed plain files is rejected before anything is published.
+  local bad
+  for bad in symlink eleven extra twoline oversize name; do
+    rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "Report"
+    case $bad in
+      symlink) ln -s /etc/passwd "$out/1/report.md.link" 2>/dev/null || cp /dev/null "$out/1/report.md.link" ;;
+      eleven) for n in 2 3 4 5 6 7 8 9 10 11; do fuzz_finding "$out" "$n" "F$n" "R"; done ;;
+      extra) printf 'x\n' >"$out/1/run.sh" ;;
+      twoline) printf 'one\ntwo\n' >"$out/1/title.txt" ;;
+      oversize) head -c 20001 /dev/zero | tr '\0' 'a' >"$out/1/report.md" ;;
+      name) mv "$out/1" "$out/01" ;;
+    esac
+    publish 2 && [ ! -s "$log" ] && pass "publish: rejects $bad output" || fail "publish: accepted $bad output ($(tr '\n' ';' <"$log"))"
+  done
+  unset -f publish
+}
+
+release_fuzz_codex_check() { # release_fuzz_codex_check <stack>: a Codex-only project gets the Codex action
+  local d="$work/$1-codex-fuzz"
+  render "$1" '["codex"]' "$d" -d http_api=true -d release_fuzz=true || { fail "render codex + release_fuzz"; return; }
+  grep -q 'openai/codex-action' "$d/.github/workflows/release-fuzz.yml" && ! grep -q 'claude-code-action' "$d/.github/workflows/release-fuzz.yml" \
+    && pass "release-fuzz: Codex action in a Codex-only project" || fail "release-fuzz: wrong agent action for Codex-only"
+}
+
 automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by path, and the workflow lints clean
   local first case want got file
   first=$(sed -n 's/.*"Edit(\/\([^*)]*\))".*/\1/p' .claude/settings.json | head -1)
   # <file to change>:<expected tier>
   for case in docs/feature-map.md:0 README.md:0 notes.txt:1 "$(git ls-files | grep -v '^ci/' | grep -m1 -E '\.(ts|py|cs|go|rs)$')":1 \
     AGENTS.md:3 docs/risk-tiers.md:3 ci/guardrail-ratchet.sh:3 .github/workflows/ci.yml:3 "$first":3 \
-    models/ExportWorkers.tla:3 auth/login.txt:3 src/auth/login.txt:3 migrations/0001_create_export_artifacts.sql:3; do
+    models/ExportWorkers.tla:3 auth/login.txt:3 src/auth/login.txt:3 migrations/0001_create_export_artifacts.sql:3 auth/ü.txt:3; do
     want=${case##*:}
     file=${case%:*}
     git switch -q -c tier-probe base
@@ -651,6 +878,16 @@ automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by p
     git switch -q main && git branch -qD tier-probe
     [ "$got" = "$want" ] && pass "risk-tier: $file -> $want" || fail "risk-tier: $file -> $got (want $want)"
   done
+  # --files: the tier of a list of paths (ci/release-fuzz-publish.sh judges a patch with it). A ../ path is tier 3.
+  for case in "docs/a.md:0" "src/x.ts docs/a.md:1" ".github/workflows/x.yml:3" "src/auth/x:3" "../.github/x:3" "docs/../ci/x.sh:3" ":1"     ".gitattributes:3" ".gitmodules:3"; do
+    want=${case##*:}
+    # shellcheck disable=SC2086 # the paths are split on purpose
+    got=$(bash ci/risk-tier.sh --files ${case%:*} 2>&1)
+    [ "$got" = "$want" ] && pass "risk-tier --files '${case%:*}' -> $want" || fail "risk-tier --files '${case%:*}' -> $got (want $want)"
+  done
+  # The release routine's fix PRs always get a person's review (docs/engineering/release-routine.md).
+  grep -q "startsWith(github.event.pull_request.head.ref, 'release-fix/')" .github/workflows/automerge.yml \
+    && pass "automerge: skips release-fix/ branches" || fail "automerge: would act on release-fix/ branches"
   local vol
   vol=$(docker_vol)
   MSYS_NO_PATHCONV=1 verify "actionlint: automerge workflow" \
@@ -787,7 +1024,7 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
     # The both-tools render also wires in every datastore and the HTTP API; it gets the full verification below.
     if [ "$tools" = '["claude","codex"]' ]; then
       owner_args=(-d guardrail_owner=@demo-org/platform -d 'datastores=["postgres","mysql","redis"]' -d http_api=true
-        -d model_check=true -d automerge=true)
+        -d model_check=true -d automerge=true -d release_fuzz=true)
     else
       owner_args=()
     fi
@@ -844,13 +1081,15 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
     else
       [ ! -e "$d/CLAUDE.md" ] && [ ! -e "$d/.claude" ] && pass "no claude files ($tools)" || fail "unexpected claude files ($tools)"
     fi
+    release_check_files "$d" "$tools"
     # GitHub workflows use ${{ }} themselves.
-    if grep -rIl '{{\|{%' "$d" --exclude-dir=node_modules --exclude-dir=.venv --exclude=ci.yml --exclude=automerge.yml >/dev/null; then
-      fail "unrendered Jinja in $(grep -rIl '{{\|{%' "$d" --exclude=ci.yml --exclude=automerge.yml | head -1)"
+    if grep -rIl '{{\|{%' "$d" --exclude-dir=node_modules --exclude-dir=.venv --exclude=ci.yml --exclude=automerge.yml --exclude=release-check.yml --exclude=release-fuzz.yml >/dev/null; then
+      fail "unrendered Jinja in $(grep -rIl '{{\|{%' "$d" --exclude=ci.yml --exclude=automerge.yml --exclude=release-check.yml --exclude=release-fuzz.yml | head -1)"
     fi
   done
 
   default_verify "$stack"
+  property_runs_check "$stack"
   default_mutation "$stack"
 
   # Full verification on the both-tools render.
@@ -860,6 +1099,9 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
   model_check_checks
   automerge_checks
   task_checks
+  release_check_checks
+  release_fuzz_checks
+  release_fuzz_codex_check "$stack"
   case "$stack" in
     typescript)
       npm install --no-audit --no-fund >/dev/null 2>&1

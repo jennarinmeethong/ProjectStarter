@@ -20,8 +20,11 @@ concurrency:
 
 jobs:
   tier:
-    # Same-repository PRs only: a fork's PR is always reviewed by a person.
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    # Same-repository PRs only: a fork's PR is always reviewed by a person. So is every fix the release routine
+    # proposes (release-fix/ branches, docs/engineering/release-routine.md), whatever its tier.
+    if: >-
+      github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+      && !startsWith(github.event.pull_request.head.ref, 'release-fix/')
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ '{{' }} github.token {{ '}}' }}

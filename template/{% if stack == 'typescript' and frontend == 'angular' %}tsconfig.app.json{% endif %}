@@ -2,5 +2,6 @@
   "extends": "./tsconfig.json",
   "compilerOptions": { "module": "es2022", "moduleResolution": "bundler", "types": [], "rewriteRelativeImportExtensions": true },
   "files": ["src/ui/main.ts"],
+  "include": [],
   "angularCompilerOptions": { "strictTemplates": true, "strictInjectionParameters": true, "strictInputAccessModifiers": true }
 }
