@@ -391,7 +391,8 @@ ssr_key_ring_check() { # .NET: compose keeps the antiforgery key ring in a volum
   $c down -v >/dev/null 2>&1
   if $c up -d --build app >/dev/null 2>&1 && wait_healthz; then
     page=$(curl -fsS -D - http://127.0.0.1:8080/)
-    cookie=$(grep -i '^set-cookie: __Host-csrf=' <<<"$page" | sed 's/^[^:]*: //; s/;.*//' | tr -d '')
+    cookie=$(grep -i '^set-cookie: __Host-csrf=' <<<"$page" | sed 's/^[^:]*: //; s/;.*//' | tr -d '
+')
     token=$(grep -o 'name="csrf_token"[^>]*value="[^"]*"' <<<"$page" | sed 's/.*value="//; s/"$//')
     $c restart app >/dev/null 2>&1 && wait_healthz
     code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" -H 'Sec-Fetch-Site: same-origin'       --data-urlencode "csrf_token=$token" --data-urlencode job_id=restart-1 --data-urlencode content=id http://127.0.0.1:8080/)
@@ -743,6 +744,9 @@ release_check_checks() { # in the full render: actionlint, and ci/release-report
   PATH="$stub:$PATH" GH_LOG="$log" GH_EXISTING=7 bash ci/release-report.sh property v1.3.0 def456 https://ci/run/2 >/dev/null 2>&1
   grep -q '^issue comment 7 ' "$log" && ! grep -q '^issue create' "$log" \
     && pass "release-report: comments on the open issue" || fail "release-report: duplicate issue ($(tr '\n' ';' <"$log"))"
+  # The search index lags behind new issues; two tags released together must still find each other's issue.
+  ! grep -q -- '--search' "$log" && awk '/^  report:/,0' .github/workflows/release-check.yml | grep -q 'concurrency:' \
+    && pass "release-report: lists issues directly, one report at a time" || fail "release-report: relies on search, or reports run in parallel"
 }
 
 fuzz_finding() { # fuzz_finding <out-dir> <n> <title> <report> [patch-file]: one finding in the agent's output format
@@ -780,6 +784,20 @@ release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's
   fuzz_patch "$p/rename3.patch" 'mkdir -p .github && git mv README.md .github/README.md'
   fuzz_patch "$p/ratchet.patch" 'printf "#!/usr/bin/env bash\necho 0\n" > ci/risk-tier.sh && printf "x\n" > .github/y.yml'
   printf -- '--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-no such line in the readme\n+changed\n' >"$p/stale.patch"
+  # git quotes a non-ASCII path ("\303\274") unless asked for raw names: the quote must not hide a tier-3 prefix.
+  fuzz_patch "$p/unicode3.patch" 'mkdir -p ".claude/skills/ü" && printf "x\n" > ".claude/skills/ü/SKILL.md"'
+  # A symlink (mode 120000) or .gitattributes (linguist-generated collapses a diff) can hide code from the reviewer.
+  fuzz_patch "$p/symlink.patch" 'git update-index --add --cacheinfo "120000,$(printf /etc/passwd | git hash-object -w --stdin),notes-link"'
+  fuzz_patch "$p/attributes.patch" 'printf "*.ts linguist-generated\n" > .gitattributes'
+  # The explore job must not save caches that trusted CI restores later.
+  if ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -qE 'cache: npm|Swatinem/rust-cache' \
+    && { ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'setup-go' || awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'cache: false'; } \
+    && { ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'setup-uv' || awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'enable-cache: false'; } \
+    && grep -q 'retention-days: 7' "$wf"; then
+    pass "release-fuzz: explore saves no cache"
+  else
+    fail "release-fuzz: explore can save a cache, or keeps the artifact too long"
+  fi
 
   publish() { # publish <expected-exit>: run the script on $out against the stub; log in $log
     : >"$log"
@@ -789,13 +807,25 @@ release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's
     [ "$rc" = "$1" ]
   }
 
-  rm -rf "$out" && fuzz_finding "$out" 1 "Export accepts a blank key" "Steps... ping @someone" "$p/ok.patch"
+  rm -rf "$out" && fuzz_finding "$out" 1 "Export accepts a blank key, ping @someone" "Steps..." "$p/ok.patch"
   publish 0 && grep -q '^issue create .*--label release-fuzz' "$log" && grep -q '^pr create .*--draft' "$log" \
     && git ls-remote --exit-code "$origin" refs/heads/release-fix/v1.0.0-1 >/dev/null \
     && pass "publish: issue and draft PR" || fail "publish: no issue, draft PR or branch ($(tr '\n' ';' <"$log"))"
   grep -q '^issue create' "$log" && ! grep -q '@someone' "$log" && pass "publish: mentions neutralised" || fail "publish: @mention posted as is"
 
-  for case in tier3:"tier-3 patch" rename3:"rename into tier 3" ratchet:"patch rewriting ci/risk-tier.sh" stale:"patch that does not apply"; do
+  # The agent's text is shown, never acted on: a fenced report, no references in titles, nothing of it in the commit.
+  rm -rf "$out" && fuzz_finding "$out" 1 "Fixes #3 crash on o/r#1" $'See o/r#1.\n```\ncode\n```' "$p/ok.patch"
+  git push -q "$origin" --delete release-fix/v1.0.0-1 2>/dev/null
+  publish 0 && grep -q '^````' "$log" && ! grep -qE 'Fixes #3|o/r#1' <(grep '^issue create\|^pr create' "$log") \
+    && ! git --git-dir="$origin" log -1 --format=%B release-fix/v1.0.0-1 | grep -q 'Fixes' \
+    && pass "publish: agent text fenced, no references acted on" || fail "publish: agent text can act on GitHub ($(tr '\n' ';' <"$log"))"
+
+  # A secret in the agent's output (it can read the API key) is never published.
+  rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "token: ghp_$(printf 'Zx9Qw3Er5Ty7Ui1Op4As6Df8Gh2Jk0Lm3Nb5V' | head -c 36)"
+  publish 2 && [ ! -s "$log" ] && pass "publish: rejects output that contains a secret" || fail "publish: published a secret ($(tr '\n' ';' <"$log"))"
+
+  for case in tier3:"tier-3 patch" rename3:"rename into tier 3" ratchet:"patch rewriting ci/risk-tier.sh" stale:"patch that does not apply" \
+    unicode3:"non-ASCII path in tier 3" symlink:"symlink in the patch" attributes:".gitattributes in the patch"; do
     rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "Report" "$p/${case%%:*}.patch"
     git push -q "$origin" --delete release-fix/v1.0.0-1 2>/dev/null
     publish 0 && grep -q '^issue create' "$log" && ! grep -q '^pr create' "$log" \
@@ -838,7 +868,7 @@ automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by p
   # <file to change>:<expected tier>
   for case in docs/feature-map.md:0 README.md:0 notes.txt:1 "$(git ls-files | grep -v '^ci/' | grep -m1 -E '\.(ts|py|cs|go|rs)$')":1 \
     AGENTS.md:3 docs/risk-tiers.md:3 ci/guardrail-ratchet.sh:3 .github/workflows/ci.yml:3 "$first":3 \
-    models/ExportWorkers.tla:3 auth/login.txt:3 src/auth/login.txt:3 migrations/0001_create_export_artifacts.sql:3; do
+    models/ExportWorkers.tla:3 auth/login.txt:3 src/auth/login.txt:3 migrations/0001_create_export_artifacts.sql:3 auth/ü.txt:3; do
     want=${case##*:}
     file=${case%:*}
     git switch -q -c tier-probe base
@@ -849,7 +879,7 @@ automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by p
     [ "$got" = "$want" ] && pass "risk-tier: $file -> $want" || fail "risk-tier: $file -> $got (want $want)"
   done
   # --files: the tier of a list of paths (ci/release-fuzz-publish.sh judges a patch with it). A ../ path is tier 3.
-  for case in "docs/a.md:0" "src/x.ts docs/a.md:1" ".github/workflows/x.yml:3" "src/auth/x:3" "../.github/x:3" "docs/../ci/x.sh:3" ":1"; do
+  for case in "docs/a.md:0" "src/x.ts docs/a.md:1" ".github/workflows/x.yml:3" "src/auth/x:3" "../.github/x:3" "docs/../ci/x.sh:3" ":1"     ".gitattributes:3" ".gitmodules:3"; do
     want=${case##*:}
     # shellcheck disable=SC2086 # the paths are split on purpose
     got=$(bash ci/risk-tier.sh --files ${case%:*} 2>&1)

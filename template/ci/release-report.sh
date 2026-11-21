@@ -22,8 +22,9 @@ and close this issue when the fix is released."
 # Best effort: the label may already exist, or the token may not be allowed to create labels.
 gh label create "$label" --color B60205 --description "Failure found by the release check" --force >/dev/null 2>&1 || true
 
-# gh's own --jq (no jq binary needed): open issues of this job only, by exact title prefix.
-open=$(gh issue list --label "$label" --state open --search "\"$prefix\" in:title" --json number,title \
+# gh's own --jq (no jq binary needed): open issues of this job only, by exact title prefix. Listed by label, not
+# searched: the search index lags behind an issue opened moments ago by another release's report.
+open=$(gh issue list --label "$label" --state open --limit 200 --json number,title \
   --jq "[.[] | select(.title | startswith(\"$prefix\"))][0].number // empty")
 
 if [ -n "$open" ]; then

@@ -129,6 +129,10 @@ jobs:
     needs: [resolve, property{% if containerize and (serve_http or frontend != 'none') %}, dast-full{% endif %}]
     if: always() && needs.resolve.result == 'success'
     runs-on: ubuntu-latest
+    # One report at a time across releases, so two tags checked together cannot both open the same job's issue.
+    concurrency:
+      group: release-check-report
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write

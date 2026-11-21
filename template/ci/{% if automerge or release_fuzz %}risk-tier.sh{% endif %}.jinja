@@ -9,14 +9,14 @@ set -euo pipefail
 
 if [ "${1:-}" = --files ]; then
   shift
-  files=$(printf '%s
-' "$@")
+  files=("$@")
 else
   base_ref=${1:?usage: ci/risk-tier.sh <base> [head] | ci/risk-tier.sh --files <path>...}
   head_ref=${2:-HEAD}
   base=$(git merge-base "$base_ref" "$head_ref")
   # --no-renames: a rename counts as a delete plus an add, so both paths are judged.
-  files=$(git diff --no-renames --name-only "$base" "$head_ref")
+  # -z: raw names. git otherwise quotes a non-ASCII path ("auth/\303\274.ts"), and the quote hides its prefix.
+  mapfile -d '' -t files < <(git diff -z --no-renames --name-only "$base" "$head_ref")
 fi
 
 # Tier-3 prefixes. A risk path such as auth/ matches at any depth, as in CODEOWNERS.
@@ -26,6 +26,9 @@ tier3=({% for f in stk.guardrail_files %}'{{ f }}' {% endfor %}'ci/' '.github/' 
 is_tier3() {
   local f=$1 p
   case "/$f/" in */../*) return 0 ;; esac # a path that climbs out cannot be judged by its prefix
+  # Git's own config, at any depth, changes how files are diffed or fetched (linguist-generated collapses a diff
+  # out of the reviewer's sight).
+  case "/$f" in */.gitattributes | */.gitmodules) return 0 ;; esac
   for p in "${tier3[@]}"; do
     if [ "${p%/}" != "$p" ]; then # a directory: everything under it
       case "$f" in "$p"*) return 0 ;; esac
@@ -45,7 +48,7 @@ is_doc() {
 
 tier=0
 changed=0
-while IFS= read -r f; do
+for f in ${files[@]+"${files[@]}"}; do
   [ -n "$f" ] || continue
   changed=1
   if is_tier3 "$f"; then
@@ -53,6 +56,6 @@ while IFS= read -r f; do
     exit 0
   fi
   is_doc "$f" || tier=1
-done <<<"$files"
+done
 [ "$changed" = 1 ] || tier=1 # an empty change is not a tier-0 change to merge
 echo "$tier"

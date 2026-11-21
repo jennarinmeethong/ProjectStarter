@@ -40,6 +40,10 @@ for entry in "$out"/* "$out"/.[!.]*; do
   findings+=("$n")
 done
 [ "${#findings[@]}" -gt 0 ] || { echo "release-fuzz-publish: no findings"; exit 0; }
+# The agent can read its API key; nothing that looks like a secret is published (default gitleaks rules).
+host_out=$(cd "$out" && (pwd -W 2>/dev/null || pwd))
+MSYS_NO_PATHCONV=1 docker run --rm -v "$host_out:/scan:ro" zricethezav/gitleaks:v8.30.1 \
+  dir /scan --redact --no-banner --exit-code 1 >&2 || reject "the output contains what looks like a secret (gitleaks)"
 
 # ---- 2. Publish.
 # A patch may rewrite ci/risk-tier.sh itself, so judge every patch with the copy from the default branch, taken now.
@@ -48,8 +52,17 @@ trap 'rm -rf "$work"' EXIT
 git fetch -q origin "$default"
 git show "origin/$default:ci/risk-tier.sh" >"$work/risk-tier.sh"
 
-# Text from the agent cannot notify people: a zero-width space after every @ breaks GitHub mentions.
-plain() { sed 's/@/@\xe2\x80\x8b/g' "$1"; }
+# Text from the agent is shown, never acted on. Titles: a zero-width space after every @ and # breaks mentions and
+# issue references (and so "Fixes #N"). Reports: inside a code fence longer than any backtick run in them, where
+# GitHub renders no links, images, mentions, references or hidden HTML.
+plain_title() { tr -d '\n' <"$1" | sed 's/[@#]/&\xe2\x80\x8b/g'; }
+fenced() {
+  local run longest fence
+  longest=$(grep -o '`*' "$1" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')
+  run=$((longest >= 3 ? longest + 1 : 4))
+  fence=$(printf '%*s' "$run" '' | tr ' ' '`')
+  printf '%s text\n%s\n%s\n' "$fence" "$(cat "$1")" "$fence"
+}
 
 gh label create "$label" --color 5319E7 --description "Found by the release agent; a person reviews it" --force >/dev/null 2>&1 || true
 
@@ -59,8 +72,8 @@ export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EM
 mapfile -t findings < <(printf '%s\n' "${findings[@]}" | sort -n)
 for n in "${findings[@]}"; do
   dir="$out/$n"
-  title="release-fuzz: $(plain "$dir/title.txt")"
-  report=$(plain "$dir/report.md")
+  title="release-fuzz: $(plain_title "$dir/title.txt")"
+  report=$(fenced "$dir/report.md")
   note="No patch was proposed."
   branch=""
   if [ -f "$dir/fix.patch" ]; then
@@ -70,12 +83,19 @@ for n in "${findings[@]}"; do
       note="The proposed patch does not apply to \`$default\`; it is attached to the workflow run."
       branch=""
     else
-      mapfile -t paths < <(git diff --cached --no-renames --name-only)
-      if [ "$(bash "$work/risk-tier.sh" --files "${paths[@]}")" = 3 ]; then
+      # -z: raw names (git quotes non-ASCII ones, and the quote would hide a tier-3 prefix).
+      mapfile -d '' -t paths < <(git diff -z --cached --no-renames --name-only)
+      # Only regular files: a symlink (120000) or submodule (160000) can point a reviewer at the wrong content.
+      odd_modes=$(git diff --cached --no-renames --raw | awk '$2 != "100644" && $2 != "100755" && $2 != "000000"')
+      if [ -n "$odd_modes" ]; then
+        note="The proposed patch adds a symlink or submodule, so no PR was opened; it is attached to the workflow run."
+        branch=""
+      elif [ "$(bash "$work/risk-tier.sh" --files "${paths[@]}")" = 3 ]; then
         note="The proposed patch touches tier-3 paths (docs/risk-tiers.md), so no PR was opened; it is attached to the workflow run."
         branch=""
       else
-        git commit -q -m "fix: $(tr -d '\n' <"$dir/title.txt" | sed 's/@/@\xe2\x80\x8b/g') (release agent, $tag)"
+        # The agent's words stay out of the commit: a message could close issues when the PR merges.
+        git commit -q -m "fix: release agent finding $n ($tag)"
         if git push -q origin "$branch"; then
           note="A draft PR from \`$branch\` proposes a fix; a person must review it."
         else

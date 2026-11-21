@@ -51,14 +51,17 @@ jobs:
           fi
           git checkout -q --detach "$tag^{commit}" || { echo "::error::release-fuzz: no commit '$tag'"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      # No dependency or build cache in this job: the agent has a shell here, and a cache it saves would be restored
+      # by trusted CI later.
 {%- if stack == 'typescript' %}
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: npm
       - run: npm ci
 {%- elif stack == 'python' %}
       - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
       - run: uv sync --locked
 {%- elif stack == 'dotnet' %}
       - uses: actions/setup-dotnet@v4
@@ -69,9 +72,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
       - run: go mod download
 {%- elif stack == 'rust' %}
-      - uses: Swatinem/rust-cache@v2
       - run: cargo fetch --locked
 {%- endif %}
       - name: Start the release image (hardened as in ci/dast.sh) on 127.0.0.1:8080
@@ -107,7 +110,7 @@ jobs:
           name: release-fuzz-out
           path: release-fuzz-out/
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 7 # on a public repository, anyone signed in can download it
 
   publish:
     needs: explore
