@@ -742,6 +742,93 @@ release_check_checks() { # in the full render: actionlint, and ci/release-report
     && pass "release-report: comments on the open issue" || fail "release-report: duplicate issue ($(tr '\n' ';' <"$log"))"
 }
 
+fuzz_finding() { # fuzz_finding <out-dir> <n> <title> <report> [patch-file]: one finding in the agent's output format
+  mkdir -p "$1/$2"
+  printf '%s\n' "$3" >"$1/$2/title.txt"
+  printf '%s\n' "$4" >"$1/$2/report.md"
+  [ -z "${5:-}" ] || cp "$5" "$1/$2/fix.patch"
+}
+
+fuzz_patch() { # fuzz_patch <dest> <shell command that changes the tree>: the diff that command makes, as a patch
+  (eval "$2") && git add -A && git diff --cached -M >"$1" && git reset -q --hard
+}
+
+release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's split, and ci/release-fuzz-publish.sh
+  local wf=.github/workflows/release-fuzz.yml vol stub log out p origin
+  vol=$(docker_vol)
+  MSYS_NO_PATHCONV=1 verify "actionlint: release-fuzz workflow" \
+    "docker run --rm -v '$vol:/repo' -w /repo rhysd/actionlint:1.7.7 $wf"
+  # explore runs the agent on the app's output with a read-only token; publish writes, with no agent and no API key.
+  if [ -f .github/release-fuzz.md ] && grep -q 'anthropics/claude-code-action' "$wf" \
+    && awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'contents: read' \
+    && ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -qE ': write' \
+    && ! awk '/^  publish:/,0' "$wf" | grep -q 'secrets\.'; then
+    pass "release-fuzz: explore reads, publish writes without the key"
+  else
+    fail "release-fuzz: workflow split or prompt missing"
+  fi
+
+  stub="$work/gh-stub" log="$work/gh.log" out="$work/fuzz-out" p="$work/fuzz-patches" origin="$work/origin.git"
+  gh_stub "$stub"
+  mkdir -p "$p"
+  git init -q --bare "$origin" && git remote add origin "$origin" && git push -q origin main
+  fuzz_patch "$p/ok.patch" 'printf "fixed\n" > notes.txt'
+  fuzz_patch "$p/tier3.patch" 'mkdir -p .github && printf "x\n" > .github/x.yml'
+  fuzz_patch "$p/rename3.patch" 'mkdir -p .github && git mv README.md .github/README.md'
+  fuzz_patch "$p/ratchet.patch" 'printf "#!/usr/bin/env bash\necho 0\n" > ci/risk-tier.sh && printf "x\n" > .github/y.yml'
+  printf -- '--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-no such line in the readme\n+changed\n' >"$p/stale.patch"
+
+  publish() { # publish <expected-exit>: run the script on $out against the stub; log in $log
+    : >"$log"
+    PATH="$stub:$PATH" GH_LOG="$log" bash ci/release-fuzz-publish.sh "$out" v1.0.0 main >/dev/null 2>&1
+    local rc=$?
+    git switch -q main 2>/dev/null; git reset -q --hard
+    [ "$rc" = "$1" ]
+  }
+
+  rm -rf "$out" && fuzz_finding "$out" 1 "Export accepts a blank key" "Steps... ping @someone" "$p/ok.patch"
+  publish 0 && grep -q '^issue create .*--label release-fuzz' "$log" && grep -q '^pr create .*--draft' "$log" \
+    && git ls-remote --exit-code "$origin" refs/heads/release-fix/v1.0.0-1 >/dev/null \
+    && pass "publish: issue and draft PR" || fail "publish: no issue, draft PR or branch ($(tr '\n' ';' <"$log"))"
+  grep -q '^issue create' "$log" && ! grep -q '@someone' "$log" && pass "publish: mentions neutralised" || fail "publish: @mention posted as is"
+
+  for case in tier3:"tier-3 patch" rename3:"rename into tier 3" ratchet:"patch rewriting ci/risk-tier.sh" stale:"patch that does not apply"; do
+    rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "Report" "$p/${case%%:*}.patch"
+    git push -q "$origin" --delete release-fix/v1.0.0-1 2>/dev/null
+    publish 0 && grep -q '^issue create' "$log" && ! grep -q '^pr create' "$log" \
+      && ! git ls-remote --exit-code "$origin" refs/heads/release-fix/v1.0.0-1 >/dev/null \
+      && pass "publish: ${case#*:} -> issue only" || fail "publish: ${case#*:} opened a PR or pushed ($(tr '\n' ';' <"$log"))"
+  done
+
+  rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "Report" "$p/ok.patch"
+  git push -q "$origin" --delete release-fix/v1.0.0-1 2>/dev/null
+  GH_NO_DRAFT=1 publish 0 && [ "$(grep -c '^pr create' "$log")" = 2 ] && grep '^pr create' "$log" | tail -1 | grep -vq -- '--draft' \
+    && pass "publish: no draft support -> normal PR" || fail "publish: no fallback to a normal PR ($(tr '\n' ';' <"$log"))"
+
+  # Output that is not the agreed plain files is rejected before anything is published.
+  local bad
+  for bad in symlink eleven extra twoline oversize name; do
+    rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "Report"
+    case $bad in
+      symlink) ln -s /etc/passwd "$out/1/report.md.link" 2>/dev/null || cp /dev/null "$out/1/report.md.link" ;;
+      eleven) for n in 2 3 4 5 6 7 8 9 10 11; do fuzz_finding "$out" "$n" "F$n" "R"; done ;;
+      extra) printf 'x\n' >"$out/1/run.sh" ;;
+      twoline) printf 'one\ntwo\n' >"$out/1/title.txt" ;;
+      oversize) head -c 20001 /dev/zero | tr '\0' 'a' >"$out/1/report.md" ;;
+      name) mv "$out/1" "$out/01" ;;
+    esac
+    publish 2 && [ ! -s "$log" ] && pass "publish: rejects $bad output" || fail "publish: accepted $bad output ($(tr '\n' ';' <"$log"))"
+  done
+  unset -f publish
+}
+
+release_fuzz_codex_check() { # release_fuzz_codex_check <stack>: a Codex-only project gets the Codex action
+  local d="$work/$1-codex-fuzz"
+  render "$1" '["codex"]' "$d" -d http_api=true -d release_fuzz=true || { fail "render codex + release_fuzz"; return; }
+  grep -q 'openai/codex-action' "$d/.github/workflows/release-fuzz.yml" && ! grep -q 'claude-code-action' "$d/.github/workflows/release-fuzz.yml" \
+    && pass "release-fuzz: Codex action in a Codex-only project" || fail "release-fuzz: wrong agent action for Codex-only"
+}
+
 automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by path, and the workflow lints clean
   local first case want got file
   first=$(sed -n 's/.*"Edit(\/\([^*)]*\))".*/\1/p' .claude/settings.json | head -1)
@@ -904,7 +991,7 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
     # The both-tools render also wires in every datastore and the HTTP API; it gets the full verification below.
     if [ "$tools" = '["claude","codex"]' ]; then
       owner_args=(-d guardrail_owner=@demo-org/platform -d 'datastores=["postgres","mysql","redis"]' -d http_api=true
-        -d model_check=true -d automerge=true)
+        -d model_check=true -d automerge=true -d release_fuzz=true)
     else
       owner_args=()
     fi
@@ -980,6 +1067,8 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
   automerge_checks
   task_checks
   release_check_checks
+  release_fuzz_checks
+  release_fuzz_codex_check "$stack"
   case "$stack" in
     typescript)
       npm install --no-audit --no-fund >/dev/null 2>&1

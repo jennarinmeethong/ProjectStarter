@@ -1,0 +1,139 @@
+# Release agent (roadmap phase 6 outer loop, docs/engineering/release-routine.md): on each release tag an AI agent
+# uses the running release build like a user and reports what breaks. Two jobs, split on purpose:
+#   explore  runs the agent against the app's (untrusted) output. Read-only token, no write permission at all; its
+#            only output is the release-fuzz-out artifact (.github/release-fuzz.md defines the format).
+#   publish  no agent and no API key. ci/release-fuzz-publish.sh checks the artifact, opens an issue per finding and a
+#            draft PR per acceptable patch. Nothing merges without a person: automerge skips release-fix/ branches.
+# Needs the {% if 'claude' in agent_tools %}ANTHROPIC_API_KEY{% else %}OPENAI_API_KEY{% endif %} repository secret. Give the key a spending limit: the agent can read it.
+name: release-fuzz
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to explore (default: the latest v* tag)"
+        required: false
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: release-fuzz-${{ '{{' }} github.ref {{ '}}' }}
+  cancel-in-progress: false
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ '{{' }} steps.ref.outputs.tag {{ '}}' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: ref
+        name: Resolve and check out the release
+        env:
+          INPUT_REF: ${{ '{{' }} inputs.ref {{ '}}' }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ -n "$INPUT_REF" ]; then
+            tag="$INPUT_REF"
+          else
+            tag=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null) \
+              || { echo "::error::release-fuzz: no v* tag to explore; push one, or run it with a ref"; exit 1; }
+          fi
+          git checkout -q --detach "$tag^{commit}" || { echo "::error::release-fuzz: no commit '$tag'"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+{%- if stack == 'typescript' %}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+{%- elif stack == 'python' %}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+{%- elif stack == 'dotnet' %}
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet restore
+{%- elif stack == 'go' %}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+{%- elif stack == 'rust' %}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fetch --locked
+{%- endif %}
+      - name: Start the release image (hardened as in ci/dast.sh) on 127.0.0.1:8080
+        run: |
+          docker build -t app:release .
+          docker run -d --name app -p 127.0.0.1:8080:8080 \
+            --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true app:release
+          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && exit 0; sleep 1; done
+          docker logs app; exit 1
+      - run: mkdir -p release-fuzz-out
+{%- if 'claude' in agent_tools %}
+      # github_token: the job's read-only token, so the action never exchanges an OIDC token for a GitHub App token
+      # that could write to the repository (no id-token permission is granted).
+      - name: Explore the release (Claude Code)
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ '{{' }} secrets.ANTHROPIC_API_KEY {{ '}}' }}
+          github_token: ${{ '{{' }} github.token {{ '}}' }}
+          prompt: "Follow the instructions in .github/release-fuzz.md exactly. The app under test runs at http://127.0.0.1:8080."
+          claude_args: --max-turns 80
+{%- else %}
+      # workspace-write lets the agent edit the checkout and run the tests; network access reaches the app on 127.0.0.1.
+      - name: Explore the release (Codex)
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ '{{' }} secrets.OPENAI_API_KEY {{ '}}' }}
+          prompt-file: .github/release-fuzz.md
+          sandbox: workspace-write
+          codex-args: -c sandbox_workspace_write.network_access=true
+{%- endif %}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-fuzz-out
+          path: release-fuzz-out/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  publish:
+    needs: explore
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ '{{' }} github.token {{ '}}' }}
+      GH_REPO: ${{ '{{' }} github.repository {{ '}}' }}
+      TAG: ${{ '{{' }} needs.explore.outputs.tag {{ '}}' }}
+      DEFAULT_BRANCH: ${{ '{{' }} github.event.repository.default_branch {{ '}}' }}
+    steps:
+      # The default branch's scripts judge the agent's output, never the release's or the agent's own.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ '{{' }} github.event.repository.default_branch {{ '}}' }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-fuzz-out
+          path: ${{ '{{' }} runner.temp {{ '}}' }}/release-fuzz-out
+        continue-on-error: true # no artifact: the agent found nothing
+      - name: Publish findings (issues, draft PRs)
+        run: |
+          [ -d "$RUNNER_TEMP/release-fuzz-out" ] || { echo "No findings."; exit 0; }
+          bash ci/release-fuzz-publish.sh "$RUNNER_TEMP/release-fuzz-out" "$TAG" "$DEFAULT_BRANCH"

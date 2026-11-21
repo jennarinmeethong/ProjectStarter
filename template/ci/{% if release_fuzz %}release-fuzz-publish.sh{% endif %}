@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# ci/release-fuzz-publish.sh — publish what the release agent found (.github/workflows/release-fuzz.yml, publish job).
+#   Usage: bash ci/release-fuzz-publish.sh <out-dir> <tag> <default-branch>     (needs gh, GH_TOKEN, a push remote)
+# The agent ran on untrusted app output, so its output is data: checked here against a fixed format, never executed.
+#   <out-dir>/<n>/title.txt   one line, at most 120 characters        n = 1..10, nothing else in <out-dir>
+#   <out-dir>/<n>/report.md   at most 20000 bytes
+#   <out-dir>/<n>/fix.patch   optional, at most 200000 bytes: a failing test plus the fix
+# Each finding becomes an issue (label release-fuzz). A patch becomes a draft PR from release-fix/<tag>-<n> only if it
+# applies to the default branch's head and touches no tier-3 path (ci/risk-tier.sh); otherwise the issue says why.
+# Nothing here merges: automerge skips release-fix/ branches, and a person reviews every PR.
+# Exit codes: 0 published, 2 output rejected (nothing published).
+set -euo pipefail
+
+out=${1:?usage: ci/release-fuzz-publish.sh <out-dir> <tag> <default-branch>}
+tag=${2:?usage: ci/release-fuzz-publish.sh <out-dir> <tag> <default-branch>}
+default=${3:?usage: ci/release-fuzz-publish.sh <out-dir> <tag> <default-branch>}
+label=release-fuzz
+
+reject() { echo "release-fuzz-publish: rejected: $*" >&2; exit 2; }
+
+# ---- 1. Validate everything before publishing anything.
+[ -d "$out" ] && [ ! -L "$out" ] || reject "$out is not a directory"
+[ -z "$(find "$out" -mindepth 1 -type l -print -quit)" ] || reject "symbolic links are not allowed"
+findings=()
+for entry in "$out"/* "$out"/.[!.]*; do
+  [ -e "$entry" ] || continue
+  n=${entry##*/}
+  [[ "$n" =~ ^([1-9]|10)$ ]] && [ -d "$entry" ] || reject "unexpected entry '$n' (only directories 1..10)"
+  for f in "$entry"/* "$entry"/.[!.]*; do
+    [ -e "$f" ] || continue
+    case "${f##*/}" in title.txt | report.md | fix.patch) [ -f "$f" ] || reject "$n/${f##*/} is not a file" ;;
+      *) reject "unexpected file $n/${f##*/}" ;; esac
+  done
+  [ -f "$entry/title.txt" ] && [ -f "$entry/report.md" ] || reject "$n needs title.txt and report.md"
+  [ "$(wc -l <"$entry/title.txt")" -le 1 ] && [ "$(tr -d '\n' <"$entry/title.txt" | wc -c)" -le 120 ] \
+    && ! grep -q $'\r' "$entry/title.txt" && [ -n "$(tr -d '[:space:]' <"$entry/title.txt")" ] \
+    || reject "$n/title.txt must be one non-empty line of at most 120 characters"
+  [ "$(wc -c <"$entry/report.md")" -le 20000 ] || reject "$n/report.md is over 20000 bytes"
+  [ ! -f "$entry/fix.patch" ] || [ "$(wc -c <"$entry/fix.patch")" -le 200000 ] || reject "$n/fix.patch is over 200000 bytes"
+  findings+=("$n")
+done
+[ "${#findings[@]}" -gt 0 ] || { echo "release-fuzz-publish: no findings"; exit 0; }
+
+# ---- 2. Publish.
+# A patch may rewrite ci/risk-tier.sh itself, so judge every patch with the copy from the default branch, taken now.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+git fetch -q origin "$default"
+git show "origin/$default:ci/risk-tier.sh" >"$work/risk-tier.sh"
+
+# Text from the agent cannot notify people: a zero-width space after every @ breaks GitHub mentions.
+plain() { sed 's/@/@\xe2\x80\x8b/g' "$1"; }
+
+gh label create "$label" --color 5319E7 --description "Found by the release agent; a person reviews it" --force >/dev/null 2>&1 || true
+
+export GIT_AUTHOR_NAME="github-actions[bot]" GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+
+mapfile -t findings < <(printf '%s\n' "${findings[@]}" | sort -n)
+for n in "${findings[@]}"; do
+  dir="$out/$n"
+  title="release-fuzz: $(plain "$dir/title.txt")"
+  report=$(plain "$dir/report.md")
+  note="No patch was proposed."
+  branch=""
+  if [ -f "$dir/fix.patch" ]; then
+    branch="release-fix/$tag-$n"
+    git checkout -q --force -B "$branch" "origin/$default"
+    if ! git apply --3way --index "$dir/fix.patch" >/dev/null 2>&1; then
+      note="The proposed patch does not apply to \`$default\`; it is attached to the workflow run."
+      branch=""
+    else
+      mapfile -t paths < <(git diff --cached --no-renames --name-only)
+      if [ "$(bash "$work/risk-tier.sh" --files "${paths[@]}")" = 3 ]; then
+        note="The proposed patch touches tier-3 paths (docs/risk-tiers.md), so no PR was opened; it is attached to the workflow run."
+        branch=""
+      else
+        git commit -q -m "fix: $(tr -d '\n' <"$dir/title.txt" | sed 's/@/@\xe2\x80\x8b/g') (release agent, $tag)"
+        if git push -q origin "$branch"; then
+          note="A draft PR from \`$branch\` proposes a fix; a person must review it."
+        else
+          note="The fix branch could not be pushed; the patch is attached to the workflow run."
+          branch=""
+        fi
+      fi
+    fi
+    git reset -q --hard
+    git checkout -q --force --detach "origin/$default"
+  fi
+
+  issue=$(gh issue create --label "$label" --title "$title" --body "Found by the release agent on \`$tag\`.
+
+$report
+
+---
+$note")
+  if [ -n "$branch" ]; then
+    body="Proposed by the release agent on \`$tag\` for $issue.
+
+Needs human review: it is never automerged. CI does not start on a PR opened by the workflow token; push a commit or
+re-run the checks after reviewing it (docs/engineering/release-routine.md)."
+    gh pr create --draft --label "$label" --base "$default" --head "$branch" --title "$title" --body "$body" \
+      || gh pr create --label "$label" --base "$default" --head "$branch" --title "$title" --body "$body"
+  fi
+done
