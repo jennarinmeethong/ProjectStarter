@@ -693,6 +693,55 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
   fi
 }
 
+release_check_files() { # release_check_files <render-dir> <tools>: the release check exists in every render
+  local wf="$1/.github/workflows/release-check.yml"
+  if [ -f "$wf" ] && [ -f "$1/ci/release-report.sh" ] && ! grep -q 'pull_request' "$wf" && grep -q "tags: \[\"v\*\"\]" "$wf" \
+    && grep -q 'PROPERTY_RUNS: "10000"' "$wf" && grep -q 'no v\* tag' "$wf"; then
+    pass "release check workflow ($2)"
+  else
+    fail "release check workflow missing, or runs on pull requests ($2)"
+  fi
+  # The full scan runs exactly where the per-PR baseline scan does.
+  if [ -f "$1/ci/dast.sh" ] && grep -q '^  dast-full:' "$wf"; then
+    pass "release check: full scan with a container ($2)"
+  elif [ ! -f "$1/ci/dast.sh" ] && ! grep -q 'dast-full' "$wf"; then
+    pass "release check: no full scan without a scanned container ($2)"
+  else
+    fail "release check: dast-full does not match ci/dast.sh ($2)"
+  fi
+}
+
+gh_stub() { # gh_stub <dir>: a fake gh on PATH that logs its arguments to $GH_LOG ($GH_EXISTING: an open issue number)
+  mkdir -p "$1"
+  cat >"$1/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GH_LOG"
+case "$1 $2" in
+  "issue list") [ -z "${GH_EXISTING:-}" ] || echo "$GH_EXISTING" ;;
+  "issue create") echo "https://github.com/o/r/issues/41" ;;
+  "pr create") case " $* " in *" --draft "*) [ -z "${GH_NO_DRAFT:-}" ] || exit 1 ;; esac; echo "https://github.com/o/r/pull/42" ;;
+esac
+EOF
+  chmod +x "$1/gh"
+}
+
+release_check_checks() { # in the full render: actionlint, and ci/release-report.sh files one issue per failing job
+  local vol stub log
+  vol=$(docker_vol)
+  MSYS_NO_PATHCONV=1 verify "actionlint: release-check workflow" \
+    "docker run --rm -v '$vol:/repo' -w /repo rhysd/actionlint:1.7.7 .github/workflows/release-check.yml"
+  stub="$work/gh-stub" log="$work/gh.log"
+  gh_stub "$stub"
+  : >"$log"
+  PATH="$stub:$PATH" GH_LOG="$log" bash ci/release-report.sh property v1.2.0 abc123 https://ci/run/1 >/dev/null 2>&1
+  grep -q '^issue create .*--label release-check' "$log" && grep -q 'release-check: property failed on v1.2.0' "$log" \
+    && pass "release-report: new issue" || fail "release-report: no issue created ($(tr '\n' ';' <"$log"))"
+  : >"$log"
+  PATH="$stub:$PATH" GH_LOG="$log" GH_EXISTING=7 bash ci/release-report.sh property v1.3.0 def456 https://ci/run/2 >/dev/null 2>&1
+  grep -q '^issue comment 7 ' "$log" && ! grep -q '^issue create' "$log" \
+    && pass "release-report: comments on the open issue" || fail "release-report: duplicate issue ($(tr '\n' ';' <"$log"))"
+}
+
 automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by path, and the workflow lints clean
   local first case want got file
   first=$(sed -n 's/.*"Edit(\/\([^*)]*\))".*/\1/p' .claude/settings.json | head -1)
@@ -902,9 +951,10 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
     else
       [ ! -e "$d/CLAUDE.md" ] && [ ! -e "$d/.claude" ] && pass "no claude files ($tools)" || fail "unexpected claude files ($tools)"
     fi
+    release_check_files "$d" "$tools"
     # GitHub workflows use ${{ }} themselves.
-    if grep -rIl '{{\|{%' "$d" --exclude-dir=node_modules --exclude-dir=.venv --exclude=ci.yml --exclude=automerge.yml >/dev/null; then
-      fail "unrendered Jinja in $(grep -rIl '{{\|{%' "$d" --exclude=ci.yml --exclude=automerge.yml | head -1)"
+    if grep -rIl '{{\|{%' "$d" --exclude-dir=node_modules --exclude-dir=.venv --exclude=ci.yml --exclude=automerge.yml --exclude=release-check.yml --exclude=release-fuzz.yml >/dev/null; then
+      fail "unrendered Jinja in $(grep -rIl '{{\|{%' "$d" --exclude=ci.yml --exclude=automerge.yml --exclude=release-check.yml --exclude=release-fuzz.yml | head -1)"
     fi
   done
 
@@ -919,6 +969,7 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
   model_check_checks
   automerge_checks
   task_checks
+  release_check_checks
   case "$stack" in
     typescript)
       npm install --no-audit --no-fund >/dev/null 2>&1

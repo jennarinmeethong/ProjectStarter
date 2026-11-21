@@ -1,0 +1,152 @@
+# Release check (roadmap phase 6, docs/engineering/release-routine.md): on each release tag, run what is too slow or
+# too aggressive for every PR against the tagged commit, and file each failed job as an issue (label release-check).
+# Nothing here fixes or merges anything: a person or an agent picks the issue up through the normal PR flow.
+name: release-check
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to check (default: the latest v* tag)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-check-${{ '{{' }} github.ref {{ '}}' }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ '{{' }} steps.ref.outputs.tag {{ '}}' }}
+      sha: ${{ '{{' }} steps.ref.outputs.sha {{ '}}' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: ref
+        name: Resolve the release to check
+        env:
+          INPUT_REF: ${{ '{{' }} inputs.ref {{ '}}' }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ -n "$INPUT_REF" ]; then
+            tag="$INPUT_REF"
+          else
+            tag=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null) \
+              || { echo "::error::release-check: no v* tag to check; push one, or run it with a ref"; exit 1; }
+          fi
+          sha=$(git rev-parse --verify -q "$tag^{commit}") || { echo "::error::release-check: no commit '$tag'"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Release check of $tag ($sha)" >> "$GITHUB_STEP_SUMMARY"
+
+  # Property-based tests with far more generated cases than the PR suite runs.
+  property:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PROPERTY_RUNS: "10000"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ '{{' }} needs.resolve.outputs.sha {{ '}}' }}
+{%- if stack == 'typescript' %}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Unit and property tests (fast-check reads PROPERTY_RUNS)
+        run: {{ cmd.test }}
+{%- elif stack == 'python' %}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - name: Unit and property tests (Hypothesis, tests/conftest.py)
+        run: {{ cmd.test }} --property-runs="$PROPERTY_RUNS"
+{%- elif stack == 'dotnet' %}
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet restore
+      - name: Unit and property tests (FsCheck reads PROPERTY_RUNS)
+        run: dotnet test{% if datastores %} --filter-not-trait "Category=Integration"{% endif %}{% if http_api %} --filter-not-trait "Category=E2E"{% endif %}
+{%- elif stack == 'go' %}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+      # -rapid.checks is defined only in packages that import rapid; list each such package here.
+      - name: Property tests (rapid)
+        run: go test ./internal/domain -rapid.checks="$PROPERTY_RUNS"
+{%- elif stack == 'rust' %}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fetch --locked
+      - name: Unit and property tests (proptest reads PROPTEST_CASES)
+        run: PROPTEST_CASES="$PROPERTY_RUNS" {{ cmd.test }}
+{%- endif %}
+{%- if containerize and (serve_http or frontend != 'none') %}
+
+  # The ZAP full (active) scan of the release image: reports warnings, fails on FAIL-level rules (ci/dast.sh --full).
+  dast-full:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ '{{' }} needs.resolve.outputs.sha {{ '}}' }}
+{%- if http_api %}
+      - name: Build image
+        run: docker build -t app:release .
+      - name: OWASP ZAP full scan of the API container
+        run: bash ci/dast.sh app:release --full
+{%- endif %}
+{%- if frontend == 'ssr' %}
+{%- if not http_api %}
+      - name: Build image
+        run: docker build -t app:release .
+{%- endif %}
+      - name: OWASP ZAP full scan of the server-rendered UI (starts at /)
+        run: DAST_PATH=/ bash ci/dast.sh app:release --full
+{%- elif frontend != 'none' %}
+      - name: Build web image
+        run: docker build -f Dockerfile.web -t web:release .
+      - name: OWASP ZAP full scan of the web UI container (starts at /)
+        run: DAST_PATH=/ bash ci/dast.sh web:release --full
+{%- endif %}
+{%- endif %}
+
+  report:
+    needs: [resolve, property{% if containerize and (serve_http or frontend != 'none') %}, dast-full{% endif %}]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ '{{' }} github.token {{ '}}' }}
+      GH_REPO: ${{ '{{' }} github.repository {{ '}}' }}
+      TAG: ${{ '{{' }} needs.resolve.outputs.tag {{ '}}' }}
+      SHA: ${{ '{{' }} needs.resolve.outputs.sha {{ '}}' }}
+      RUN_URL: ${{ '{{' }} github.server_url {{ '}}' }}/${{ '{{' }} github.repository {{ '}}' }}/actions/runs/${{ '{{' }} github.run_id {{ '}}' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ '{{' }} needs.resolve.outputs.sha {{ '}}' }}
+      - name: File property failures
+        if: needs.property.result == 'failure'
+        run: bash ci/release-report.sh property "$TAG" "$SHA" "$RUN_URL"
+{%- if containerize and (serve_http or frontend != 'none') %}
+      - name: File full-scan failures
+        if: needs.dast-full.result == 'failure'
+        run: bash ci/release-report.sh dast-full "$TAG" "$SHA" "$RUN_URL"
+{%- endif %}
