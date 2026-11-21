@@ -619,7 +619,8 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
   bash scripts/new-task.sh s >/dev/null
   (cd "$tasks/s" && echo s > s.txt && git add s.txt && git -c user.name=t -c user.email=t@t commit -qm s)
   git merge -q --squash task/s && git -c user.name=t -c user.email=t@t commit -qm "squash s"
-  bash scripts/end-task.sh s >/dev/null && pass "end-task: squash-merged task" || fail "end-task: squash-merged task refused"
+  # No git identity, as on CI runners: end-task must not need one.
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 bash scripts/end-task.sh s >/dev/null && pass "end-task: squash-merged task" || fail "end-task: squash-merged task refused"
   # No origin/HEAD and no local main: the default branch is the main checkout's branch.
   bash scripts/new-task.sh t >/dev/null && git branch -q -m main trunk
   bash scripts/end-task.sh t >/dev/null && pass "end-task: default branch without origin/HEAD or main" \

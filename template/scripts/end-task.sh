@@ -35,7 +35,10 @@ merged() {
   git merge-base --is-ancestor "$branch" "$default" && return 0
   # Squash or rebase merge: the branch's commits are not in the default branch, but the same change is.
   mb=$(git merge-base "$default" "$branch") || return 1
-  squashed=$(git commit-tree "$branch^{tree}" -p "$mb" -m squash)
+  # A throwaway commit, never referenced; a fixed identity keeps it working where git has none set (CI, fresh machines).
+  squashed=$(GIT_AUTHOR_NAME=end-task GIT_AUTHOR_EMAIL=end-task@localhost \
+    GIT_COMMITTER_NAME=end-task GIT_COMMITTER_EMAIL=end-task@localhost \
+    git commit-tree "$branch^{tree}" -p "$mb" -m squash) || return 1
   [[ "$(git cherry "$default" "$squashed")" == -* ]] && return 0
   echo "end-task: $branch has changes that are not in $default" >&2
   return 1
