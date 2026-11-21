@@ -278,9 +278,13 @@ http_checks() { # http_checks <stack> <e2e-command> <file> <sed-expression>: ren
   local image="project-starter-$1"
   verify "playwright: API tests against the real server" "$2"
   verify "zap: baseline scan of the running container" "bash ci/dast.sh $image"
-  # Drop one security header: the ZAP scan must fail the build.
+  # The release check's full (active) scan, time-capped here; it reports warnings and fails on FAIL-level rules.
+  # The active rules run too: ZAP 2.17 checks ~67 rules in the baseline and ~140 in the full scan.
+  verify "zap: full scan of the running container" "DAST_MAX_MINUTES=3 bash ci/dast.sh $image --full | tee /dev/stderr | grep -qE 'PASS: [1-9][0-9]{2,}'"
+  # Drop one security header: the ZAP scan must fail the build, in both modes.
   sed -i "$4" "$3"
   expect_fail "zap: missing X-Content-Type-Options" bash -c "docker build -q -t $image-seed . >/dev/null && bash ci/dast.sh $image-seed"
+  expect_fail "zap full: missing X-Content-Type-Options" bash -c "DAST_MAX_MINUTES=3 bash ci/dast.sh $image-seed --full"
   git checkout -q -- "$3"
 }
 
