@@ -1,0 +1,22 @@
+"""Shared test setup.
+
+`pytest --property-runs=N` raises the number of cases every Hypothesis property test
+generates. The release check passes PROPERTY_RUNS here (.github/workflows/release-check.yml).
+Without it, Hypothesis keeps its default.
+"""
+
+import pytest
+from hypothesis import settings
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--property-runs", type=int, default=None, help="cases per Hypothesis property test"
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    runs: int | None = config.getoption("--property-runs")
+    if runs:
+        settings.register_profile("property-runs", max_examples=runs)
+        settings.load_profile("property-runs")

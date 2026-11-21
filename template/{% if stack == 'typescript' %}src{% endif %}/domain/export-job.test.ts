@@ -2,6 +2,12 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { completeExport, startExport } from "./export-job.ts";
 
+// PROPERTY_RUNS raises the generated cases per property (the release check sets it); unset keeps fast-check's default.
+function propertyRuns(): fc.Parameters<unknown> {
+  const runs = Number(process.env.PROPERTY_RUNS);
+  return Number.isInteger(runs) && runs > 0 ? { numRuns: runs } : {};
+}
+
 describe("export job", () => {
   it("starts a queued job", () => {
     expect(startExport({ kind: "queued", id: "job-1" })).toEqual({ kind: "running", id: "job-1" });
@@ -31,6 +37,7 @@ describe("export job", () => {
           expect(ready.artifactKey).toBe(key);
         },
       ),
+      propertyRuns(),
     );
   });
 });

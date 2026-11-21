@@ -34,10 +34,21 @@ public sealed class ExportJobTests
         Assert.Throws<ArgumentNullException>(() => ExportTransitions.Complete(null!, "exports/job-1.csv"));
     }
 
-    [Property]
-    public Property KeepsIdAndKeyForAnyNonBlankKey(NonNull<string> id, NonWhiteSpaceString key)
+    // Property: for any id and any non-blank key, completing keeps both. PROPERTY_RUNS raises the case count (the
+    // release check sets it, .github/workflows/release-check.yml); unset, FsCheck keeps its default.
+    [Fact]
+    public void KeepsIdAndKeyForAnyNonBlankKey()
     {
-        var ready = ExportTransitions.Complete(new ExportJob.Running(id.Get), key.Get);
-        return (ready.Id == id.Get && ready.ArtifactKey == key.Get).ToProperty();
+        var property = Prop.ForAll<NonNull<string>, NonWhiteSpaceString>((id, key) =>
+        {
+            var ready = ExportTransitions.Complete(new ExportJob.Running(id.Get), key.Get);
+            return ready.Id == id.Get && ready.ArtifactKey == key.Get;
+        });
+        property.Check(PropertyRunsConfig());
     }
+
+    private static Config PropertyRunsConfig() =>
+        int.TryParse(Environment.GetEnvironmentVariable("PROPERTY_RUNS"), out var runs) && runs > 0
+            ? Config.QuickThrowOnFailure.WithMaxTest(runs)
+            : Config.QuickThrowOnFailure;
 }

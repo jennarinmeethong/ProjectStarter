@@ -532,6 +532,60 @@ declare -A mutation_rejected=(
   [go]='below efficacy-threshold' [rust]='MISSED'
 )
 
+# Property-test run count (PROPERTY_RUNS, raised by .github/workflows/release-check.yml): the command that runs only the
+# property test, and a seed that makes the property fail from its 501st case. With PROPERTY_RUNS=1000 the seeded test
+# must fail on that seed; unset, the framework default (100) never reaches it.
+declare -A property_cmd=(
+  [typescript]="npx vitest run src/domain/export-job.test.ts"
+  [python]='uv run pytest tests/test_export_job.py -q -p no:cacheprovider ${PROPERTY_RUNS:+--property-runs=$PROPERTY_RUNS}'
+  [dotnet]="dotnet test --project tests/DemoApp.Domain.Tests"
+  [go]='go test -count=1 ./internal/domain -run TestCompleteKeepsIDAndKey ${PROPERTY_RUNS:+-rapid.checks=$PROPERTY_RUNS}'
+  [rust]='env ${PROPERTY_RUNS:+PROPTEST_CASES=$PROPERTY_RUNS} cargo test -q -p domain keeps_id_and_key'
+)
+declare -A property_file=(
+  [typescript]=src/domain/export-job.test.ts [python]=tests/test_export_job.py
+  [dotnet]=tests/DemoApp.Domain.Tests/ExportJobTests.cs [go]=internal/domain/exportjob_test.go [rust]=crates/domain/src/lib.rs
+)
+declare -A property_anchor=(
+  [typescript]='^          const ready = completeExport'
+  [python]='^    ready = complete_export(RunningExport(id=job_id), key)'
+  [dotnet]='^            var ready = ExportTransitions.Complete(new ExportJob.Running(id.Get), key.Get);'
+  [go]='^\tready, err := domain.Complete(domain.Start(domain.NewQueued(id)), key)'
+  [rust]='^            let ready = complete(start(Queued::new(id.clone())), \&key).unwrap();'
+)
+declare -A property_seed=(
+  [typescript]='          const g = globalThis as { seedCalls?: number };\n          g.seedCalls = (g.seedCalls ?? 0) + 1;\n          if (g.seedCalls > 500) throw new Error("seed: past 500 cases");'
+  [python]='    global _seed_calls\n    _seed_calls = globals().get("_seed_calls", 0) + 1\n    assert _seed_calls <= 500, "seed: past 500 cases"'
+  [dotnet]='        if (SeedCalls.Next() > 500)\n        {\n            throw new System.InvalidOperationException("seed: past 500 cases");\n        }'
+  [go]='\tseedCalls++\n\tif seedCalls > 500 {\n\t\tt.Fatalf("seed: past 500 cases")\n\t}'
+  [rust]='            static SEED_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n            prop_assert!(SEED_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 500, "seed: past 500 cases");'
+)
+
+property_runs_check() { # property_runs_check <stack>: in the claude-only render (installed by default_verify)
+  pushd "$work/$1-claude" >/dev/null || return
+  local file=${property_file[$1]} out
+  sed -i "s|${property_anchor[$1]}|${property_seed[$1]}\n&|" "$file"
+  case "$1" in
+    dotnet) printf '\ninternal static class SeedCalls\n{\n    private static int s_count;\n\n    public static int Next() => System.Threading.Interlocked.Increment(ref s_count);\n}\n' >> "$file" ;;
+    go) printf '\nvar seedCalls int\n' >> "$file" ;;
+  esac
+  if out=$(PROPERTY_RUNS=1000 bash -c "${property_cmd[$1]}" 2>&1); then
+    fail "property runs: PROPERTY_RUNS=1000 ignored ($1)"
+  elif grep -q 'seed: past 500 cases' <<<"$out"; then
+    pass "property runs: PROPERTY_RUNS honoured ($1)"
+  else
+    fail "property runs: failed for another reason ($1)"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'
+  fi
+  if out=$(env -u PROPERTY_RUNS bash -c "${property_cmd[$1]}" 2>&1); then
+    pass "property runs: default unchanged ($1)"
+  else
+    fail "property runs: default run reached the seed ($1)"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'
+  fi
+  git checkout -q -- "$file"
+  rm -rf .hypothesis crates/domain/proptest-regressions
+  popd >/dev/null || return
+}
+
 mutation_unsupported_here() { # mutmut, Stryker.NET and gremlins misbehave on Windows; CI (Linux) runs them
   case "$1:$(uname -s)" in
     python:MINGW* | python:MSYS* | dotnet:MINGW* | dotnet:MSYS* | go:MINGW* | go:MSYS*)
@@ -851,6 +905,7 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
   done
 
   default_verify "$stack"
+  property_runs_check "$stack"
   default_mutation "$stack"
 
   # Full verification on the both-tools render.
