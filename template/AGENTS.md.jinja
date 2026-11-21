@@ -42,6 +42,7 @@
 {%- if model_check %}
 - Concurrent protocols: TLA+ models in `models/`, checked by `bash ci/model-check.sh` (`docs/adr/0006-model-check.md`).
 {%- endif %}
+- Parallel tasks: one worktree each via `bash scripts/new-task.sh <name>` (`docs/engineering/parallel-work.md`).
 - Why rules exist: `docs/adr/` · Where a new rule belongs: `docs/engineering/where-rules-live.md`
 - Specs for risk tier 2–3 work: copy `SPEC.template.md` to `docs/specs/<feature-id>.md`
 

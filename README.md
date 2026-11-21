@@ -13,6 +13,7 @@
 | Agent adapters | `template/{% if 'claude' in agent_tools %}.claude{% endif %}/`, `CLAUDE.md` | Claude Code: deny rules + hooks; Codex ใช้ `AGENTS.md` ร่วมกัน + CI |
 | Generator | `copier.yml` | คำถามและค่าคำนวณ (Copier) |
 | Skill / plugin | `skills/project-starter/SKILL.md`, `.claude-plugin/` | skill เดียวใช้ได้ทั้ง Claude Code และ Codex |
+| งานขนาน | `template/scripts/`, `template/docs/engineering/parallel-work.md.jinja` | `new-task.sh` / `end-task.sh`: worktree, branch และ port ต่องาน พร้อมจำกัดจำนวนงานที่เปิดค้าง |
 | Tests | `tests/render-all.sh` | render ทุกชุด stack × agent แล้ว verify และใส่การละเมิดเพื่อตรวจว่า guardrail จับได้ |
 
 ### เครื่องมือต่อ stack

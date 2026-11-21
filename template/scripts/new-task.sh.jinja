@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Start one task in its own worktree, branch and port block: bash scripts/new-task.sh <name> [base-ref]
+# Why and how to work this way: docs/engineering/parallel-work.md. MAX_TASKS (default 3) limits open tasks.
+set -euo pipefail
+
+name="${1:-}"
+base="${2:-HEAD}"
+max="${MAX_TASKS:-3}"
+
+die() { echo "new-task: $*" >&2; exit 1; }
+
+[[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "usage: bash scripts/new-task.sh <name> [base-ref]; name: lowercase letters, digits, '-'"
+git rev-parse --verify -q "$base^{commit}" >/dev/null || die "no commit '$base' (the repo needs at least one commit)"
+
+# Tasks live next to the main checkout, so linters and test discovery there never see them.
+worktrees=$(git worktree list --porcelain | sed -n 's/^worktree //p')
+main=$(printf '%s\n' "$worktrees" | head -n 1)
+path="$(dirname "$main")/$(basename "$main")-tasks/$name"
+branch="task/$name"
+
+git show-ref --verify -q "refs/heads/$branch" && die "branch $branch already exists"
+[ -e "$path" ] && die "$path already exists"
+
+# A worktree is a task when it has .task/env; its slot picks the ports.
+open=0
+used=" "
+while IFS= read -r wt; do
+  [ -f "$wt/.task/env" ] || continue
+  open=$((open + 1))
+  used+="$(sed -n 's/^export TASK_SLOT=//p' "$wt/.task/env") "
+done <<<"$worktrees"
+[ "$open" -lt "$max" ] || die "$open tasks are open (MAX_TASKS=$max). Finish one with scripts/end-task.sh first; see docs/engineering/parallel-work.md"
+
+slot=1
+while [[ "$used" == *" $slot "* ]]; do slot=$((slot + 1)); done
+[ "$slot" -le 99 ] || die "no free port slot"
+ports=$((20000 + slot * 100))
+
+git worktree add -q -b "$branch" "$path" "$base"
+sha=$(git -C "$path" rev-parse HEAD)
+
+mkdir -p "$path/.task"
+cat >"$path/.task/env" <<EOF
+# Ports, compose project and image tag for task '$name'. Load with: source .task/env
+export TASK_SLOT=$slot
+export PORT=$ports
+export APP_PORT=$((ports + 1))
+export E2E_PORT=$((ports + 2))
+export UI_PORT=$((ports + 3))
+export WEB_PORT=$((ports + 4))
+export COMPOSE_PROJECT_NAME={{ project_name | lower }}-$name
+export IMAGE_TAG=task-$name
+EOF
+
+cat >"$path/.task/brief.md" <<EOF
+# Task: $name
+
+- Branch: \`$branch\`
+- Base: \`$sha\`
+- Started: $(date +%Y-%m-%d)
+- Ports: app $ports, compose $((ports + 1)), e2e $((ports + 2)), ui $((ports + 3)), web $((ports + 4))
+
+Fill this in before work starts, then copy it into the PR description.
+
+## Scope (files and directories this task may change)
+
+## Acceptance tests
+
+## Depends on PRs
+
+## Owner
+EOF
+{%- if 'claude' in agent_tools %}
+
+# Claude Code passes these to every command it runs in this worktree.
+mkdir -p "$path/.claude"
+cat >"$path/.claude/settings.local.json" <<EOF
+{
+  "env": {
+    "TASK_SLOT": "$slot",
+    "PORT": "$ports",
+    "APP_PORT": "$((ports + 1))",
+    "E2E_PORT": "$((ports + 2))",
+    "UI_PORT": "$((ports + 3))",
+    "WEB_PORT": "$((ports + 4))",
+    "COMPOSE_PROJECT_NAME": "{{ project_name | lower }}-$name",
+    "IMAGE_TAG": "task-$name"
+  }
+}
+EOF
+{%- endif %}
+
+cat <<EOF
+Task '$name' is ready on branch $branch (slot $slot, ports $ports-$((ports + 4))).
+Next:
+  cd "$path"
+  source .task/env        # shell and Codex CLI{% if 'claude' in agent_tools %}; Claude Code reads .claude/settings.local.json{% endif %}
+  fill in .task/brief.md, then start the agent there
+When the PR is merged: bash scripts/end-task.sh $name
+$path
+EOF

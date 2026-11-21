@@ -582,6 +582,59 @@ model_check_checks() { # in the full render (model_check=true): TLC passes the m
   git checkout -q -- "$model"
 }
 
+task_checks() { # in the full render (both tools, git repo on main): scripts/new-task.sh and scripts/end-task.sh
+  local tasks
+  grep -q 'scripts/new-task.sh' AGENTS.md && grep -q 'scripts/new-task.sh' docs/engineering/parallel-work.md \
+    && grep -qF -- '- [x] worktree' docs/roadmap.md && pass "parallel work documented" || fail "parallel work docs missing"
+  tasks="../$(basename "$PWD")-tasks"
+  if bash scripts/new-task.sh a >/dev/null && bash scripts/new-task.sh b >/dev/null \
+    && grep -q '^export TASK_SLOT=1$' "$tasks/a/.task/env" && grep -q '^export E2E_PORT=20102$' "$tasks/a/.task/env" \
+    && grep -q '^export TASK_SLOT=2$' "$tasks/b/.task/env" && grep -q '^export E2E_PORT=20202$' "$tasks/b/.task/env"; then
+    pass "new-task: two tasks, distinct ports"
+  else
+    fail "new-task: two tasks, distinct ports"
+  fi
+  (cd "$tasks/a" && bash scripts/new-task.sh c >/dev/null) && [ -f "$tasks/c/.task/env" ] && [ ! -e "$tasks/a-tasks" ] \
+    && pass "new-task: from a task worktree" || fail "new-task: from a task worktree"
+  expect_fail "new-task: fourth task over MAX_TASKS=3" bash scripts/new-task.sh d
+  expect_fail "new-task: bad name" bash scripts/new-task.sh Bad_Name
+  [ -z "$(git -C "$tasks/a" status --porcelain)" ] && pass "new-task: task files ignored" || fail "new-task: task files show in git status"
+  grep -q '"E2E_PORT": "20102"' "$tasks/a/.claude/settings.local.json" && pass "new-task: claude env" || fail "new-task: claude env"
+  grep -q "$(git rev-parse main)" "$tasks/a/.task/brief.md" && grep -q 'COMPOSE_PROJECT_NAME=demo-app-a' "$tasks/a/.task/env" \
+    && pass "new-task: brief has base SHA, compose project per task" || fail "new-task: brief or compose project"
+
+  touch "$tasks/a/x.txt"
+  expect_fail "end-task: dirty worktree" bash scripts/end-task.sh a
+  rm -f "$tasks/a/x.txt"
+  (cd "$tasks/b" && echo b > b.txt && git add b.txt && git -c user.name=t -c user.email=t@t commit -qm b)
+  expect_fail "end-task: unmerged branch" bash scripts/end-task.sh b
+  bash scripts/end-task.sh b --force >/dev/null && [ ! -e "$tasks/b" ] && ! git show-ref -q --verify refs/heads/task/b \
+    && pass "end-task: --force" || fail "end-task: --force"
+  bash scripts/end-task.sh a >/dev/null && bash scripts/new-task.sh e >/dev/null && grep -q '^export TASK_SLOT=1$' "$tasks/e/.task/env" \
+    && pass "end-task: slot reused" || fail "end-task: slot reused"
+  expect_fail "end-task: from inside the task" bash -c "cd '$tasks/c' && bash scripts/end-task.sh c"
+  bash scripts/end-task.sh c >/dev/null && bash scripts/end-task.sh e >/dev/null && [ -z "$(git worktree list | sed 1d)" ] \
+    && pass "end-task: all tasks removed" || fail "end-task: tasks left behind"
+  # A squash merge (what automerge does) leaves the task's own commits out of main; the change is in, so it is merged.
+  bash scripts/new-task.sh s >/dev/null
+  (cd "$tasks/s" && echo s > s.txt && git add s.txt && git -c user.name=t -c user.email=t@t commit -qm s)
+  git merge -q --squash task/s && git -c user.name=t -c user.email=t@t commit -qm "squash s"
+  # No git identity, as on CI runners: end-task must not need one.
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 bash scripts/end-task.sh s >/dev/null && pass "end-task: squash-merged task" || fail "end-task: squash-merged task refused"
+  # No origin/HEAD and no local main: the default branch is the main checkout's branch.
+  bash scripts/new-task.sh t >/dev/null && git branch -q -m main trunk
+  bash scripts/end-task.sh t >/dev/null && pass "end-task: default branch without origin/HEAD or main" \
+    || fail "end-task: default branch without origin/HEAD or main"
+  git branch -q -m trunk main
+  # Each task builds its own image tag, so one task's build cannot replace another's.
+  if [ -f compose.yaml ]; then
+    bash scripts/new-task.sh i >/dev/null
+    grep -q 'IMAGE_TAG:-local' compose.yaml && grep -q '^export IMAGE_TAG=task-i$' "$tasks/i/.task/env" \
+      && pass "new-task: image tag per task" || fail "new-task: image tag per task"
+    bash scripts/end-task.sh i >/dev/null
+  fi
+}
+
 automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by path, and the workflow lints clean
   local first case want got file
   first=$(sed -n 's/.*"Edit(\/\([^*)]*\))".*/\1/p' .claude/settings.json | head -1)
@@ -806,6 +859,7 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
   git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm base && git branch -q base
   model_check_checks
   automerge_checks
+  task_checks
   case "$stack" in
     typescript)
       npm install --no-audit --no-fund >/dev/null 2>&1
@@ -826,7 +880,10 @@ core_checks() { # the agent-tool renders, the defaults, and the full render of $
       # Datastores (docs/adr/0003-datastores.md).
       datastore_checks typescript
       verify "integration: adapter contracts on real PostgreSQL + Redis" "npm run test:integration"
-      # HTTP API (docs/adr/0004-http-api.md).
+      # HTTP API (docs/adr/0004-http-api.md). A task worktree moves the test port (docs/engineering/parallel-work.md).
+      grep -q 'process.env.E2E_PORT' playwright.config.ts && grep -q 'APP_PORT:-8080' compose.yaml \
+        && pass "ports read the environment" || fail "test or compose ports are fixed"
+      verify "playwright: API tests on E2E_PORT=28702" "E2E_PORT=28702 npm run test:e2e"
       http_checks typescript "npm run test:e2e" src/adapters/http/app.ts 's/      xFrameOptions: "DENY",/&\n      xContentTypeOptions: false,/'
       seeded "depcruise: web framework imported in application" src/application/complete-export.ts '\nimport { Hono } from "hono";\nexport const framework = Hono;\n' npm run arch
       seeded "depcruise: driver imported in application" src/application/complete-export.ts '\nimport pg from "pg";\nexport const driver = pg;\n' npm run arch
