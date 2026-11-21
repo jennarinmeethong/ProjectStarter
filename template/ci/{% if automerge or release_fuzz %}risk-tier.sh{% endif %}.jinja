@@ -4,11 +4,20 @@
 #   3  any changed file is on a tier-3 path: risk paths, guardrail configs, ci/, .github/, tests/acceptance/, agent rules
 #   1  anything else: a human reviews it and decides between tier 1 and 2
 # .github/workflows/automerge.yml acts on 0 only. Usage: ci/risk-tier.sh <base> [head]   (head defaults to HEAD)
+#   ci/risk-tier.sh --files <path>...   the tier of those paths (ci/release-fuzz-publish.sh judges a patch with it)
 set -euo pipefail
 
-base_ref=${1:?usage: ci/risk-tier.sh <base> [head]}
-head_ref=${2:-HEAD}
-base=$(git merge-base "$base_ref" "$head_ref")
+if [ "${1:-}" = --files ]; then
+  shift
+  files=$(printf '%s
+' "$@")
+else
+  base_ref=${1:?usage: ci/risk-tier.sh <base> [head] | ci/risk-tier.sh --files <path>...}
+  head_ref=${2:-HEAD}
+  base=$(git merge-base "$base_ref" "$head_ref")
+  # --no-renames: a rename counts as a delete plus an add, so both paths are judged.
+  files=$(git diff --no-renames --name-only "$base" "$head_ref")
+fi
 
 # Tier-3 prefixes. A risk path such as auth/ matches at any depth, as in CODEOWNERS.
 risk_paths=({% for p in risk_paths %}'{{ p }}' {% endfor %})
@@ -16,6 +25,7 @@ tier3=({% for f in stk.guardrail_files %}'{{ f }}' {% endfor %}'ci/' '.github/' 
 
 is_tier3() {
   local f=$1 p
+  case "/$f/" in */../*) return 0 ;; esac # a path that climbs out cannot be judged by its prefix
   for p in "${tier3[@]}"; do
     if [ "${p%/}" != "$p" ]; then # a directory: everything under it
       case "$f" in "$p"*) return 0 ;; esac
@@ -35,7 +45,6 @@ is_doc() {
 
 tier=0
 changed=0
-# --no-renames: a rename counts as a delete plus an add, so both paths are judged.
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   changed=1
@@ -44,6 +53,6 @@ while IFS= read -r f; do
     exit 0
   fi
   is_doc "$f" || tier=1
-done < <(git diff --no-renames --name-only "$base" "$head_ref")
-[ "$changed" = 1 ] || tier=1 # an empty diff is not a tier-0 change to merge
+done <<<"$files"
+[ "$changed" = 1 ] || tier=1 # an empty change is not a tier-0 change to merge
 echo "$tier"

@@ -758,6 +758,16 @@ automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by p
     git switch -q main && git branch -qD tier-probe
     [ "$got" = "$want" ] && pass "risk-tier: $file -> $want" || fail "risk-tier: $file -> $got (want $want)"
   done
+  # --files: the tier of a list of paths (ci/release-fuzz-publish.sh judges a patch with it). A ../ path is tier 3.
+  for case in "docs/a.md:0" "src/x.ts docs/a.md:1" ".github/workflows/x.yml:3" "src/auth/x:3" "../.github/x:3" "docs/../ci/x.sh:3" ":1"; do
+    want=${case##*:}
+    # shellcheck disable=SC2086 # the paths are split on purpose
+    got=$(bash ci/risk-tier.sh --files ${case%:*} 2>&1)
+    [ "$got" = "$want" ] && pass "risk-tier --files '${case%:*}' -> $want" || fail "risk-tier --files '${case%:*}' -> $got (want $want)"
+  done
+  # The release routine's fix PRs always get a person's review (docs/engineering/release-routine.md).
+  grep -q "startsWith(github.event.pull_request.head.ref, 'release-fix/')" .github/workflows/automerge.yml \
+    && pass "automerge: skips release-fix/ branches" || fail "automerge: would act on release-fix/ branches"
   local vol
   vol=$(docker_vol)
   MSYS_NO_PATHCONV=1 verify "actionlint: automerge workflow" \
