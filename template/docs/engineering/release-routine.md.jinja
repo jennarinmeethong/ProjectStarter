@@ -1,0 +1,53 @@
+# Release routine: ตรวจซ้ำตอน release
+
+หลัก: ตอน release ให้รันการตรวจที่ช้าหรือรุนแรงเกินกว่าจะรันทุก PR กับ build ที่จะปล่อยจริง แล้วเปลี่ยนทุกปัญหาที่เจอเป็นงานที่ติดตามได้ **routine นี้ไม่ merge อะไรเอง** PR แก้บั๊กทุกตัวต้องผ่านคน review (ที่มา: `docs/combined.md` ชั้นที่ 8 outer loop: เปิดเป็นชั้นสุดท้าย และเฉพาะกับงานความเสี่ยงต่ำ)
+
+## รันเมื่อไร
+
+- push tag ที่ขึ้นต้นด้วย `v` (เช่น `git tag v1.4.0 && git push origin v1.4.0`) หรือกดรัน workflow เองใน GitHub Actions พร้อมระบุ tag หรือ commit (ถ้าไม่ระบุ จะใช้ tag `v*` ล่าสุด)
+- ไม่รันใน PR จึงไม่ทำให้ CI ของ PR ช้าลง วิธีตัด release (เลขรุ่น, changelog, deploy) เป็นของทีม routine นี้แค่รับ tag ที่ทีม push
+
+## Release check (`.github/workflows/release-check.yml`)
+
+| Job | ตรวจอะไร |
+|---|---|
+| `property` | unit test และ property test โดยเพิ่มจำนวน case เป็น 10000 ต่อ property (`PROPERTY_RUNS`) |
+{%- if containerize and (serve_http or frontend != 'none') %}
+| `dast-full` | ZAP full scan (active) กับ image ของ release ด้วย `bash ci/dast.sh <image> --full` |
+{%- endif %}
+| `report` | job ไหน fail จะเปิด issue ที่ติด label `release-check` (`ci/release-report.sh`) ถ้ายังมี issue ของ job นั้นเปิดอยู่ จะ comment เพิ่มแทนการเปิดใหม่ |
+
+- `PROPERTY_RUNS`: ถ้าไม่ตั้ง แต่ละ framework ใช้ค่าเดิม{% if stack == 'python' %} (Python รับผ่าน `pytest --property-runs=N` ใน `tests/conftest.py` เพราะ test อ่าน env ไม่ได้){% elif stack == 'go' %} (Go ใช้ flag `-rapid.checks=N` ซึ่งมีเฉพาะ package ที่ import rapid ให้เพิ่ม package ใหม่ใน workflow เอง){% elif stack == 'rust' %} (Rust ส่งต่อเป็น `PROPTEST_CASES`){% endif %} ลองในเครื่องได้ด้วยคำสั่งเดียวกับใน workflow
+{%- if containerize and (serve_http or frontend != 'none') %}
+- ZAP full scan: rule ระดับ FAIL ใน `.zap/rules.tsv` ทำให้ fail ส่วน WARN แค่รายงาน (`-I`) เมื่อทีมเห็นว่า rule ไหนสำคัญ ให้เลื่อนเป็น FAIL ใน `rules.tsv` จำกัดเวลาด้วย `DAST_SPIDER_MINUTES` (ค่าเริ่มต้น 1) และ `DAST_MAX_MINUTES` (ค่าเริ่มต้น 10)
+{%- endif %}
+- issue จาก routine แก้ตามทางปกติ: เขียน test ที่ fail ก่อน ทำใน task ของตัวเอง (`bash scripts/new-task.sh <name>`) เปิด PR แล้วปิด issue เมื่อ fix ถูก release
+{%- if release_fuzz %}
+
+## Release agent (`.github/workflows/release-fuzz.yml`)
+
+ทุก tag `v*` จะมี agent ({% if 'claude' in agent_tools %}Claude Code{% else %}Codex{% endif %}) ลองใช้ app ที่รันจาก image ของ release เหมือนผู้ใช้จริง ตามคำสั่งใน `.github/release-fuzz.md` แล้วรายงานบั๊กที่เจอ
+
+- ต้องมี repository secret `{% if 'claude' in agent_tools %}ANTHROPIC_API_KEY{% else %}OPENAI_API_KEY{% endif %}` และควรตั้ง spending limit ให้ key นี้ เพราะ agent อ่าน key ได้
+- **`explore`** รัน agent ด้วย token ที่อ่านได้อย่างเดียว ไม่มีสิทธิ์เขียน repo เปิด issue หรือ PR ผลลัพธ์มีทางเดียวคือ artifact `release-fuzz-out/` ในรูปแบบตายตัว
+- **`publish`** ไม่มี agent และไม่มี API key `ci/release-fuzz-publish.sh` ตรวจ artifact ก่อน ถ้าผิดรูปแบบ (symlink, เกิน 10 รายการ, ไฟล์แปลก, ขนาดเกิน) จะไม่เผยแพร่อะไรเลย จากนั้น:
+  - เปิด issue หนึ่งรายการต่อ finding (label `release-fuzz`) โดยใส่ zero-width space หลัง `@` ทุกตัว ข้อความจาก agent จึง mention ใครไม่ได้
+  - ถ้ามี patch และ apply บน default branch ได้ และไม่แตะ path tier 3 (ตัดสินด้วย `ci/risk-tier.sh` ของ default branch ไม่ใช่ฉบับใน patch) จะเปิด **draft PR** จาก branch `release-fix/<tag>-<n>` ถ้า repo ใช้ draft PR ไม่ได้ (private repo บน GitHub Free) จะเปิดเป็น PR ปกติแทน
+  - patch ที่ apply ไม่ได้หรือแตะ tier 3 จะได้แค่ issue
+- **ไม่มีอะไร merge เองได้:**
+{%- if automerge %}
+  - automerge ข้าม branch `release-fix/` เสมอ และ PR เป็น draft
+{%- else %}
+  - โปรเจคนี้ไม่ได้เปิด automerge จึงไม่มี workflow ใด merge PR ให้ ถ้าเปิด automerge ภายหลัง automerge จะข้าม branch `release-fix/` เสมอ
+{%- endif %}
+  - PR ที่เปิดด้วย `GITHUB_TOKEN` ไม่ trigger CI ให้คน review ก่อน แล้ว push commit หรือกดรัน check ใหม่ CI จึงจะรัน (ถ้าอยากให้รันเอง ให้ใช้ token ของ GitHub App แทน `GITHUB_TOKEN` ใน job `publish`)
+{%- else %}
+
+## Release agent (ปิดอยู่)
+
+ให้ AI agent ลองใช้ app ของ release เหมือนผู้ใช้ แล้วเสนอ fix เป็น draft PR ที่คนต้อง review: รัน `copier update` แล้วตอบ `release_fuzz` เป็น yes (ต้องมี container ที่ให้บริการ HTTP) เปิดเมื่อตัวชี้วัดของระยะ 0–4 นิ่งแล้ว และต้องมี API key ของ agent เป็น repository secret
+{%- endif %}
+
+## วัดผล
+
+ระยะ 6 ผ่านเมื่อตัวชี้วัดเสถียรภาพไม่แย่ลงเมื่อปริมาณงานเพิ่ม นับ issue ตาม label `release-check`{% if release_fuzz %} และ `release-fuzz`{% endif %} ต่อ release และดูว่า PR แก้บั๊กจาก routine ถูก revert บ่อยแค่ไหนเทียบกับ PR อื่น

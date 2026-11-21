@@ -24,4 +24,5 @@
 - tier จะผ่อนลง (เช่น tier 1 เปิด automerge) ได้เฉพาะเมื่อวัดแล้วว่า change failure rate และ revert rate ของ PR ประเภทนั้นคงที่ในช่วงเวลาที่กำหนดไว้ล่วงหน้า
 - นิยาม "revert" ให้ชัดก่อนวัด: <นิยามของทีม>
 - ถ้า incident ที่โยงกับ tier นั้นเพิ่มขึ้น ให้ยกระดับกลับทันที
+- PR ที่ release routine เสนอ (branch `release-fix/`, `docs/engineering/release-routine.md`) ต้องผ่านคน review เสมอ ไม่ว่าจะอยู่ tier ไหน และไม่เคย automerge
 {% if guardrail_owner %}- tier ตาม path ถูกบังคับด้วย `.github/CODEOWNERS` และ required status checks ไม่ใช่ดุลยพินิจรายครั้ง{% else %}- tier ตาม path ควรถูกบังคับด้วย required status checks (และ CODEOWNERS เมื่อมี owner) ไม่ใช่ดุลยพินิจรายครั้ง{% endif %}

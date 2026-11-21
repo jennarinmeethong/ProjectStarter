@@ -701,6 +701,9 @@ release_check_files() { # release_check_files <render-dir> <tools>: the release 
   else
     fail "release check workflow missing, or runs on pull requests ($2)"
   fi
+  [ -f "$1/docs/engineering/release-routine.md" ] && grep -qF -- '- [x] routine ตอน release' "$1/docs/roadmap.md" \
+    && grep -q 'release-fix/' "$1/docs/risk-tiers.md" && grep -q 'release routine' "$1/docs/engineering/where-rules-live.md" \
+    && pass "release routine docs ($2)" || fail "release routine docs missing ($2)"
   # The full scan runs exactly where the per-PR baseline scan does.
   if [ -f "$1/ci/dast.sh" ] && grep -q '^  dast-full:' "$wf"; then
     pass "release check: full scan with a container ($2)"
