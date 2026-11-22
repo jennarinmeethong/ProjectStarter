@@ -43,8 +43,13 @@ verify() { # verify <label> <command-string>: must succeed; show the tail of the
   if out=$(bash -c "$2" 2>&1); then pass "$1"; else fail "$1"; printf '%s\n' "$out" | tail -n 15 | sed 's/^/      /'; fi
 }
 
-expect_fail() { # expect_fail <label> <command...>
-  if "${@:2}" >/dev/null 2>&1; then fail "$1 (should have failed)"; else pass "$1 rejected"; fi
+expect_fail() { # expect_fail <label> <command...>: must fail; show the tail of the output when it does not
+  local out
+  if out=$("${@:2}" 2>&1); then
+    fail "$1 (should have failed)"; printf '%s\n' "$out" | tail -n 25 | sed 's/^/      /'
+  else
+    pass "$1 rejected"
+  fi
 }
 
 seeded() { # seeded <label> <file> <text-to-append> <command...>: append, expect the command to fail, restore
