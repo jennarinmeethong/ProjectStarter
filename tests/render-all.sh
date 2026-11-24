@@ -646,6 +646,32 @@ model_check_checks() { # in the full render (model_check=true): TLC passes the m
   git checkout -q -- "$model"
 }
 
+excl_probe() { # temporary diagnostic: which create-if-absent primitive is exclusive on this machine (in .git)?
+  local kind i both both_pid a b
+  for kind in mkdir symlink noclobber; do
+    case $kind in
+      mkdir) a='mkdir .git/probe 2>/dev/null' ;;
+      symlink) a='ln -s x .git/probe 2>/dev/null' ;;
+      noclobber) a='(set -C; : >.git/probe) 2>/dev/null' ;;
+    esac
+    both=0 both_pid=0
+    for i in $(seq 1 40); do
+      bash -c "$a && echo x" >"$work/probe-a" &
+      bash -c "$a && echo x" >"$work/probe-b"
+      wait
+      [ -s "$work/probe-a" ] && [ -s "$work/probe-b" ] && both=$((both + 1))
+      rm -rf .git/probe
+      bash -c "$a && echo x" >"$work/probe-a" & b=$!
+      bash -c "$a && echo x" >"$work/probe-b"
+      wait "$b"
+      [ -s "$work/probe-a" ] && [ -s "$work/probe-b" ] && both_pid=$((both_pid + 1))
+      rm -rf .git/probe
+    done
+    echo "  INFO probe $kind: both created in $both/40 (wait) and $both_pid/40 (wait \$!)"
+  done
+  echo "  INFO probe: $(stat -f -c %T .git 2>/dev/null); $(uname -r); bash $BASH_VERSION; $(findmnt -no FSTYPE,OPTIONS -T .git 2>/dev/null)"
+}
+
 task_checks() { # in the full render (both tools, git repo on main): scripts/new-task.sh and scripts/end-task.sh
   local tasks
   grep -q 'scripts/new-task.sh' AGENTS.md && grep -q 'scripts/new-task.sh' docs/engineering/parallel-work.md \
@@ -716,6 +742,7 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
   out=$(NEW_TASK_LOCK_WAIT=1 bash scripts/new-task.sh l 2>&1) || true
   rmdir "$(git rev-parse --git-common-dir)/new-task.lock"
   grep -q 'another new-task is running' <<<"$out" && [ ! -e "$tasks/l" ] && pass "new-task: waits for the lock" || fail "new-task: no lock ($out)"
+  excl_probe
   local p_out="$work/new-task-p.out" q_out="$work/new-task-q.out" p_slot q_slot
   # Traced (bash -x): when the slots collide, the lock and scan steps of both runs are shown below.
   # shellcheck disable=SC2016 # expanded by the traced shell
@@ -728,17 +755,6 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
     pass "new-task: concurrent tasks get distinct slots"
   else
     fail "new-task: concurrent tasks: slots p='$p_slot' q='$q_slot'"
-    # Probe this machine: can two mkdir calls on one path, at once, both succeed here?
-    local both=0 i fs
-    for i in $(seq 1 50); do
-      bash -c 'mkdir .git/mkdir-probe 2>/dev/null && echo x' >"$work/probe-a" &
-      bash -c 'mkdir .git/mkdir-probe 2>/dev/null && echo x' >"$work/probe-b"
-      wait
-      [ -s "$work/probe-a" ] && [ -s "$work/probe-b" ] && both=$((both + 1))
-      rmdir .git/mkdir-probe 2>/dev/null
-    done
-    fs=$(stat -f -c %T .git 2>/dev/null || echo unknown)
-    echo "      mkdir probe: both succeeded in $both/50 rounds; .git is on $fs; $(command -v mkdir); $(type -t mkdir)"
     for run in p q; do
       echo "      --- new-task $run (lock, scan, slot)"
       grep -E 'lock|mkdir|sleep|rmdir|waited|worktree|open=|used=|slot=|TASK_SLOT|ready|-f .*task/env|read -r wt' \
