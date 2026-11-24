@@ -27,6 +27,8 @@ bash scripts/end-task.sh <name> [--force]    # หลัง PR merge แล้�
 - `.claude/settings.local.json`: env ชุดเดียวกัน ให้ Claude Code ใช้กับทุกคำสั่งที่รันใน worktree นี้
 {%- endif %}
 
+`new-task.sh` รันได้ทีละตัว (lock ใน `.git/new-task.lock`) งานที่รันพร้อมกันจึงไม่ได้ port ซ้ำกัน worktree บน branch `task/*` ที่ `.task/` หายไป (เช่นจาก `git clean -fdx`) ยังนับเป็นงานที่เปิดอยู่ และลบด้วย `end-task.sh` ได้ตามปกติ
+
 `end-task.sh` fetch จาก origin ก่อน ไม่ยอมลบงานที่ยังมีไฟล์ไม่ได้ commit และไม่ยอมลบ branch ที่มีการเปลี่ยนแปลงที่ยังไม่อยู่ใน default branch (squash merge นับว่า merge แล้ว) (ใช้ `--force` เมื่อตั้งใจทิ้งงานนั้น) และต้องรันจากนอก worktree ของงาน
 {%- if 'claude' in agent_tools %}
 
