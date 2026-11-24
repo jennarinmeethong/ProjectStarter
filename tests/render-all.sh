@@ -717,14 +717,18 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
   rmdir "$(git rev-parse --git-common-dir)/new-task.lock"
   grep -q 'another new-task is running' <<<"$out" && [ ! -e "$tasks/l" ] && pass "new-task: waits for the lock" || fail "new-task: no lock ($out)"
   local p_out="$work/new-task-p.out" q_out="$work/new-task-q.out" p_slot q_slot
-  bash scripts/new-task.sh p >"$p_out" 2>&1 & bash scripts/new-task.sh q >"$q_out" 2>&1; wait
+  # Traced (bash -x): when the slots collide, the lock and scan steps of both runs are shown below.
+  bash -x scripts/new-task.sh p >"$p_out" 2>&1 & bash -x scripts/new-task.sh q >"$q_out" 2>&1; wait
   p_slot=$(sed -n 's/^export TASK_SLOT=//p' "$tasks/p/.task/env" 2>/dev/null)
   q_slot=$(sed -n 's/^export TASK_SLOT=//p' "$tasks/q/.task/env" 2>/dev/null)
   if [ -n "$p_slot" ] && [ -n "$q_slot" ] && [ "$p_slot" != "$q_slot" ]; then
     pass "new-task: concurrent tasks get distinct slots"
   else
     fail "new-task: concurrent tasks: slots p='$p_slot' q='$q_slot'"
-    { echo "--- new-task p"; cat "$p_out"; echo "--- new-task q"; cat "$q_out"; } | tail -n 25 | sed 's/^/      /'
+    for run in p q; do
+      echo "      --- new-task $run (lock, scan, slot)"
+      grep -E 'lock|mkdir|sleep|rmdir|waited|worktree|open=|used=|slot=|TASK_SLOT|ready' "$work/new-task-$run.out" | head -n 40 | sed 's/^/      /'
+    done
   fi
   bash scripts/end-task.sh p >/dev/null; bash scripts/end-task.sh q >/dev/null
 }
