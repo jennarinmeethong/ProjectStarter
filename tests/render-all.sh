@@ -646,32 +646,6 @@ model_check_checks() { # in the full render (model_check=true): TLC passes the m
   git checkout -q -- "$model"
 }
 
-excl_probe() { # temporary diagnostic: which create-if-absent primitive is exclusive on this machine (in .git)?
-  local kind i both both_pid a b
-  for kind in mkdir symlink noclobber; do
-    case $kind in
-      mkdir) a='mkdir .git/probe 2>/dev/null' ;;
-      symlink) a='ln -s x .git/probe 2>/dev/null' ;;
-      noclobber) a='(set -C; : >.git/probe) 2>/dev/null' ;;
-    esac
-    both=0 both_pid=0
-    for i in $(seq 1 40); do
-      bash -c "$a && echo x" >"$work/probe-a" &
-      bash -c "$a && echo x" >"$work/probe-b"
-      wait
-      [ -s "$work/probe-a" ] && [ -s "$work/probe-b" ] && both=$((both + 1))
-      rm -rf .git/probe
-      bash -c "$a && echo x" >"$work/probe-a" & b=$!
-      bash -c "$a && echo x" >"$work/probe-b"
-      wait "$b"
-      [ -s "$work/probe-a" ] && [ -s "$work/probe-b" ] && both_pid=$((both_pid + 1))
-      rm -rf .git/probe
-    done
-    echo "  INFO probe $kind: both created in $both/40 (wait) and $both_pid/40 (wait \$!)"
-  done
-  echo "  INFO probe: $(stat -f -c %T .git 2>/dev/null); $(uname -r); bash $BASH_VERSION; $(findmnt -no FSTYPE,OPTIONS -T .git 2>/dev/null)"
-}
-
 task_checks() { # in the full render (both tools, git repo on main): scripts/new-task.sh and scripts/end-task.sh
   local tasks
   grep -q 'scripts/new-task.sh' AGENTS.md && grep -q 'scripts/new-task.sh' docs/engineering/parallel-work.md \
@@ -738,11 +712,10 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
   MAX_TASKS=1 expect_fail "new-task: a task without .task/env still counts" bash scripts/new-task.sh h
   bash scripts/end-task.sh g >/dev/null && [ ! -e "$tasks/g" ] && pass "end-task: task without .task/env" || fail "end-task: task without .task/env"
   # Two new-task runs at once take a lock, so they never share a port slot; a held lock makes the second one wait.
-  mkdir -p "$(git rev-parse --git-common-dir)/new-task.lock"
+  : >"$(git rev-parse --git-common-dir)/new-task.lock"
   out=$(NEW_TASK_LOCK_WAIT=1 bash scripts/new-task.sh l 2>&1) || true
-  rmdir "$(git rev-parse --git-common-dir)/new-task.lock"
+  rm -f "$(git rev-parse --git-common-dir)/new-task.lock"
   grep -q 'another new-task is running' <<<"$out" && [ ! -e "$tasks/l" ] && pass "new-task: waits for the lock" || fail "new-task: no lock ($out)"
-  excl_probe
   local p_out="$work/new-task-p.out" q_out="$work/new-task-q.out" p_slot q_slot
   # Traced (bash -x): when the slots collide, the lock and scan steps of both runs are shown below.
   # shellcheck disable=SC2016 # expanded by the traced shell

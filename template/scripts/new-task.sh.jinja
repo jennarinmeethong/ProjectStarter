@@ -15,15 +15,16 @@ git rev-parse --verify -q "$base^{commit}" >/dev/null || die "no commit '$base' 
 git show-ref --verify -q refs/heads/task \
   && die "a branch named 'task' exists, and task branches are task/<name>; rename it first (git branch -m task <other-name>)"
 
-# One new-task at a time: two runs at once would pick the same free slot (ports).
+# One new-task at a time: two runs at once would pick the same free slot (ports). The lock is a file created with
+# noclobber (O_EXCL): mkdir is not exclusive on every Linux kernel (two concurrent calls both succeeded on CI).
 lock="$(git rev-parse --git-common-dir)/new-task.lock"
 waited=0
-until mkdir "$lock" 2>/dev/null; do
+until (set -C; echo "$$" >"$lock") 2>/dev/null; do
   [ "$waited" -lt "${NEW_TASK_LOCK_WAIT:-30}" ] || die "another new-task is running ($lock exists; if none is, remove it)"
   sleep 1
   waited=$((waited + 1))
 done
-trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+trap 'rm -f "$lock"' EXIT
 
 # Tasks live next to the main checkout, so linters and test discovery there never see them.
 main=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
