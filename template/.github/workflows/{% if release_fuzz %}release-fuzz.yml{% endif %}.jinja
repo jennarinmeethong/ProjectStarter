@@ -105,7 +105,9 @@ jobs:
           sandbox: workspace-write
           codex-args: -c sandbox_workspace_write.network_access=true
 {%- endif %}
+      # Also after the agent step fails (turn limit, timeout): what it wrote so far is still checked and published.
       - uses: actions/upload-artifact@v4
+        if: ${{ '{{' }} !cancelled() {{ '}}' }}
         with:
           name: release-fuzz-out
           path: release-fuzz-out/
@@ -114,6 +116,8 @@ jobs:
 
   publish:
     needs: explore
+    # Runs after a failed explore too, as long as the release was resolved (the tag is known).
+    if: ${{ '{{' }} !cancelled() && needs.explore.outputs.tag != '' {{ '}}' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
