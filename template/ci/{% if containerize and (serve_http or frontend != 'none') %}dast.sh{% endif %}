@@ -56,12 +56,16 @@ host_work=$(cd "$work" && (pwd -W 2>/dev/null || pwd))
 # Start at /healthz by default: several header rules skip 4xx/5xx responses, so the scan needs a 200 to
 # judge. A web UI sets DAST_PATH=/ so the HTML page and its assets are scanned too.
 target="http://$app:8080${DAST_PATH:-/healthz}"
+# One passive-scan thread. ZAP fetches the target twice (the spider job requests each context URL, then the spider
+# crawls it) and its default thread pool scans both copies at once; ZAP 2.17 can then lose both identical alerts,
+# so a missing header sometimes passed. The scan sees few messages, so one thread costs no noticeable time.
+pscan=(-z "-config pscans.threads=1")
 if [ "$mode" = "--full" ]; then
   # Active rules not listed in rules.tsv default to WARN; -I reports them without failing the release check.
   docker run --rm --network "$net" -v "$host_work:/zap/wrk:rw" "$zap" \
-    zap-full-scan.py -t "$target" -c rules.tsv -m "${DAST_SPIDER_MINUTES:-1}" -T "${DAST_MAX_MINUTES:-10}" -I -s
+    zap-full-scan.py -t "$target" -c rules.tsv -m "${DAST_SPIDER_MINUTES:-1}" -T "${DAST_MAX_MINUTES:-10}" -I -s "${pscan[@]}"
   exit
 fi
 # Warnings fail the baseline scan too (no -I): every rule is either fixed or explicitly IGNOREd with a reason.
 docker run --rm --network "$net" -v "$host_work:/zap/wrk:rw" "$zap" \
-  zap-baseline.py -t "$target" -c rules.tsv -m 1 -s
+  zap-baseline.py -t "$target" -c rules.tsv -m 1 -s "${pscan[@]}"
