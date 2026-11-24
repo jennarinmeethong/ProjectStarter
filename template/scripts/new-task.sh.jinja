@@ -10,25 +10,43 @@ max="${MAX_TASKS:-3}"
 die() { echo "new-task: $*" >&2; exit 1; }
 
 [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "usage: bash scripts/new-task.sh <name> [base-ref]; name: lowercase letters, digits, '-'"
+[[ "$max" =~ ^[1-9][0-9]*$ ]] || die "MAX_TASKS must be a positive whole number (got '$max')"
 git rev-parse --verify -q "$base^{commit}" >/dev/null || die "no commit '$base' (the repo needs at least one commit)"
+git show-ref --verify -q refs/heads/task \
+  && die "a branch named 'task' exists, and task branches are task/<name>; rename it first (git branch -m task <other-name>)"
+
+# One new-task at a time: two runs at once would pick the same free slot (ports). The lock is a file created with
+# noclobber (O_EXCL): mkdir is not exclusive on every Linux kernel (two concurrent calls both succeeded on CI).
+lock="$(git rev-parse --git-common-dir)/new-task.lock"
+waited=0
+until (set -C; echo "$$" >"$lock") 2>/dev/null; do
+  [ "$waited" -lt "${NEW_TASK_LOCK_WAIT:-30}" ] || die "another new-task is running ($lock exists; if none is, remove it)"
+  sleep 1
+  waited=$((waited + 1))
+done
+trap 'rm -f "$lock"' EXIT
 
 # Tasks live next to the main checkout, so linters and test discovery there never see them.
-worktrees=$(git worktree list --porcelain | sed -n 's/^worktree //p')
-main=$(printf '%s\n' "$worktrees" | head -n 1)
+main=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
 path="$(dirname "$main")/$(basename "$main")-tasks/$name"
 branch="task/$name"
 
 git show-ref --verify -q "refs/heads/$branch" && die "branch $branch already exists"
 [ -e "$path" ] && die "$path already exists"
 
-# A worktree is a task when it has .task/env; its slot picks the ports.
+# A worktree is a task when it has .task/env or is on a task/ branch (its .task/ may have been cleaned away);
+# the slot in .task/env picks the ports.
 open=0
 used=" "
-while IFS= read -r wt; do
-  [ -f "$wt/.task/env" ] || continue
+while IFS=$'\t' read -r wt br; do
+  [ -f "$wt/.task/env" ] || [[ "$br" == refs/heads/task/* ]] || continue
   open=$((open + 1))
-  used+="$(sed -n 's/^export TASK_SLOT=//p' "$wt/.task/env") "
-done <<<"$worktrees"
+  [ ! -f "$wt/.task/env" ] || used+="$(sed -n 's/^export TASK_SLOT=//p' "$wt/.task/env") "
+done < <(git worktree list --porcelain | awk '
+  /^worktree / { wt = substr($0, 10) }
+  /^branch /   { br = $2 }
+  /^$/         { print wt "\t" br; wt = ""; br = "" }
+  END          { if (wt != "") print wt "\t" br }')
 [ "$open" -lt "$max" ] || die "$open tasks are open (MAX_TASKS=$max). Finish one with scripts/end-task.sh first; see docs/engineering/parallel-work.md"
 
 slot=1

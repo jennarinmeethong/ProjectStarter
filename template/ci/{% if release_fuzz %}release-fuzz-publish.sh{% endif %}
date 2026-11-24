@@ -22,15 +22,14 @@ reject() { echo "release-fuzz-publish: rejected: $*" >&2; exit 2; }
 [ -d "$out" ] && [ ! -L "$out" ] || reject "$out is not a directory"
 [ -z "$(find "$out" -mindepth 1 -type l -print -quit)" ] || reject "symbolic links are not allowed"
 findings=()
-for entry in "$out"/* "$out"/.[!.]*; do
-  [ -e "$entry" ] || continue
+# find, not a glob: every name counts, hidden ones and those starting with '..' included.
+while IFS= read -r -d '' entry; do
   n=${entry##*/}
   [[ "$n" =~ ^([1-9]|10)$ ]] && [ -d "$entry" ] || reject "unexpected entry '$n' (only directories 1..10)"
-  for f in "$entry"/* "$entry"/.[!.]*; do
-    [ -e "$f" ] || continue
+  while IFS= read -r -d '' f; do
     case "${f##*/}" in title.txt | report.md | fix.patch) [ -f "$f" ] || reject "$n/${f##*/} is not a file" ;;
       *) reject "unexpected file $n/${f##*/}" ;; esac
-  done
+  done < <(find "$entry" -mindepth 1 -maxdepth 1 -print0)
   [ -f "$entry/title.txt" ] && [ -f "$entry/report.md" ] || reject "$n needs title.txt and report.md"
   [ "$(wc -l <"$entry/title.txt")" -le 1 ] && [ "$(tr -d '\n' <"$entry/title.txt" | wc -c)" -le 120 ] \
     && ! grep -q $'\r' "$entry/title.txt" && [ -n "$(tr -d '[:space:]' <"$entry/title.txt")" ] \
@@ -38,7 +37,7 @@ for entry in "$out"/* "$out"/.[!.]*; do
   [ "$(wc -c <"$entry/report.md")" -le 20000 ] || reject "$n/report.md is over 20000 bytes"
   [ ! -f "$entry/fix.patch" ] || [ "$(wc -c <"$entry/fix.patch")" -le 200000 ] || reject "$n/fix.patch is over 200000 bytes"
   findings+=("$n")
-done
+done < <(find "$out" -mindepth 1 -maxdepth 1 -print0)
 [ "${#findings[@]}" -gt 0 ] || { echo "release-fuzz-publish: no findings"; exit 0; }
 # The agent can read its API key; nothing that looks like a secret is published (default gitleaks rules).
 host_out=$(cd "$out" && (pwd -W 2>/dev/null || pwd))
@@ -69,14 +68,23 @@ gh label create "$label" --color 5319E7 --description "Found by the release agen
 export GIT_AUTHOR_NAME="github-actions[bot]" GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
+# A re-run for the same release must not file the same findings again: skip a title whose issue is still open.
+filed=$(gh issue list --label "$label" --state open --limit 200 --json title --jq '.[].title' 2>/dev/null || true)
+
 mapfile -t findings < <(printf '%s\n' "${findings[@]}" | sort -n)
 for n in "${findings[@]}"; do
   dir="$out/$n"
   title="release-fuzz: $(plain_title "$dir/title.txt")"
+  if grep -qxF -- "$title" <<<"$filed"; then
+    echo "release-fuzz-publish: finding $n is already filed (\"$title\"); skipped"
+    continue
+  fi
   report=$(fenced "$dir/report.md")
   note="No patch was proposed."
   branch=""
-  if [ -f "$dir/fix.patch" ]; then
+  if [ -f "$dir/fix.patch" ] && git ls-remote --exit-code -q origin "refs/heads/release-fix/$tag-$n" >/dev/null 2>&1; then
+    note="A fix branch \`release-fix/$tag-$n\` already exists from an earlier run, so no new PR was opened."
+  elif [ -f "$dir/fix.patch" ]; then
     branch="release-fix/$tag-$n"
     git checkout -q --force -B "$branch" "origin/$default"
     if ! git apply --3way --index "$dir/fix.patch" >/dev/null 2>&1; then

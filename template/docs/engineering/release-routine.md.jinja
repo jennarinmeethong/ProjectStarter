@@ -34,6 +34,7 @@
   - เปิด issue หนึ่งรายการต่อ finding (label `release-fuzz`) โดยใส่ zero-width space หลัง `@` ทุกตัว ข้อความจาก agent จึง mention ใครไม่ได้
   - ถ้ามี patch และ apply บน default branch ได้ และไม่แตะ path tier 3 (ตัดสินด้วย `ci/risk-tier.sh` ของ default branch ไม่ใช่ฉบับใน patch) จะเปิด **draft PR** จาก branch `release-fix/<tag>-<n>` ถ้า repo ใช้ draft PR ไม่ได้ (private repo บน GitHub Free) จะเปิดเป็น PR ปกติแทน
   - patch ที่ apply ไม่ได้หรือแตะ tier 3 จะได้แค่ issue
+  - รันซ้ำกับ release เดิมได้: finding ที่ issue ชื่อเดียวกันยังเปิดอยู่จะถูกข้าม และถ้ามี branch `release-fix/` ของ finding นั้นอยู่แล้ว จะไม่เปิด PR ใหม่
 - **ไม่มีอะไร merge เองได้:**
 {%- if automerge %}
   - automerge ข้าม branch `release-fix/` เสมอ และ PR เป็น draft

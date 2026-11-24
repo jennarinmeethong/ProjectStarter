@@ -15,7 +15,8 @@ main=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
 path="$(dirname "$main")/$(basename "$main")-tasks/$name"
 branch="task/$name"
 
-[ -f "$path/.task/env" ] || die "no task '$name' at $path"
+# A registered worktree at the task's path; its .task/env may have been cleaned away (git clean -fdx).
+git worktree list --porcelain | grep -qxF "worktree $path" || die "no task '$name' at $path"
 # Compare git's own spelling of both paths (Git Bash can name one directory as /c/..., /tmp/... or C:/...).
 here=$(git rev-parse --show-toplevel | tr '[:upper:]' '[:lower:]')
 [ "$here" != "$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')" ] || die "run this from outside the task's worktree"
@@ -48,8 +49,9 @@ if [ "$force" != --force ] && ! merged; then
 fi
 
 # Stop the task's containers, if any (best effort: Docker may not be installed or running).
-project=$(sed -n 's/^export COMPOSE_PROJECT_NAME=//p' "$path/.task/env")
-if command -v docker >/dev/null 2>&1 && [ -f "$path/compose.yaml" ]; then
+project=""
+[ ! -f "$path/.task/env" ] || project=$(sed -n 's/^export COMPOSE_PROJECT_NAME=//p' "$path/.task/env")
+if [ -n "$project" ] && command -v docker >/dev/null 2>&1 && [ -f "$path/compose.yaml" ]; then
   (cd "$path" && docker compose -p "$project" down --remove-orphans >/dev/null 2>&1) || true
 fi
 

@@ -697,6 +697,44 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
       && pass "new-task: image tag per task" || fail "new-task: image tag per task"
     bash scripts/end-task.sh i >/dev/null
   fi
+  local out
+  # A MAX_TASKS that is not a positive whole number says so, instead of a test error.
+  out=$(MAX_TASKS=abc bash scripts/new-task.sh m 2>&1) || true
+  grep -q 'MAX_TASKS must be a positive whole number' <<<"$out" && [ ! -e "$tasks/m" ] \
+    && pass "new-task: MAX_TASKS checked" || fail "new-task: MAX_TASKS=abc ($out)"
+  # A branch named task (no slash) blocks every task/<name> branch: say so instead of git's ref error.
+  git branch -q task
+  out=$(bash scripts/new-task.sh n 2>&1) || true
+  grep -q "a branch named 'task' exists" <<<"$out" && pass "new-task: branch named task reported" || fail "new-task: branch task ($out)"
+  git branch -q -D task
+  # A task whose .task/env was deleted (git clean -fdx) still counts toward MAX_TASKS, and end-task still removes it.
+  bash scripts/new-task.sh g >/dev/null && rm -rf "$tasks/g/.task" "$tasks/g/.claude/settings.local.json"
+  MAX_TASKS=1 expect_fail "new-task: a task without .task/env still counts" bash scripts/new-task.sh h
+  bash scripts/end-task.sh g >/dev/null && [ ! -e "$tasks/g" ] && pass "end-task: task without .task/env" || fail "end-task: task without .task/env"
+  # Two new-task runs at once take a lock, so they never share a port slot; a held lock makes the second one wait.
+  : >"$(git rev-parse --git-common-dir)/new-task.lock"
+  out=$(NEW_TASK_LOCK_WAIT=1 bash scripts/new-task.sh l 2>&1) || true
+  rm -f "$(git rev-parse --git-common-dir)/new-task.lock"
+  grep -q 'another new-task is running' <<<"$out" && [ ! -e "$tasks/l" ] && pass "new-task: waits for the lock" || fail "new-task: no lock ($out)"
+  local p_out="$work/new-task-p.out" q_out="$work/new-task-q.out" p_slot q_slot
+  # Traced (bash -x): when the slots collide, the lock and scan steps of both runs are shown below.
+  # shellcheck disable=SC2016 # expanded by the traced shell
+  PS4='+ $EPOCHREALTIME ' bash -x scripts/new-task.sh p >"$p_out" 2>&1 &
+  PS4='+ $EPOCHREALTIME ' bash -x scripts/new-task.sh q >"$q_out" 2>&1
+  wait
+  p_slot=$(sed -n 's/^export TASK_SLOT=//p' "$tasks/p/.task/env" 2>/dev/null)
+  q_slot=$(sed -n 's/^export TASK_SLOT=//p' "$tasks/q/.task/env" 2>/dev/null)
+  if [ -n "$p_slot" ] && [ -n "$q_slot" ] && [ "$p_slot" != "$q_slot" ]; then
+    pass "new-task: concurrent tasks get distinct slots"
+  else
+    fail "new-task: concurrent tasks: slots p='$p_slot' q='$q_slot'"
+    for run in p q; do
+      echo "      --- new-task $run (lock, scan, slot)"
+      grep -E 'lock|mkdir|sleep|rmdir|waited|worktree|open=|used=|slot=|TASK_SLOT|ready|-f .*task/env|read -r wt' \
+        "$work/new-task-$run.out" | head -n 60 | cut -c1-200 | sed 's/^/      /'
+    done
+  fi
+  bash scripts/end-task.sh p >/dev/null; bash scripts/end-task.sh q >/dev/null
 }
 
 release_check_files() { # release_check_files <render-dir> <tools>: the release check exists in every render
@@ -730,7 +768,7 @@ gh_stub() { # gh_stub <dir>: a fake gh on PATH that logs its arguments to $GH_LO
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_LOG"
 case "$1 $2" in
-  "issue list") [ -z "${GH_EXISTING:-}" ] || echo "$GH_EXISTING" ;;
+  "issue list") if [ -n "${GH_TITLES:-}" ]; then printf '%s\n' "$GH_TITLES"; elif [ -n "${GH_EXISTING:-}" ]; then echo "$GH_EXISTING"; fi ;;
   "issue create") echo "https://github.com/o/r/issues/41" ;;
   "pr create") case " $* " in *" --draft "*) [ -z "${GH_NO_DRAFT:-}" ] || exit 1 ;; esac; echo "https://github.com/o/r/pull/42" ;;
 esac
@@ -790,14 +828,21 @@ release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's
   git init -q --bare "$origin" && git remote add origin "$origin" && git push -q origin main
   fuzz_patch "$p/ok.patch" 'printf "fixed\n" > notes.txt'
   fuzz_patch "$p/tier3.patch" 'mkdir -p .github && printf "x\n" > .github/x.yml'
-  fuzz_patch "$p/rename3.patch" 'mkdir -p .github && git mv README.md .github/README.md'
+  fuzz_patch "$p/rename3.patch" 'mkdir -p .github && git mv docs/feature-map.md .github/feature-map.md'
   fuzz_patch "$p/ratchet.patch" 'printf "#!/usr/bin/env bash\necho 0\n" > ci/risk-tier.sh && printf "x\n" > .github/y.yml'
   printf -- '--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-no such line in the readme\n+changed\n' >"$p/stale.patch"
   # git quotes a non-ASCII path ("\303\274") unless asked for raw names: the quote must not hide a tier-3 prefix.
   fuzz_patch "$p/unicode3.patch" 'mkdir -p ".claude/skills/ü" && printf "x\n" > ".claude/skills/ü/SKILL.md"'
   # A symlink (mode 120000) or .gitattributes (linguist-generated collapses a diff) can hide code from the reviewer.
-  fuzz_patch "$p/symlink.patch" 'git update-index --add --cacheinfo "120000,$(printf /etc/passwd | git hash-object -w --stdin),notes-link"'
+  # Written out: git add -A would drop an index-only symlink entry (no file on disk) and leave an empty patch.
+  printf '%s\n' 'diff --git a/notes-link b/notes-link' 'new file mode 120000' '--- /dev/null' '+++ b/notes-link' \
+    '@@ -0,0 +1 @@' '+/etc/passwd' '\ No newline at end of file' >"$p/symlink.patch"
   fuzz_patch "$p/attributes.patch" 'printf "*.ts linguist-generated\n" > .gitattributes'
+  # An empty fixture would make its "issue only" case pass without testing anything.
+  local fixture
+  for fixture in ok tier3 rename3 ratchet unicode3 symlink attributes; do
+    [ -s "$p/$fixture.patch" ] || fail "publish: fixture $fixture.patch is empty"
+  done
   # The explore job must not save caches that trusted CI restores later.
   if ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -qE 'cache: npm|Swatinem/rust-cache' \
     && { ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'setup-go' || awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'cache: false'; } \
@@ -847,9 +892,19 @@ release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's
   GH_NO_DRAFT=1 publish 0 && [ "$(grep -c '^pr create' "$log")" = 2 ] && grep '^pr create' "$log" | tail -1 | grep -vq -- '--draft' \
     && pass "publish: no draft support -> normal PR" || fail "publish: no fallback to a normal PR ($(tr '\n' ';' <"$log"))"
 
+  # A re-run for the same release: a finding whose issue is still open is not filed again, and a fix branch that
+  # already exists is left alone (the issue says so) instead of a failed push.
+  rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "Report" "$p/ok.patch"
+  GH_TITLES="release-fuzz: A finding" publish 0 && ! grep -q '^issue create\|^pr create' "$log" \
+    && pass "publish: re-run skips a finding already filed" || fail "publish: re-run filed a finding again ($(tr '\n' ';' <"$log"))"
+  rm -rf "$out" && fuzz_finding "$out" 1 "Another finding" "Report" "$p/ok.patch"
+  publish 0 && grep -q '^issue create' "$log" && ! grep -q '^pr create' "$log" && grep -q 'already exists' "$log" \
+    && pass "publish: re-run with the fix branch already pushed -> issue only" \
+    || fail "publish: re-run with an existing fix branch ($(tr '\n' ';' <"$log"))"
+
   # Output that is not the agreed plain files is rejected before anything is published.
   local bad
-  for bad in symlink eleven extra twoline oversize name; do
+  for bad in symlink eleven extra twoline oversize name dotdot; do
     rm -rf "$out" && fuzz_finding "$out" 1 "A finding" "Report"
     case $bad in
       symlink) ln -s /etc/passwd "$out/1/report.md.link" 2>/dev/null || cp /dev/null "$out/1/report.md.link" ;;
@@ -857,6 +912,7 @@ release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's
       extra) printf 'x\n' >"$out/1/run.sh" ;;
       twoline) printf 'one\ntwo\n' >"$out/1/title.txt" ;;
       oversize) head -c 20001 /dev/zero | tr '\0' 'a' >"$out/1/report.md" ;;
+      dotdot) printf 'x\n' >"$out/..hidden" ;;
       name) mv "$out/1" "$out/01" ;;
     esac
     publish 2 && [ ! -s "$log" ] && pass "publish: rejects $bad output" || fail "publish: accepted $bad output ($(tr '\n' ';' <"$log"))"
