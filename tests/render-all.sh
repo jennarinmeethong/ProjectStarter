@@ -718,6 +718,10 @@ release_check_files() { # release_check_files <render-dir> <tools>: the release 
   else
     fail "release check: dast-full does not match ci/dast.sh ($2)"
   fi
+  # The report job runs the default branch's script: an older release tag may predate ci/release-report.sh.
+  # shellcheck disable=SC2016 # a GitHub expression, not a shell one
+  awk '/^  report:/,0' "$wf" | grep -qF 'ref: ${{ github.event.repository.default_branch }}' \
+    && pass "release check: report runs the default branch's script ($2)" || fail "release check: report checks out the release tag ($2)"
 }
 
 gh_stub() { # gh_stub <dir>: a fake gh on PATH that logs its arguments to $GH_LOG ($GH_EXISTING: an open issue number)
@@ -860,11 +864,34 @@ release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's
   unset -f publish
 }
 
+release_fuzz_files() { # release_fuzz_files <render-dir> <label>: what every release_fuzz render must get right
+  local wf="$1/.github/workflows/release-fuzz.yml" doc missing=""
+  # What the agent found before it failed (turn limit, timeout) is still uploaded and published.
+  # shellcheck disable=SC2016 # GitHub expressions, not shell ones
+  if awk '/upload-artifact/,/retention-days/' "$wf" | grep -qF 'if: ${{ !cancelled() }}' \
+    && awk '/^  publish:/,0' "$wf" | grep -qF "if: \${{ !cancelled() && needs.explore.outputs.tag != '' }}"; then
+    pass "release-fuzz: findings survive a failed agent step ($2)"
+  else
+    fail "release-fuzz: a failed agent step drops its findings ($2)"
+  fi
+  # Every document the prompt points the agent at exists in this render.
+  for doc in $(grep -o 'docs/[A-Za-z0-9_./-]*\.md' "$1/.github/release-fuzz.md" | sort -u); do
+    [ -f "$1/$doc" ] || missing+=" $doc"
+  done
+  [ -z "$missing" ] && pass "release-fuzz: prompt cites only existing docs ($2)" || fail "release-fuzz: prompt cites missing$missing ($2)"
+}
+
 release_fuzz_codex_check() { # release_fuzz_codex_check <stack>: a Codex-only project gets the Codex action
   local d="$work/$1-codex-fuzz"
   render "$1" '["codex"]' "$d" -d http_api=true -d release_fuzz=true || { fail "render codex + release_fuzz"; return; }
   grep -q 'openai/codex-action' "$d/.github/workflows/release-fuzz.yml" && ! grep -q 'claude-code-action' "$d/.github/workflows/release-fuzz.yml" \
     && pass "release-fuzz: Codex action in a Codex-only project" || fail "release-fuzz: wrong agent action for Codex-only"
+  release_fuzz_files "$d" "codex, http api"
+  # A server-rendered UI without the JSON API (not offered for TypeScript): the agent explores the pages.
+  [ "$1" = typescript ] && return
+  d="$work/$1-ssr-fuzz"
+  render "$1" '["claude"]' "$d" -d frontend=ssr -d release_fuzz=true || { fail "render ssr + release_fuzz"; return; }
+  release_fuzz_files "$d" "claude, ssr only"
 }
 
 automerge_checks() { # in the full render (automerge=true): ci/risk-tier.sh by path, and the workflow lints clean
