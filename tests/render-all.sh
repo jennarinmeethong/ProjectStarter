@@ -728,6 +728,17 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
     pass "new-task: concurrent tasks get distinct slots"
   else
     fail "new-task: concurrent tasks: slots p='$p_slot' q='$q_slot'"
+    # Probe this machine: can two mkdir calls on one path, at once, both succeed here?
+    local both=0 i fs
+    for i in $(seq 1 50); do
+      bash -c 'mkdir .git/mkdir-probe 2>/dev/null && echo x' >"$work/probe-a" &
+      bash -c 'mkdir .git/mkdir-probe 2>/dev/null && echo x' >"$work/probe-b"
+      wait
+      [ -s "$work/probe-a" ] && [ -s "$work/probe-b" ] && both=$((both + 1))
+      rmdir .git/mkdir-probe 2>/dev/null
+    done
+    fs=$(stat -f -c %T .git 2>/dev/null || echo unknown)
+    echo "      mkdir probe: both succeeded in $both/50 rounds; .git is on $fs; $(command -v mkdir); $(type -t mkdir)"
     for run in p q; do
       echo "      --- new-task $run (lock, scan, slot)"
       grep -E 'lock|mkdir|sleep|rmdir|waited|worktree|open=|used=|slot=|TASK_SLOT|ready|-f .*task/env|read -r wt' \
