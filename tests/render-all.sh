@@ -826,7 +826,9 @@ release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's
   # git quotes a non-ASCII path ("\303\274") unless asked for raw names: the quote must not hide a tier-3 prefix.
   fuzz_patch "$p/unicode3.patch" 'mkdir -p ".claude/skills/ü" && printf "x\n" > ".claude/skills/ü/SKILL.md"'
   # A symlink (mode 120000) or .gitattributes (linguist-generated collapses a diff) can hide code from the reviewer.
-  fuzz_patch "$p/symlink.patch" 'git update-index --add --cacheinfo "120000,$(printf /etc/passwd | git hash-object -w --stdin),notes-link"'
+  # Written out: git add -A would drop an index-only symlink entry (no file on disk) and leave an empty patch.
+  printf '%s\n' 'diff --git a/notes-link b/notes-link' 'new file mode 120000' '--- /dev/null' '+++ b/notes-link' \
+    '@@ -0,0 +1 @@' '+/etc/passwd' '\ No newline at end of file' >"$p/symlink.patch"
   fuzz_patch "$p/attributes.patch" 'printf "*.ts linguist-generated\n" > .gitattributes'
   # An empty fixture would make its "issue only" case pass without testing anything.
   local fixture
