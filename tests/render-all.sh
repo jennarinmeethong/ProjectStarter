@@ -716,9 +716,16 @@ task_checks() { # in the full render (both tools, git repo on main): scripts/new
   out=$(NEW_TASK_LOCK_WAIT=1 bash scripts/new-task.sh l 2>&1) || true
   rmdir "$(git rev-parse --git-common-dir)/new-task.lock"
   grep -q 'another new-task is running' <<<"$out" && [ ! -e "$tasks/l" ] && pass "new-task: waits for the lock" || fail "new-task: no lock ($out)"
-  bash scripts/new-task.sh p >/dev/null & bash scripts/new-task.sh q >/dev/null; wait
-  [ "$(sed -n 's/^export TASK_SLOT=//p' "$tasks/p/.task/env")" != "$(sed -n 's/^export TASK_SLOT=//p' "$tasks/q/.task/env")" ] \
-    && pass "new-task: concurrent tasks get distinct slots" || fail "new-task: concurrent tasks share a slot"
+  local p_out="$work/new-task-p.out" q_out="$work/new-task-q.out" p_slot q_slot
+  bash scripts/new-task.sh p >"$p_out" 2>&1 & bash scripts/new-task.sh q >"$q_out" 2>&1; wait
+  p_slot=$(sed -n 's/^export TASK_SLOT=//p' "$tasks/p/.task/env" 2>/dev/null)
+  q_slot=$(sed -n 's/^export TASK_SLOT=//p' "$tasks/q/.task/env" 2>/dev/null)
+  if [ -n "$p_slot" ] && [ -n "$q_slot" ] && [ "$p_slot" != "$q_slot" ]; then
+    pass "new-task: concurrent tasks get distinct slots"
+  else
+    fail "new-task: concurrent tasks: slots p='$p_slot' q='$q_slot'"
+    { echo "--- new-task p"; cat "$p_out"; echo "--- new-task q"; cat "$q_out"; } | tail -n 25 | sed 's/^/      /'
+  fi
   bash scripts/end-task.sh p >/dev/null; bash scripts/end-task.sh q >/dev/null
 }
 
@@ -813,7 +820,7 @@ release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's
   git init -q --bare "$origin" && git remote add origin "$origin" && git push -q origin main
   fuzz_patch "$p/ok.patch" 'printf "fixed\n" > notes.txt'
   fuzz_patch "$p/tier3.patch" 'mkdir -p .github && printf "x\n" > .github/x.yml'
-  fuzz_patch "$p/rename3.patch" 'mkdir -p .github && git mv README.md .github/README.md'
+  fuzz_patch "$p/rename3.patch" 'mkdir -p .github && git mv docs/feature-map.md .github/feature-map.md'
   fuzz_patch "$p/ratchet.patch" 'printf "#!/usr/bin/env bash\necho 0\n" > ci/risk-tier.sh && printf "x\n" > .github/y.yml'
   printf -- '--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-no such line in the readme\n+changed\n' >"$p/stale.patch"
   # git quotes a non-ASCII path ("\303\274") unless asked for raw names: the quote must not hide a tier-3 prefix.
@@ -821,6 +828,11 @@ release_fuzz_checks() { # in the full render (release_fuzz=true): the workflow's
   # A symlink (mode 120000) or .gitattributes (linguist-generated collapses a diff) can hide code from the reviewer.
   fuzz_patch "$p/symlink.patch" 'git update-index --add --cacheinfo "120000,$(printf /etc/passwd | git hash-object -w --stdin),notes-link"'
   fuzz_patch "$p/attributes.patch" 'printf "*.ts linguist-generated\n" > .gitattributes'
+  # An empty fixture would make its "issue only" case pass without testing anything.
+  local fixture
+  for fixture in ok tier3 rename3 ratchet unicode3 symlink attributes; do
+    [ -s "$p/$fixture.patch" ] || fail "publish: fixture $fixture.patch is empty"
+  done
   # The explore job must not save caches that trusted CI restores later.
   if ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -qE 'cache: npm|Swatinem/rust-cache' \
     && { ! awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'setup-go' || awk '/^  explore:/,/^  publish:/' "$wf" | grep -q 'cache: false'; } \
